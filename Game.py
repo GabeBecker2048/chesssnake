@@ -55,7 +55,7 @@ class Game:
         self.draw = draw
 
     def __str__(self):
-        return str(self.board.display())
+        return str(self.board)
 
     # returns True if it is a given player's turn to move and False otherwise
     def is_players_turn(self, player_id):
