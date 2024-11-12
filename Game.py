@@ -9,12 +9,12 @@ import GameError
 class Game:
     # this loads game data from the database into the game object
     # if the game does not exist in the database, a new one is created
-    def __init__(self, white_id, black_id, group_id=0, white_name='', black_name='', SQL=True):
+    def __init__(self, white_id, black_id, group_id=0, white_name=None, black_name=None, SQL=True):
         self.gid = group_id
-        self.wid = white_id
-        self.bid = black_id
-        self.wname = white_name
-        self.bname = black_name
+        self.wid = int(white_id) if SQL else white_id
+        self.bid = int(black_id) if SQL else black_id
+        self.wname = white_name if white_name is not None else str(white_id)
+        self.bname = black_name if black_name is not None else str(black_id)
         self.SQL = SQL
 
         # if SQL=True, then we check the database to see if a game exists
