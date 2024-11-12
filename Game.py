@@ -69,7 +69,7 @@ class Game:
     # if img=True, return a PIL.Image object. Otherwise, return None
     # if save_to is a string to a filepath, we save a PNG image of the board to the given location
     #   save_to implies img=True
-    def move(self, move, img=False, save_to=None):
+    def move(self, move, img=False, save=None):
 
         # if invalid notation, we raise an error
         if not Chess.Move.is_valid_c_notation(move):
@@ -93,10 +93,10 @@ class Game:
             """)
 
         # handle optional args
-        if img or save_to:
+        if img or save:
             image = ChessImg.img(self.board, self.wname, self.bname, m)
-            if save_to:
-                image.save(save_to)
+            if save:
+                image.save(save)
             return image
 
     # takes in a list of moves and executes them in order
@@ -163,7 +163,7 @@ class Game:
         return False
 
     # saves the board as a png to a given filepath
-    def save_to(self, image_fp: str):
+    def save(self, image_fp: str):
         ChessImg.img(self.board, self.wname, self.bname).save(image_fp)
 
     @staticmethod
