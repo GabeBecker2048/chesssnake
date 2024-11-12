@@ -1556,6 +1556,24 @@ class Board:
 
         return self.board[i][j]
 
+    # returns a string that can be printed for a nice looking text-based board
+    def __str__(self):
+        out = ""
+
+        for i in range(7, -1, -1):
+            out += str(i + 1) + "\t"
+            for j in range(7, -1, -1):
+                if self[i, j].piece is not None:
+                    out += self[i, j].piece.piecetype
+                    out += str(self[i, j].piece.color)
+                    out += " "
+                else:
+                    out += "-- "
+            out += "\n"
+        out += "\n\ta  b  c  d  e  f  g  h\n"
+
+        return out
+
     def move(self, move, player):
 
         prev_two_moveP = self.two_moveP
@@ -1634,24 +1652,6 @@ class Board:
         # sets the board correctly
         self[move.prev.i, move.prev.j].piece = move.piece
         self[move.to.i, move.to.j].piece = None
-
-    # returns a string that can be printed for a nice looking text-based board
-    def display(self):
-        out = ""
-
-        for i in range(8):
-            out += str(8 - i) + "\t"
-            for j in range(8):
-                if self[i, j].piece is not None:
-                    out += self[i, j].piece.piecetype
-                    out += str(self[i, j].piece.color)
-                    out += " "
-                else:
-                    out += "-- "
-            out += "\n"
-        out += "\n\ta  b  c  d  e  f  g  h\n"
-
-        return out
 
     # returns the first square found containing the king of the specified color
     def find_king(self, color):
