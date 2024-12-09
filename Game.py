@@ -9,37 +9,21 @@ import GameError
 class Game:
     # this loads game data from the database into the game object
     # if the game does not exist in the database, a new one is created
-    def __init__(self, white_id, black_id, group_id=0, white_name=None, black_name=None, SQL=True):
-        self.gid = group_id
-        self.wid = int(white_id) if SQL else white_id
-        self.bid = int(black_id) if SQL else black_id
-        self.wname = white_name if white_name is not None else str(white_id)
-        self.bname = black_name if black_name is not None else str(black_id)
-        self.SQL = SQL
+    def __init__(self, white_id: int=0, black_id: int=1, group_id: int=0, white_name: str='', black_name: str='', sql: bool=True, auto_sql: bool=False):
 
-        # if SQL=True, then we check the database to see if a game exists
+        self.gid = group_id
+        self.wid = white_id
+        self.bid = black_id
+        self.wname = white_name
+        self.bname = black_name
+        self.sql = sql
+
+        # if sql=True, then we check the database to see if a game exists
         ## if it exists, we load the sql data into memory
         ## if it doesn't, we create a blank game in the DB and load a new game into memory
-        # if SQL=False, we just load a new game into memory
-        if SQL:
-            game = execute_sql(f"""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM Games WHERE GroupId={group_id} AND WhiteId={white_id} AND BlackId={black_id}) THEN
-                        INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, Pawnmove, Draw, Moved, WName, BName)
-                        VALUES ({group_id}, {white_id}, {black_id},
-                        'R1 N1 B1 Q1 K1 B1 N1 R1;P1 P1 P1 P1 P1 P1 P1 P1;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;P0 P0 P0 P0 P0 P0 P0 P0;R0 N0 B0 Q0 K0 B0 N0 R0',
-                        '0', NULL, NULL, '000000', {white_name}, {black_name});
-                    END IF;
-                END $$;
-                
-                SELECT 1 FROM Games WHERE GroupId={group_id} AND WhiteId={white_name} AND BlackId={black_name};
-            """)[0]
-
-            boardarray = Chess.Board.assemble_board(game[3], game[7])
-            turn = int(game[4])
-            draw = int(game[5]) if game[5] else None
-            two_move_p = Chess.Square(Chess.Board.get_coords(game[5])[0], Chess.Board.get_coords(game[5])[1])
+        # if sql=False, we create a new game in memory only
+        if sql:
+            boardarray, turn, draw, two_move_p = self.sql_game_init(white_id, black_id, group_id, white_name, black_name)
 
         else:
             boardarray = None
@@ -82,7 +66,7 @@ class Game:
         self.turn = 1 - self.turn
 
         # handle SQL updating
-        if self.SQL:
+        if self.auto_sql:
             boardstr, moved = Chess.Board.disassemble_board(self.board)
             pawnmove = "NULL" if self.board.two_moveP is None else f"'{self.board.two_moveP.c_notation}'"
             draw = "NULL" if (self.draw is not None and self.turn != self.draw) or self.draw is None else f"'{self.draw}'"
@@ -123,7 +107,7 @@ class Game:
         # player offers draw
         self.draw = 0 if player_id == self.wid else 1
 
-        if self.SQL:
+        if self.auto_sql:
             execute_sql(f"""
                 UPDATE Games SET Draw = '{self.draw}'
                 WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
@@ -148,7 +132,7 @@ class Game:
 
         self.draw = None
 
-        if self.SQL:
+        if self.auto_sql:
             execute_sql(f"""
                 UPDATE Games SET Draw = NULL
                 WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
@@ -157,7 +141,7 @@ class Game:
     # checks if the game is over and deletes the game from the database accordingly
     def end_check(self):
         if self.board.status != 0:
-            if self.SQL:
+            if self.auto_sql:
                 self.delete_game(self.gid, self.wid, self.bid)
             return True
         return False
@@ -165,6 +149,46 @@ class Game:
     # saves the board as a png to a given filepath
     def save(self, image_fp: str):
         ChessImg.img(self.board, self.wname, self.bname).save(image_fp)
+
+
+    def update_db(self):
+        execute_sql(f"""
+        UPDATE Games SET
+        Board = {self.board.disassemble_board(self.board)[0]}, 
+        Turn = {self.turn}, 
+        Pawnmove = {self.board.two_moveP if self.board.two_moveP else "NULL"}, 
+        Draw = {self.draw if self.draw else "NULL"}, 
+        Moved = {self.board.disassemble_board(self.board)[1]}, 
+        WName = {self.wname}, 
+        BName = {self.bname}
+        WHERE GroupId={self.gid} AND WhiteId={self.wid} AND BlackId={self.bid} 
+        """)
+
+    # checks the sql data if a game exists
+    #   if it does, get the game data from the database
+    #   if it doesn't, create the game and return the new game data
+    @staticmethod
+    def sql_game_init(white_id, black_id, group_id=0, white_name='', black_name=''):
+        game = execute_sql(f"""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM Games WHERE GroupId={group_id} AND WhiteId={white_id} AND BlackId={black_id}) THEN
+                    INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, Pawnmove, Draw, Moved, WName, BName)
+                    VALUES ({group_id}, {white_id}, {black_id},
+                    'R1 N1 B1 Q1 K1 B1 N1 R1;P1 P1 P1 P1 P1 P1 P1 P1;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;P0 P0 P0 P0 P0 P0 P0 P0;R0 N0 B0 Q0 K0 B0 N0 R0',
+                    '0', NULL, NULL, '000000', {white_name}, {black_name});
+                END IF;
+            END $$;
+
+            SELECT 1 FROM Games WHERE GroupId={group_id} AND WhiteId={white_id} AND BlackId={black_id};
+        """)[0]
+
+        boardarray = Chess.Board.assemble_board(game[3], game[7])
+        turn = int(game[4])
+        draw = int(game[6]) if game[6] else None
+        two_move_p = Chess.Square(Chess.Board.get_coords(game[5])[0], Chess.Board.get_coords(game[5])[1]) if game[5] else None
+
+        return boardarray, turn, draw, two_move_p
 
     @staticmethod
     def current_games(player_id, gid=0):
@@ -215,7 +239,7 @@ class Game:
 # This class is not compatible with non-SQL games
 class Challenge:
     @staticmethod
-    def challenge(challenger, opponent, gid=0, challenger_name='', opponent_name=''):
+    def challenge(challenger=0, opponent=1, gid=0, challenger_name='', opponent_name=''):
 
         if challenger == opponent:
             GameError.ChallengeError("You can't challenge yourself, silly")
@@ -246,7 +270,7 @@ class Challenge:
         Challenge.delete_challenge(challenger, opponent, gid)
 
         # create a game if we've checked for everything else
-        Game(wid, bid, group_id=gid, white_name=wname, black_name=bname, SQL=True)
+        Game(wid, bid, group_id=gid, white_name=wname, black_name=bname, sql=True)
 
     # if the challenge exists, returns the challenger id and the challenge id in that order
     # otherwise, returns False
