@@ -2,8 +2,9 @@ services:
   postgresDB:
     image: postgres
     environment:
-      POSTGRES_DB: ${DB_NAME}
-      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${CHESSDB_NAME}
+      POSTGRES_USER: ${CHESSDB_USER}
+      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5433:5432"
     volumes:
