@@ -28,8 +28,6 @@ def execute_sql(statement: str, params=None):
     if CHESSDB_PORT:
         conn_str += f" port='{CHESSDB_PORT}'"
 
-    print(conn_str)
-
     with psycopg2.connect(conn_str) as conn:
         with conn.cursor() as cur:
             cur.execute(statement, params)
