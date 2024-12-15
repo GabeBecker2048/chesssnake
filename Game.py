@@ -1,15 +1,14 @@
-from random import randint
-
 from Sql_Utils import execute_sql
 import Chess
 import ChessImg
 import ChessError
 import GameError
 
+
 class Game:
     # this loads game data from the database into the game object
     # if the game does not exist in the database, a new one is created
-    def __init__(self, white_id: int=0, black_id: int=1, group_id: int=0, white_name: str='', black_name: str='', sql: bool=True, auto_sql: bool=False):
+    def __init__(self, white_id: int=0, black_id: int=1, group_id: int=0, white_name: str='', black_name: str='', sql: bool=False, auto_sql: bool=False):
 
         self.gid = group_id
         self.wid = white_id
@@ -17,12 +16,13 @@ class Game:
         self.wname = white_name
         self.bname = black_name
         self.sql = sql
+        self.auto_sql = auto_sql
 
         # if sql=True, then we check the database to see if a game exists
         ## if it exists, we load the sql data into memory
         ## if it doesn't, we create a blank game in the DB and load a new game into memory
         # if sql=False, we create a new game in memory only
-        if sql:
+        if sql or auto_sql:
             boardarray, turn, draw, two_move_p = self.sql_game_init(white_id, black_id, group_id, white_name, black_name)
 
         else:
@@ -150,19 +150,24 @@ class Game:
     def save(self, image_fp: str):
         ChessImg.img(self.board, self.wname, self.bname).save(image_fp)
 
-
+    # This is the function for updating the database, for cases where sql=true but auto_sql=false\
+    # returns False and does nothing if sql is not enabled
     def update_db(self):
-        execute_sql(f"""
-        UPDATE Games SET
-        Board = {self.board.disassemble_board(self.board)[0]}, 
-        Turn = {self.turn}, 
-        Pawnmove = {self.board.two_moveP if self.board.two_moveP else "NULL"}, 
-        Draw = {self.draw if self.draw else "NULL"}, 
-        Moved = {self.board.disassemble_board(self.board)[1]}, 
-        WName = {self.wname}, 
-        BName = {self.bname}
-        WHERE GroupId={self.gid} AND WhiteId={self.wid} AND BlackId={self.bid} 
-        """)
+        if self.sql or self.auto_sql:
+            execute_sql(f"""
+            UPDATE Games SET
+            Board = {self.board.disassemble_board(self.board)[0]}, 
+            Turn = {self.turn}, 
+            Pawnmove = {self.board.two_moveP if self.board.two_moveP else "NULL"}, 
+            Draw = {self.draw if self.draw else "NULL"}, 
+            Moved = {self.board.disassemble_board(self.board)[1]}, 
+            WName = {self.wname}, 
+            BName = {self.bname}
+            WHERE GroupId={self.gid} AND WhiteId={self.wid} AND BlackId={self.bid} 
+            """)
+            return True
+        else:
+            return False
 
     # checks the sql data if a game exists
     #   if it does, get the game data from the database
@@ -239,38 +244,26 @@ class Game:
 # This class is not compatible with non-SQL games
 class Challenge:
     @staticmethod
-    def challenge(challenger=0, opponent=1, gid=0, challenger_name='', opponent_name=''):
+    def challenge(challenger=0, opponent=1, gid=0):
 
         if challenger == opponent:
-            GameError.ChallengeError("You can't challenge yourself, silly")
+            raise GameError.ChallengeError("You can't challenge yourself, silly")
 
         # checks if they are already in a game
         if Game.game_exists(gid, challenger, opponent):
-            GameError.ChallengeError(f"There is an unresolved game between {challenger} and {opponent} already!")
+            raise GameError.ChallengeError(f"There is an unresolved game between {challenger} and {opponent} already!")
 
         # check if the challenge exists already
         challenge = Challenge.exists(challenger, opponent, gid)
 
         if not challenge:
-            Challenge.create_challenge(challenger, opponent, gid)
-            return
+            raise Challenge.create_challenge(challenger, opponent, gid)
 
         elif challenger == challenge[0]:
-            GameError.ChallengeError(f"You have already challenged {opponent}! You must wait for them to accept")
-            return
-
-        # From this point on, we know that "challenger" is accepting a challenge already given by "opponent"
-        ridx = randint(0, 1)
-        wid = [challenger, opponent][ridx]
-        bid = [challenger, opponent][1 - ridx]
-        wname = [challenger_name, opponent_name][ridx]
-        bname = [challenger_name, opponent_name][1 - ridx]
+            raise GameError.ChallengeError(f"You have already challenged {opponent}! You must wait for them to accept")
 
         # deletes users from challenges
         Challenge.delete_challenge(challenger, opponent, gid)
-
-        # create a game if we've checked for everything else
-        Game(wid, bid, group_id=gid, white_name=wname, black_name=bname, sql=True)
 
     # if the challenge exists, returns the challenger id and the challenge id in that order
     # otherwise, returns False
