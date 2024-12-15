@@ -1,10 +1,8 @@
 import psycopg2
-from dotenv import load_dotenv
 from os import getenv
 import GameError
 
 def load_sql_env():
-    load_dotenv()
     CHESSDB_NAME = getenv("CHESSDB_NAME")
     CHESSDB_USER = getenv("CHESSDB_USER")
     CHESSDB_PASS = getenv("CHESSDB_PASS")
