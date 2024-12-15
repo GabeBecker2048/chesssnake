@@ -181,11 +181,11 @@ class Game:
                     INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, Pawnmove, Draw, Moved, WName, BName)
                     VALUES ({group_id}, {white_id}, {black_id},
                     'R1 N1 B1 Q1 K1 B1 N1 R1;P1 P1 P1 P1 P1 P1 P1 P1;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;P0 P0 P0 P0 P0 P0 P0 P0;R0 N0 B0 Q0 K0 B0 N0 R0',
-                    '0', NULL, NULL, '000000', {white_name}, {black_name});
+                    '0', NULL, NULL, '000000', '{white_name}', '{black_name}');
                 END IF;
             END $$;
 
-            SELECT 1 FROM Games WHERE GroupId={group_id} AND WhiteId={white_id} AND BlackId={black_id};
+            SELECT * FROM Games WHERE GroupId={group_id} AND WhiteId={white_id} AND BlackId={black_id};
         """)[0]
 
         boardarray = Chess.Board.assemble_board(game[3], game[7])
