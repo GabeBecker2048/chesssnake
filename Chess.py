@@ -2070,14 +2070,10 @@ class Move:
                 capture = True if move[1] == 'x' else False
 
                 try:
-                    try:
-                        square = Pawn.find(board, to, player, capture, file_limit=file_limit)
-                    except ChessError.NothingToCaptureError:
-                        square = Pawn.find(board, to, player, capture, en=True, file_limit=file_limit)
-                        en = True
-
-                except ChessError as e:
-                    raise e
+                    square = Pawn.find(board, to, player, capture, file_limit=file_limit)
+                except ChessError.NothingToCaptureError:
+                    square = Pawn.find(board, to, player, capture, en=True, file_limit=file_limit)
+                    en = True
 
                 else:
                     piece = square.piece
