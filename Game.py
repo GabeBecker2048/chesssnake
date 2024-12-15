@@ -156,13 +156,13 @@ class Game:
         if self.sql or self.auto_sql:
             execute_sql(f"""
             UPDATE Games SET
-            Board = {self.board.disassemble_board(self.board)[0]}, 
-            Turn = {self.turn}, 
-            Pawnmove = {self.board.two_moveP if self.board.two_moveP else "NULL"}, 
-            Draw = {self.draw if self.draw else "NULL"}, 
-            Moved = {self.board.disassemble_board(self.board)[1]}, 
-            WName = {self.wname}, 
-            BName = {self.bname}
+            Board = '{self.board.disassemble_board(self.board)[0]}', 
+            Turn = '{self.turn}', 
+            Pawnmove = {f"'{self.board.two_moveP.c_notation}'" if self.board.two_moveP else "NULL"}, 
+            Draw = {f"'{self.draw}'" if self.draw else "NULL"}, 
+            Moved = '{self.board.disassemble_board(self.board)[1]}', 
+            WName = '{self.wname}', 
+            BName = '{self.bname}'
             WHERE GroupId={self.gid} AND WhiteId={self.wid} AND BlackId={self.bid} 
             """)
             return True
