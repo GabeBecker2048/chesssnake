@@ -1,4 +1,4 @@
-class GameError(Exception):
+class GameError(BaseException):
     def __init__(self, msg):
         super().__init__(msg)
 

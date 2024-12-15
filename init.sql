@@ -5,7 +5,7 @@ CREATE TABLE Challenges (
 );
 
 CREATE TABLE Games (
-    GuildId BIGINT NOT NULL,
+    GroupId BIGINT NOT NULL,
     WhiteId BIGINT NOT NULL,
     BlackId BIGINT NOT NULL,
     Board VARCHAR NOT NULL,
@@ -14,5 +14,5 @@ CREATE TABLE Games (
     Draw BIT(1),
     Moved BIT(6) NOT NULL,
     WName VARCHAR,
-    BNname VARCHAR
+    BName VARCHAR
 );
