@@ -51,8 +51,8 @@ class Game:
 
     # makes a given move, assuming it is the correct player's turn
     # if img=True, return a PIL.Image object. Otherwise, return None
-    # if save_to is a string to a filepath, we save a PNG image of the board to the given location
-    #   save_to implies img=True
+    # if save is a string to a filepath, we save a PNG image of the board to the given location
+    #   save implies img=True
     def move(self, move, img=False, save=None):
 
         # if invalid notation, we raise an error
