@@ -5,4 +5,6 @@ load_dotenv()
 
 g = Game()
 
-g.move('d5')
+g.move('d4')
+
+print(g)

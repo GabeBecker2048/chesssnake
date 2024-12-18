@@ -1,10 +1,10 @@
 import importlib.resources
 
-from Sql_Utils import execute_sql
-import Chess
-import ChessImg
-import ChessError
-import GameError
+from .Sql_Utils import execute_sql
+from . import Chess
+from . import ChessImg
+from . import ChessError
+from . import GameError
 
 
 class Game:

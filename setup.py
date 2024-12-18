@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
 # Read the contents of your requirements.txt file
 with open('requirements.txt') as f:
@@ -7,7 +7,7 @@ with open('requirements.txt') as f:
 setup(
     name="chessql",
     version="0.1.0",
-    packages=find_packages(),
+    packages=["chessql"],
     include_package_data=True,
     install_requires=requirements,
     package_data={

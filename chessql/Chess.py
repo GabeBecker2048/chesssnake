@@ -1,4 +1,4 @@
-import ChessError
+from . import ChessError
 
 
 class Piece:
