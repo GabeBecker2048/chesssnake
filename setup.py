@@ -22,7 +22,7 @@ setup(
     package_data={
         "": ["data/*.sql", "data/*.ttf", "data/img/*.png"],
     },
-    python_requires='>=3.7',
+    python_requires='>=3.9',
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
