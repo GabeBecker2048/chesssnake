@@ -1,3 +1,5 @@
+import importlib.resources
+
 from Sql_Utils import execute_sql
 import Chess
 import ChessImg
@@ -169,6 +171,15 @@ class Game:
         else:
             return False
 
+    @staticmethod
+    def sql_db_init():
+        db_init_fp = str(importlib.resources.files('chessql').joinpath('data/init.sql'))
+
+        with open(db_init_fp, 'r') as db_init_file:
+            db_init = db_init_file.read()
+
+        execute_sql(db_init)
+
     # checks the sql data if a game exists
     #   if it does, get the game data from the database
     #   if it doesn't, create the game and return the new game data
@@ -196,7 +207,7 @@ class Game:
         return boardarray, turn, draw, two_move_p
 
     @staticmethod
-    def current_games(player_id, gid=0):
+    def sql_current_games(player_id, gid=0):
 
         games = execute_sql(f"""
             WITH PlayerResult AS (
@@ -219,7 +230,7 @@ class Game:
     # if the game exists, returns the white player's id and black player's id in that order
     # returns False if the game is not found in the database
     @staticmethod
-    def game_exists(player1, player2, gid=0):
+    def sql_game_exists(player1, player2, gid=0):
 
         games = execute_sql(f"""
             SELECT WhiteId, BlackId FROM Games 
@@ -236,7 +247,7 @@ class Game:
 
     # removes a game from the database
     @staticmethod
-    def delete_game(wid, bid, gid=0):
+    def sql_delete_game(wid, bid, gid=0):
         execute_sql(f"DELETE FROM games WHERE GroupId = {gid} and WhiteId = {wid} and BlackId = {bid}")
 
 
