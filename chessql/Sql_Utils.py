@@ -1,6 +1,6 @@
 import psycopg2
 from os import getenv
-import GameError
+from . import GameError
 
 def load_sql_env():
     CHESSDB_NAME = getenv("CHESSDB_NAME")

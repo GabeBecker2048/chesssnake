@@ -1,7 +1,7 @@
 from PIL import Image, ImageFont, ImageDraw
 import importlib.resources
 
-from Chess import Board, Move
+from .Chess import Board, Move
 
 
 # takes in board AFTER move and move object
