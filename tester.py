@@ -5,6 +5,4 @@ load_dotenv()
 
 g = Game()
 
-g.move('d4')
-
-print(g)
+g.move('d4',img=True).show()
