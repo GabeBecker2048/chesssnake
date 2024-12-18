@@ -19,14 +19,14 @@ def img(board: Board, p1: str, p2: str, move: Move = None):
     small_font = ImageFont.truetype(Roboto_fp, 15)
 
     # gets the blank template
-    img = Image.open(str(importlib.resources.files('chessql').joinpath('data/assets/template.png')))
+    img = Image.open(str(importlib.resources.files('chessql').joinpath('data/img/template.png')))
     
-    wboard = Image.open(str(importlib.resources.files('chessql').joinpath('data/assets/blankboard.png')))
-    bboard = Image.open(str(importlib.resources.files('chessql').joinpath('data/assets/blankboard.png')))
+    wboard = Image.open(str(importlib.resources.files('chessql').joinpath('data/img/blankboard.png')))
+    bboard = Image.open(str(importlib.resources.files('chessql').joinpath('data/img/blankboard.png')))
 
     if move is not None:
         # adds orange squares
-        orange_square = Image.open(str(importlib.resources.files('chessql').joinpath('data/assets/orange.png'))).convert('RGBA')
+        orange_square = Image.open(str(importlib.resources.files('chessql').joinpath('data/img/orange.png'))).convert('RGBA')
         wboard.alpha_composite(orange_square, (move.prev.j * 68, move.prev.i * 68))
         wboard.alpha_composite(orange_square, (move.to.j * 68, move.to.i * 68))
         bboard.alpha_composite(orange_square, ((7 - move.prev.j) * 68, (7 - move.prev.i) * 68))
@@ -40,7 +40,7 @@ def img(board: Board, p1: str, p2: str, move: Move = None):
                 # gets the piece image
                 ptype = board[x, y].piece.piecetype
                 color = board[x, y].piece.color
-                piece = Image.open(str(importlib.resources.files('chessql').joinpath(f'data/assets/{ptype}{color}.png'))).convert('RGBA')
+                piece = Image.open(str(importlib.resources.files('chessql').joinpath(f'data/img/{ptype}{color}.png'))).convert('RGBA')
 
                 # gets the image coords
                 i = 68 * x
@@ -84,7 +84,7 @@ def img(board: Board, p1: str, p2: str, move: Move = None):
                 # gets the piece image
                 ptype = reversed_board[x][y].piece.piecetype
                 color = reversed_board[x][y].piece.color
-                piece = Image.open(str(importlib.resources.files('chessql').joinpath(f'data/assets/{ptype}{color}.png'))).convert('RGBA')
+                piece = Image.open(str(importlib.resources.files('chessql').joinpath(f'data/img/{ptype}{color}.png'))).convert('RGBA')
 
                 # gets the image coords
                 i = 68 * x
