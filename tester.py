@@ -1,3 +1,8 @@
 import Game
+from dotenv import load_dotenv
 
-g = Game.Game("Gabe", "Wyatt")
+load_dotenv()
+
+g = Game.Game()
+
+g.move('d5')
