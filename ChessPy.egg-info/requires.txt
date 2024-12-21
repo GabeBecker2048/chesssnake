@@ -1,0 +1,7 @@
+pillow~=10.4.0
+
+[postgres]
+psycopg2~=2.9.9
+
+[postgres-binary]
+psycopg2-binary~=2.9.9

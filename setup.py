@@ -7,7 +7,6 @@ with open('README.md') as f:
     README = f.read()
 
 setup(
-    name="chessql",
     version="0.1.0",
     url="https://github.com/GabeBecker2048/chessql",
     description="A Python library for playing, visualizing, and storing chess games.",
@@ -16,11 +15,9 @@ setup(
     long_description=README,
     long_description_content_type='text/markdown',
     license="MIT",
-    packages=["chessql"],
     include_package_data=True,
     install_requires=requirements,
     package_data={
-        "": ["data/*.sql", "data/*.ttf", "data/img/*.png"],
     },
     python_requires='>=3.9',
     classifiers=[

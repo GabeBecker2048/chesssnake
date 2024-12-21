@@ -1,0 +1,22 @@
+Metadata-Version: 2.1
+Name: ChessPy
+Version: 0.1.0
+Summary: A Python library for playing, visualizing, and storing chess games.
+Home-page: https://github.com/GabeBecker2048/chessql
+Author: Gabe Becker
+Author-email: gabebecker2048@gmail.com
+License: MIT
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pillow~=10.4.0
+Provides-Extra: postgres
+Requires-Dist: psycopg2~=2.9.9; extra == "postgres"
+Provides-Extra: postgres-binary
+Requires-Dist: psycopg2-binary~=2.9.9; extra == "postgres-binary"
+
+# ChesSQL-db
+ChesSQL-db is a chess library for python that neatly stores games in a PostgreSQL database.
