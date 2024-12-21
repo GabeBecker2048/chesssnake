@@ -120,7 +120,7 @@ class Game(BaseGame):
 
     @staticmethod
     def sql_db_init():
-        db_init_fp = str(importlib.resources.files('chessql').joinpath('data/init.sql'))
+        db_init_fp = str(importlib.resources.files('ChessPy.chesslib').joinpath('data/init.sql'))
 
         with open(db_init_fp, 'r') as db_init_file:
             db_init = db_init_file.read()

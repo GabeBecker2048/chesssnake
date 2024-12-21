@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 with open('requirements.txt') as f:
     requirements = f.read().splitlines()
@@ -15,18 +15,18 @@ with open('README.md') as f:
 setup(
     name="ChessPy",
     version="0.1.0",
-    url="https://github.com/GabeBecker2048/chessql",
+    url="https://github.com/GabeBecker2048/ChessPy",
     description="A Python library for playing, visualizing, and storing chess games.",
     author="Gabe Becker",
     author_email="gabebecker2048@gmail.com",
     long_description=README,
     long_description_content_type='text/markdown',
     license="MIT",
-    packages=["ChessPy"],
+    packages=find_packages(),
     include_package_data=True,
     install_requires=requirements,
     package_data={
-        "chesslib/data": ["*.sql", "*.ttf", "img/*.png"],
+        "ChessPy.chesslib": ["data/*.sql", "data/*.ttf", "data/img/*.png"],
     },
     extras_require={
         "postgres": requirements_postgres,
