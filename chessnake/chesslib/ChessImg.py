@@ -1,5 +1,6 @@
 from PIL import Image, ImageFont, ImageDraw
 import importlib.resources
+from copy import deepcopy
 
 from .Chess import Board, Move
 
@@ -72,7 +73,7 @@ def img(board: Board, p1: str, p2: str, move: Move = None):
                 image_editable.text((j, i), file, (255, 255, 255), font=small_font)
 
     # flips the board to make it from black POV
-    reversed_board = board.board
+    reversed_board = deepcopy(board.board)
     reversed_board.reverse()
     for row in reversed_board:
         row.reverse()
