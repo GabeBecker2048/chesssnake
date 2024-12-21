@@ -23,21 +23,21 @@ To install the core features of Chessnake, run:
 pip install chessnake
 ```
 
-#### With PostgreSQL Support
+### With PostgreSQL Support
 
-This library uses [psycopg2](https://pypi.org/project/psycopg2/) to communicate with postgres. There are two ways to install psycopg2: from source or with a binary
-
-To install chessnake with PostgresSQL support, using psycopg2 from source **(recommended for production and packaging)**
-```commandline
-pip install chessnake[postgres]
-```
+This library uses [psycopg2](https://pypi.org/project/psycopg2/) to communicate with postgres. There are two ways to install psycopg2: with a binary or from source
 
 To install chessnake with PostgresSQL support, using psycopg2-binary **(recommended for beginners, development, and for non-serious purposes)**
 ```commandline
 pip install chessnake[postgres-binary]
 ```
 
-See [psycopg2 installation](https://www.psycopg.org/docs/install.html) for more
+To install chessnake with PostgresSQL support, using psycopg2 from source **(recommended for production and packaging)**
+```commandline
+pip install chessnake[postgres]
+```
+
+See [psycopg2 build prerequisites](https://www.psycopg.org/docs/install.html#build-prerequisites) for prerequisites when installing from source
 
 ## Usage
 This library's API is focused around a `Game` object. Every `Game` object represents a game between two players
@@ -74,7 +74,7 @@ If you've installed chessnake with PostgreSQL support, you can store and retriev
 
 Before using chessnake, you must create environment variables that point to your database. There are many ways to do this, but for this example I will use the [python-dotenv](https://pypi.org/project/python-dotenv/) package to load variables from a `.env` file
 
-Create a file named `.env` Add your database information
+Create a file named `.env`. Add your database information
 ```commandline
 CHESSDB_NAME='name_of_your_postgresql_db'
 CHESSDB_USER='user_for_your_postgresql_db'
@@ -115,4 +115,4 @@ game.update_db()
 
 If you use `auto_sql` instead of `sql`, your games will be automatically updated with every move and with less transactions.
 
-For more information on using chessnake with PostgreSQL, see the docs (incomplete)
+For more information on using chessnake with PostgreSQL, see the docs (coming soon)
