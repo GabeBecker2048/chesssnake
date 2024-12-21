@@ -1,22 +1,18 @@
 import importlib.resources
 
 from .Sql_Utils import execute_sql
-from . import Chess
-from . import ChessImg
-from . import ChessError
 from . import GameError
+from ..chesslib.Game import Game as BaseGame
+from ..chesslib import Chess
 
 
-class Game:
+class Game(BaseGame):
     # this loads game data from the database into the game object
     # if the game does not exist in the database, a new one is created
     def __init__(self, white_id: int=0, black_id: int=1, group_id: int=0, white_name: str='', black_name: str='', sql: bool=False, auto_sql: bool=False):
 
-        self.gid = group_id
-        self.wid = white_id
-        self.bid = black_id
-        self.wname = white_name
-        self.bname = black_name
+        super().__init__(white_id, black_id, group_id, white_name, black_name)
+
         self.sql = sql
         self.auto_sql = auto_sql
 
@@ -33,6 +29,8 @@ class Game:
             turn = 0
             draw = 0
 
+        # TODO: Find a way to make Chess.Board() be called only once
+        #       Currently, Chess.Board() is called in super().__init__ and here
         self.board = Chess.Board(
             board=boardarray,
             two_moveP=two_move_p
@@ -40,32 +38,13 @@ class Game:
         self.turn = turn
         self.draw = draw
 
-    def __str__(self):
-        return str(self.board)
-
-    # returns True if it is a given player's turn to move and False otherwise
-    def is_players_turn(self, player_id):
-
-        if (self.turn == 0 and player_id == self.wid) or (self.turn == 1 and player_id == self.bid):
-            return True
-        else:
-            return False
-
     # makes a given move, assuming it is the correct player's turn
     # if img=True, return a PIL.Image object. Otherwise, return None
     # if save is a string to a filepath, we save a PNG image of the board to the given location
     #   save implies img=True
     def move(self, move, img=False, save=None):
 
-        # if invalid notation, we raise an error
-        if not Chess.Move.is_valid_c_notation(move):
-            raise ChessError.InvalidNotationError(move)
-
-        # makes the move on the board
-        m = self.board.move(move, self.turn)
-
-        # changes whose turn it is
-        self.turn = 1 - self.turn
+        img = super().move(move, img, save)
 
         # handle SQL updating
         if self.auto_sql:
@@ -78,36 +57,13 @@ class Game:
                 WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
             """)
 
-        # handle optional args
-        if img or save:
-            image = ChessImg.img(self.board, self.wname, self.bname, m)
-            if save:
-                image.save(save)
-            return image
-
-    # takes in a list of moves and executes them in order
-    def moves(self, moves):
-        for move in moves:
-            self.move(move)
+        return img
 
     # offers a draw
     # "player_id" refers to the player offering the draw
     def draw_offer(self, player_id):
 
-        # if a player has already offered draw
-        if (self.draw == 0 and player_id == self.wid) or (self.draw == 1 and player_id == self.bid):
-            raise ChessError.DrawAlreadyOfferedError
-
-        # if a player offers a draw after being offered a draw, the draw is accepted
-        elif (self.draw == 1 and player_id == self.wid) or (self.draw == 0 and player_id == self.bid):
-            self.draw_accept(player_id)
-
-        # if it is not the players turn
-        elif not self.is_players_turn(player_id):
-            raise ChessError.DrawWrongTurnError
-
-        # player offers draw
-        self.draw = 0 if player_id == self.wid else 1
+        super().draw_offer(player_id)
 
         if self.auto_sql:
             execute_sql(f"""
@@ -119,20 +75,15 @@ class Game:
     # "player_id" refers to the player offering the draw
     def draw_accept(self, player_id):
 
-        if (self.draw == 0 and player_id == self.wid) or (self.draw == 1 and player_id == self.bid) or self.draw is None:
-            raise ChessError.DrawNotOfferedError
+        super().draw_accept(player_id)
 
-        self.board.status = 2
         self.end_check()
 
     # checks if a draw exists and declines if offered
     # "player_id" refers to the player offering the draw
     def draw_decline(self, player_id):
 
-        if (self.draw == 0 and player_id == self.wid) or (self.draw == 1 and player_id == self.bid) or self.draw is None:
-            raise ChessError.DrawNotOfferedError
-
-        self.draw = None
+        super().draw_decline(player_id)
 
         if self.auto_sql:
             execute_sql(f"""
@@ -144,15 +95,11 @@ class Game:
     def end_check(self):
         if self.board.status != 0:
             if self.auto_sql:
-                self.delete_game(self.gid, self.wid, self.bid)
+                self.sql_delete_game(self.gid, self.wid, self.bid)
             return True
         return False
 
-    # saves the board as a png to a given filepath
-    def save(self, image_fp: str):
-        ChessImg.img(self.board, self.wname, self.bname).save(image_fp)
-
-    # This is the function for updating the database, for cases where sql=true but auto_sql=false\
+    # This is the function for updating the database, for cases where sql=true but auto_sql=false
     # returns False and does nothing if sql is not enabled
     def update_db(self):
         if self.sql or self.auto_sql:
@@ -173,7 +120,7 @@ class Game:
 
     @staticmethod
     def sql_db_init():
-        db_init_fp = str(importlib.resources.files('chessql').joinpath('data/init.sql'))
+        db_init_fp = str(importlib.resources.files('ChessPy.chesslib').joinpath('data/init.sql'))
 
         with open(db_init_fp, 'r') as db_init_file:
             db_init = db_init_file.read()
@@ -261,7 +208,7 @@ class Challenge:
             raise GameError.ChallengeError("You can't challenge yourself, silly")
 
         # checks if they are already in a game
-        if Game.game_exists(gid, challenger, opponent):
+        if Game.sql_game_exists(gid, challenger, opponent):
             raise GameError.ChallengeError(f"There is an unresolved game between {challenger} and {opponent} already!")
 
         # check if the challenge exists already
