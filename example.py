@@ -1,4 +1,4 @@
-from chessnake import Game
+from chesssnake import Game
 
 # Initialize a new game
 game = Game(white_name="Bob", black_name="Phil")

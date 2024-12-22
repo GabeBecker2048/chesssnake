@@ -1,8 +1,8 @@
-# Chessnake
+# Chesssnake
 
-*chessnake* is a feature-packed Python library for playing, visualizing, and storing chess games
+*chesssnake* is a feature-packed Python library for playing, visualizing, and storing chess games
 
-Pronounced "ches - snake", in reference to Python being a type of snake. It is not pronounced cheesecake
+Pronounced "chess - snake", in reference to Python being a type of snake. It is not pronounced cheesecake
 
 ## Features
 
@@ -17,24 +17,24 @@ Pronounced "ches - snake", in reference to Python being a type of snake. It is n
 
 ### Basic Installation
 
-To install the core features of Chessnake, run:
+To install the core features of Chesssnake, run:
 
 ```bash
-pip install chessnake
+pip install chesssnake
 ```
 
 ### With PostgreSQL Support
 
 This library uses [psycopg2](https://pypi.org/project/psycopg2/) to communicate with postgres. There are two ways to install psycopg2: with a binary or from source
 
-To install chessnake with PostgresSQL support, using psycopg2-binary **(recommended for beginners, development, and for non-serious purposes)**
+To install chesssnake with PostgresSQL support, using psycopg2-binary **(recommended for beginners, development, and for non-serious purposes)**
 ```commandline
-pip install chessnake[postgres-binary]
+pip install chesssnake[postgres-binary]
 ```
 
-To install chessnake with PostgresSQL support, using psycopg2 from source **(recommended for production and packaging)**
+To install chesssnake with PostgresSQL support, using psycopg2 from source **(recommended for production and packaging)**
 ```commandline
-pip install chessnake[postgres]
+pip install chesssnake[postgres]
 ```
 
 See [psycopg2 build prerequisites](https://www.psycopg.org/docs/install.html#build-prerequisites) for prerequisites when installing from source
@@ -46,7 +46,7 @@ This library's API is focused around a `Game` object. Every `Game` object repres
 
 A simple example:
 ```Python3
-from chessnake import Game
+from chesssnake import Game
 
 # Initialize a new game
 game = Game(white_name="Bob", black_name="Phil")
@@ -70,9 +70,9 @@ game.move('Bc5', save='/path/to/your/image2.png')
 
 ### With PostgreSQL support
 
-If you've installed chessnake with PostgreSQL support, you can store and retrieve games from a database.
+If you've installed chesssnake with PostgreSQL support, you can store and retrieve games from a database.
 
-Before using chessnake, you must create environment variables that point to your database. There are many ways to do this, but for this example I will use the [python-dotenv](https://pypi.org/project/python-dotenv/) package to load variables from a `.env` file
+Before using chesssnake, you must create environment variables that point to your database. There are many ways to do this, but for this example I will use the [python-dotenv](https://pypi.org/project/python-dotenv/) package to load variables from a `.env` file
 
 Create a file named `.env`. Add your database information
 ```commandline
@@ -87,7 +87,7 @@ CHESSDB_PORT='port_for_your_postgres_db'
 Now creating and storing games with PostgreSQL is easy:
 
 ```Python3
-from chessnake import Game
+from chesssnake import Game
 from dotenv import load_dotenv
 
 # load our env vars
@@ -95,7 +95,7 @@ load_dotenv()
 
 # Initialize a new game with PostgreSQL
 ## If a game already exists in our database, we load the game into memory
-## If it doesn't, chessnake creates a new game in the database and loads a new game into memory
+## If it doesn't, chesssnake creates a new game in the database and loads a new game into memory
 ## Uniqueness of games is determined by unique combinations of "white_id", "black_id", and "group_id" (all BIG INTs)
 game = Game(
   white_id=123,
@@ -115,4 +115,4 @@ game.update_db()
 
 If you use `auto_sql` instead of `sql`, your games will be automatically updated with every move and with less transactions.
 
-For more information on using chessnake with PostgreSQL, see the docs (coming soon)
+For more information on using chesssnake with PostgreSQL, see the docs (coming soon)
