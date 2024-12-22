@@ -1560,9 +1560,9 @@ class Board:
     def __str__(self):
         out = ""
 
-        for i in range(7, -1, -1):
-            out += str(i + 1) + "\t"
-            for j in range(7, -1, -1):
+        for i in range(0, 8):
+            out += str(8-i) + "\t"
+            for j in range(0, 8):
                 if self[i, j].piece is not None:
                     out += self[i, j].piece.piecetype
                     out += str(self[i, j].piece.color)
