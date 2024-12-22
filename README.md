@@ -95,8 +95,8 @@ load_dotenv()
 
 # Initialize a new game with PostgreSQL
 ## If a game already exists in our database, we load the game into memory
-## If it doesn't we create a new game in the database and load the game into memory
-## Uniqueness of games is determined by unique combinations of "white_id", "black_id", and "group_id"
+## If it doesn't, chessnake creates a new game in the database and loads a new game into memory
+## Uniqueness of games is determined by unique combinations of "white_id", "black_id", and "group_id" (all BIG INTs)
 game = Game(
   white_id=123,
   black_id=456,
