@@ -14,7 +14,7 @@ with open('README.md') as f:
 
 setup(
     name="chesssnake",
-    version="0.3.3",
+    version="0.3.4",
     url="https://github.com/GabeBecker2048/chesssnake",
     description="A Python library for playing, visualizing, and storing chess games.",
     author="Gabe Becker",
@@ -34,7 +34,11 @@ setup(
     },
     python_requires='>=3.9',
     classifiers=[
-        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
