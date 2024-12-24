@@ -3,10 +3,10 @@ from setuptools import setup, find_packages
 with open('requirements.txt') as f:
     requirements = f.read().splitlines()
 
-with open('requirements-postgres.txt') as f:
+with open('extra_requirements/requirements-postgres.txt') as f:
     requirements_postgres = f.read().splitlines()
 
-with open('requirements-postgres-binary.txt') as f:
+with open('extra_requirements/requirements-postgres-binary.txt') as f:
     requirements_postgres_binary = f.read().splitlines()
 
 with open('README.md') as f:
