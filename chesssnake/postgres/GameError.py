@@ -13,10 +13,10 @@ class SQLIdError(GameError):
 
 class SQLAuthError(GameError):
     def __init__(self):
-        msg = ("The SQL database conditionals are invalid. Make sure these environment variables are set:\n"
+        msg = ("The SQL database credentials are invalid. Make sure these environment variables are set:\n"
                "  CHESSDB_NAME CHESSDB_USER CHESSDB_PASS\n"
                "It is also recommended to have these variables set too:\n"
-               " CHESSDB_PASS CHESSDB_HOST CHESSDB_PORT")
+               "  CHESSDB_HOST CHESSDB_PORT")
         super().__init__(msg)
 
 class ChallengeError(GameError):
