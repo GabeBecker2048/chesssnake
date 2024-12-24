@@ -14,7 +14,7 @@ with open('README.md') as f:
 
 setup(
     name="chesssnake",
-    version="0.3.1",
+    version="0.3.2",
     url="https://github.com/GabeBecker2048/chesssnake",
     description="A Python library for playing, visualizing, and storing chess games.",
     author="Gabe Becker",
@@ -26,7 +26,7 @@ setup(
     include_package_data=True,
     install_requires=requirements,
     package_data={
-        "chesssnake.chesslib": ["data/*.sql", "data/*.ttf", "data/img/*.png"],
+        "chesssnake": ["data/*.sql", "data/*.ttf", "data/img/*.png"],
     },
     extras_require={
         "postgres": requirements_postgres,
