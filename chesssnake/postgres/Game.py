@@ -22,21 +22,13 @@ class Game(BaseGame):
         # if sql=False, we create a new game in memory only
         if sql or auto_sql:
             boardarray, turn, draw, two_move_p = self.sql_game_init(white_id, black_id, group_id, white_name, black_name)
+            self.board = Chess.Board(
+                board=boardarray,
+                two_moveP=two_move_p
+            )
 
-        else:
-            boardarray = None
-            two_move_p = None
-            turn = 0
-            draw = 0
-
-        # TODO: Find a way to make Chess.Board() be called only once
-        #       Currently, Chess.Board() is called in super().__init__ and here
-        self.board = Chess.Board(
-            board=boardarray,
-            two_moveP=two_move_p
-        )
-        self.turn = turn
-        self.draw = draw
+            self.turn = turn
+            self.draw = draw
 
     # makes a given move, assuming it is the correct player's turn
     # if img=True, return a PIL.Image object. Otherwise, return None
