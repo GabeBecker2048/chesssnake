@@ -8,7 +8,25 @@ from .Chess import Board, Move
 # takes in board AFTER move and move object
 # returns PIL.Image object
 def img(board: Board, p1: str, p2: str, move: Move = None):
+    """
+    Generates a visual representation of a chessboard in its current state.
 
+    This function produces a graphical representation of the chessboard after a specified move,
+    highlighting the last move for both the white and black perspectives. It also overlays player
+    names on the image.
+
+    :param board: The chessboard object representing the current game state (after the move).
+    :type board: Board
+    :param p1: Name of the player playing as white. Names longer than 10 characters will be truncated.
+    :type p1: str
+    :param p2: Name of the player playing as black. Names longer than 10 characters will be truncated.
+    :type p2: str
+    :param move: The move object representing the most recent move. If provided, the source (`prev`) and
+        destination (`to`) squares of the move will be highlighted. Default is `None`.
+    :type move: Move or None
+    :return: A PIL.Image object representing the visualized chessboard with the latest move highlighted.
+    :rtype: PIL.Image
+    """
     if len(p1) > 10:
         p1 = p1[:10]
 
