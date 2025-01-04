@@ -11,7 +11,7 @@ class Game:
     handling moves, offering/accepting/declining draws, and saving board states as images. It acts as
     the central controller of the chess game, interacting with other components like `Board` and `Move`.
 
-    :ivar gid: The group/game ID.
+    :ivar gid: The group ID.
     :type gid: int
     :ivar wid: The ID of the player playing as white.
     :type wid: int
