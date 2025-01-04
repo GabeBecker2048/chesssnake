@@ -2269,7 +2269,7 @@ class Board:
         :type player: int
         :return: The executed move object for reference.
         :rtype: Move
-        :raises ChessError.InvalidMoveError: If the move is invalid.
+        :raises ChessError.MoveIntoCheckError: If the move would put the player in check.
         :raises ChessError.PromotionError: If an invalid promotion is attempted or a promotion is required.
         :raises ChessError.InvalidCastleError: If an invalid castling move is attempted.
         :raises ChessError.PieceNotFoundError: If no eligible piece is found for the move.
