@@ -2,14 +2,39 @@ from . import ChessError
 
 
 class Piece:
+    """
+    Base class representing a chess piece.
+
+    This class provides basic functionality and attributes common to all chess pieces,
+    such as type and color. It also contains methods for identifying a piece's full
+    name and determining if it is pinned on the board.
+
+    :ivar piecetype: The type of the chess piece represented by a single character
+                     ('K', 'Q', 'R', 'B', 'P', or 'N').
+    :type piecetype: str
+    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
+    :type color: int
+    """
     def __init__(self, piecetype, color):
-        # piece will be a char that is either K, Q, R, B, P, or N
-        # color will be a binary bool where white is 0 and black is 1
+        """
+        Initializes a generic chess piece.
+
+        :param piecetype: A single character representing the piece type ('K', 'Q', 'R', 'B', 'P', or 'N').
+        :type piecetype: str
+        :param color: The color of the piece, where 0 represents white and 1 represents black.
+        :type color: int
+        """
 
         self.piecetype = str(piecetype)
         self.color = int(color)
 
     def fullname(self):
+        """
+        Returns the full name of the chess piece.
+
+        :return: The name of the piece (e.g., "king", "queen", "pawn").
+        :rtype: str
+        """
         if self.piecetype == 'P':
             return "pawn"
         elif self.piecetype == 'R':
@@ -29,6 +54,19 @@ class Piece:
     # if the king is already in check, then this will *always* return true
     # only use this function if we know the king is not in check already
     def is_pinned(self, square, board):
+        """
+        Determines if the piece is pinned to the king.
+
+        A piece is considered pinned if removing it from its current location exposes
+        the king to a direct attack (check). Kings themselves are never pinned.
+
+        :param square: The square the piece is currently on.
+        :type square: Square
+        :param board: The current state of the board, which tracks all pieces and their positions.
+        :type board: Board
+        :return: True if the piece is pinned, else False.
+        :rtype: bool
+        """
 
         if self.piecetype == 'K':
             return False
@@ -46,13 +84,54 @@ class Piece:
 
 
 class Rook(Piece):
+    """
+    Represents a Rook chess piece.
+
+    A subclass of the `Piece` class. The Rook chess piece moves in straight lines along rows or columns and attacks
+    in the same manner. This class implements the movement, threatening behavior, and special movement restrictions
+    of a rook in chess.
+
+    :ivar piecetype: The type of the piece, which is 'R' for Rook.
+    :type piecetype: str
+    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
+    :type color: int
+    :ivar moved: Represents whether the piece has moved. Used for determining if a player can castle
+    :type moved: bool
+    """
     def __init__(self, color, moved=False):
+        """
+        Initializes a Rook chess piece.
+
+        The rook is initialized with a color, and whether it has moved.
+        The `color` is used to identify if the piece belongs to the white
+        or black side, and the `moved` attribute helps determine if this rook can still
+        participate in castling.
+
+        :param color: The color of the rook (0 for white, 1 for black).
+        :type color: int
+        :param moved: Indicates whether the rook has moved. Defaults to `False`.
+        :type moved: bool
+        """
         super().__init__('R', color)
 
         self.moved = moved
 
     def threatens(self, square, board):
+        """
+        Determines the squares that this Rook can attack, regardless of pinning.
 
+        This method calculates all reachable squares in any cardinal direction (up,
+        down, left, right). The search includes squares blocked by other pieces, stopping
+        at the first encountered piece. Opponent pieces are included in the threatened
+        squares, but friendly pieces block further checks in that direction.
+
+        :param square: The square where this rook is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: A list of squares that the rook can threaten.
+        :rtype: list[Square]
+        """
         moves = []
         i_pos, j_pos, i_neg, j_neg = True, True, True, True
 
@@ -127,7 +206,23 @@ class Rook(Piece):
         return moves
 
     def can_move(self, square, board):
+        """
+        Determines if this Rook has at least one valid move.
 
+        A rook is considered able to move if:
+        - It is not pinned to its king (i.e., its move wouldn't expose the king to check).
+        - It threatens an opponent's squares or empty squares.
+
+        If pinned, the rook is further analyzed to determine if it can legally capture
+        threatening pieces.
+
+        :param square: The square where this rook is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: `True` if the rook has at least one legal move, otherwise `False`.
+        :rtype: bool
+        """
         # if the piece is pinned, we need to check if the piece can capture the other piece that is pinning it
         if self.is_pinned(square, board):
 
@@ -166,7 +261,40 @@ class Rook(Piece):
 
     @staticmethod
     def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
+        """
+        Finds the Rook that corresponds to a given move.
 
+        Chess moves provide limited information to locate a specific piece, such as its
+        type (Rook), the target square, and optional file or rank constraints. This method
+        performs a targeted search to find valid rooks that match the move's description.
+
+        If the `errors` flag is set to `True`, this method validates the legality of the
+        identified Rook(s) for the move. If a valid Rook cannot be determined, or if
+        multiple matching Rooks are found, it raises appropriate exceptions.
+
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :param square: The square where the rook is attempting to move.
+        :type square: Square
+        :param color: The color of the rook being searched for (0 for white, 1 for black).
+        :type color: int
+        :param capture: Indicates whether the move involves capturing an opponent's piece.
+        :type capture: bool
+        :param file_limit: (Optional) Restricts to find rooks in a specific file (e.g., 'a', 'b', etc.).
+        :type file_limit: str or None
+        :param rank_limit: (Optional) Restricts to find rooks in a specific rank (e.g., '1', '2', etc.).
+        :type rank_limit: str or None
+        :param errors: If `True`, raises exceptions for invalid moves or ambiguities.
+                       If `False`, returns `None` for invalid moves instead.
+        :type errors: bool
+        :return: The rook that can execute the move, or a list if multiples are found, or `None` when `errors=False`.
+        :rtype: Rook or list[Rook] or None
+        :raises ChessError.PieceNotFoundError: If no eligible rook is found for the move.
+        :raises ChessError.MultiplePiecesFoundError: If more than one matching rook is found.
+        :raises ChessError.NothingToCaptureError: If no opposing piece exists on the target square.
+        :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
+        :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
+        """
         found = []
         i_pos, j_pos, i_neg, j_neg = True, True, True, True
 
@@ -303,11 +431,48 @@ class Rook(Piece):
 
 
 class Knight(Piece):
+    """
+    Represents a Knight chess piece.
+
+    A subclass of the `Piece` class. The Knight is a unique chess piece that moves in an "L" shape:
+    two squares in one direction and one square perpendicular to it, or vice versa. Knights are
+    the only pieces that can "jump" over other pieces while moving. This class implements the movement,
+    threatening behavior, and related functionality of a Knight in chess.
+
+    :ivar piecetype: The type of the piece, which is 'N' for Knight. 'K' is used by King.
+    :type piecetype: str
+    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
+    :type color: int
+    """
     def __init__(self, color):
+        """
+        Initializes a Knight chess piece.
+
+        The Knight is initialized with attributes for its type ('B') and for its color. The `color` is used
+        to identify if the piece belongs to the white or black side.
+
+        :param color: The color of the knight (0 for white, 1 for black).
+        :type color: int
+        """
         super().__init__('N', color)
 
     def threatens(self, square, board):
+        """
+        Determines the squares that this Knight can attack, regardless of pinning.
 
+        The Knight moves in an "L" shape: two squares in one direction and one square
+        perpendicular to that or vice versa. This method calculates all valid squares
+        the Knight can threaten, considering that it can jump over other pieces. The
+        threatened squares are valid even if they are occupied, as long as they belong
+        to an opposing piece.
+
+        :param square: The square where this knight is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: A list of squares that the Knight can threaten.
+        :rtype: list[Square]
+        """
         moves = []
         delta_is = [2, 1, -1, -2, -2, -1, 1, 2]
         delta_js = [1, 2, 2, 1, -1, -2, -2, -1]
@@ -328,7 +493,22 @@ class Knight(Piece):
         return moves
 
     def can_move(self, square, board):
+        """
+        Determines if this Knight has at least one valid move.
 
+        A Knight is considered able to move if:
+        - It is not pinned to its king (i.e., its move wouldn't expose the king to check).
+        - It threatens an opponent's squares or empty squares.
+
+        If pinned, the Knight is restricted and cannot move.
+
+        :param square: The square where this knight is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: `True` if the Knight has at least one legal move, otherwise `False`.
+        :rtype: bool
+        """
         # if a knight is pinned, it can't move
         if self.is_pinned(square, board):
             return False
@@ -341,7 +521,40 @@ class Knight(Piece):
 
     @staticmethod
     def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
+        """
+        Finds the Knight that corresponds to a given move.
 
+        Chess moves provide limited information to locate a specific piece, such as its
+        type (Knight), the target square, and optional file or rank constraints. This
+        method performs a targeted search to find valid Knights that match the move's description.
+
+        If the `errors` flag is set to `True`, this method validates the legality of the
+        identified Knight(s) for the move. If a valid Knight cannot be determined, or if
+        multiple matching Knights are found, it raises appropriate exceptions.
+
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :param square: The square where the Knight is attempting to move.
+        :type square: Square
+        :param color: The color of the Knight being searched for (0 for white, 1 for black).
+        :type color: int
+        :param capture: Indicates whether the move involves capturing an opponent's piece.
+        :type capture: bool
+        :param file_limit: (Optional) Restricts to find Knights in a specific file (e.g., 'a', 'b', etc.).
+        :type file_limit: str or None
+        :param rank_limit: (Optional) Restricts to find Knights in a specific rank (e.g., '1', '2', etc.).
+        :type rank_limit: str or None
+        :param errors: If `True`, raises exceptions for invalid moves or ambiguities.
+                       If `False`, returns `None` for invalid moves instead.
+        :type errors: bool
+        :return: The Knight that can execute the move, or a list if multiples are found, or `None` when `errors=False`.
+        :rtype: Knight or list[Knight] or None
+        :raises ChessError.PieceNotFoundError: If no eligible Knight is found for the move.
+        :raises ChessError.MultiplePiecesFoundError: If more than one matching Knight is found.
+        :raises ChessError.NothingToCaptureError: If no opposing piece exists on the target square.
+        :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
+        :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
+        """
         found = []
         delta_is = [2, 1, -1, -2, -2, -1, 1, 2]
         delta_js = [1, 2, 2, 1, -1, -2, -2, -1]
@@ -404,11 +617,47 @@ class Knight(Piece):
 
 
 class Bishop(Piece):
+    """
+    Represents a Bishop chess piece.
+
+    A subclass of the `Piece` class. The Bishop is a chess piece that moves diagonally across
+    the board any number of squares, as long as there are no obstacles in its path. Bishops are
+    limited to operating on squares of the same color as their starting position (light or dark).
+    This class implements the movement, threatening behavior, and related functionality of a Bishop in chess.
+
+    :ivar piecetype: The type of the piece, which is 'B' for Bishop.
+    :type piecetype: str
+    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
+    :type color: int
+    """
     def __init__(self, color):
+        """
+        Initializes a Bishop chess piece.
+
+        The Bishop is initialized with attributes for its type ('B') and color. The `color` is used
+        to identify if the piece belongs to the white or black side.
+
+        :param color: The color of the bishop (0 for white, 1 for black).
+        :type color: int
+        """
         super().__init__('B', color)
 
     def threatens(self, square, board):
+        """
+        Determines the squares that this Bishop can attack, regardless of pinning.
 
+        The Bishop moves diagonally across the board in any direction. This method calculates
+        all valid squares the Bishop threatens based on unobstructed diagonal paths. If an
+        opponent's piece blocks the path, that square is included as threatened; however,
+        the Bishop cannot threaten squares beyond that piece.
+
+        :param square: The square where this bishop is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: A list of squares that the Bishop can threaten.
+        :rtype: list[Square]
+        """
         moves = []
         pos_pos, neg_pos, neg_neg, pos_neg = True, True, True, True
 
@@ -483,7 +732,22 @@ class Bishop(Piece):
         return moves
 
     def can_move(self, square, board):
+        """
+        Determines if this Bishop has at least one valid move.
 
+        A Bishop is considered able to move if:
+        - It is not pinned to its king (i.e., its move wouldn't expose the king to check).
+        - It threatens an opponent's squares or empty squares along diagonal paths.
+
+        If pinned, the Bishop is further restricted and cannot move except under special circumstances.
+
+        :param square: The square where this bishop is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: `True` if the Bishop has at least one legal move, otherwise `False`.
+        :rtype: bool
+        """
         # if the piece is pinned, we need to check if the piece can capture the other piece that is pinning it
         if self.is_pinned(square, board):
 
@@ -522,7 +786,40 @@ class Bishop(Piece):
 
     @staticmethod
     def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
+        """
+        Finds the Bishop that corresponds to a given move.
 
+        Chess moves provide limited information to locate a specific piece, such as its
+        type (Bishop), the target square, and optional file or rank constraints. This
+        method performs a targeted search to find valid Bishops that match the move's description.
+
+        If the `errors` flag is set to `True`, this method validates the legality of the
+        identified Bishop(s) for the move. If a valid Bishop cannot be determined, or if
+        multiple matching Bishops are found, it raises appropriate exceptions.
+
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :param square: The square where the Bishop is attempting to move.
+        :type square: Square
+        :param color: The color of the Bishop being searched for (0 for white, 1 for black).
+        :type color: int
+        :param capture: Indicates whether the move involves capturing an opponent's piece.
+        :type capture: bool
+        :param file_limit: (Optional) Restricts to find Bishops in a specific file (e.g., 'a', 'b', etc.).
+        :type file_limit: str or None
+        :param rank_limit: (Optional) Restricts to find Bishops in a specific rank (e.g., '1', '2', etc.).
+        :type rank_limit: str or None
+        :param errors: If `True`, raises exceptions for invalid moves or ambiguities.
+                       If `False`, returns `None` for invalid moves instead.
+        :type errors: bool
+        :return: The Bishop that can execute the move, or a list if multiples are found, or `None` when `errors=False`.
+        :rtype: Bishop or list[Bishop] or None
+        :raises ChessError.PieceNotFoundError: If no eligible Bishop is found for the move.
+        :raises ChessError.MultiplePiecesFoundError: If more than one matching Bishop is found.
+        :raises ChessError.NothingToCaptureError: If no opposing piece exists on the target square.
+        :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
+        :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
+        """
         found = []
         pos_pos, neg_pos, neg_neg, pos_neg = True, True, True, True
 
@@ -659,11 +956,48 @@ class Bishop(Piece):
 
 
 class Queen(Piece):
+    """
+    Represents a Queen chess piece.
+
+    A subclass of the `Piece` class. The Queen is the most versatile piece in chess,
+    combining the movement patterns of both the Rook (horizontal and vertical) and
+    the Bishop (diagonal). It can move any number of squares along a rank, file, or diagonal
+    but may not leap over other pieces. This class implements the movement, threatening
+    behavior, and related functionality of a Queen in chess.
+
+    :ivar piecetype: The type of the piece, which is 'Q' for Queen.
+    :type piecetype: str
+    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
+    :type color: int
+    """
     def __init__(self, color):
+        """
+        Initializes a Queen chess piece.
+
+        The Queen is initialized with attributes for its type ('Q') and color. The `color` is used
+        to identify if the piece belongs to the white or black side.
+
+        :param color: The color of the Queen (0 for white, 1 for black).
+        :type color: int
+        """
         super().__init__('Q', color)
 
     def threatens(self, square, board):
+        """
+        Determines the squares that this Queen can attack, regardless of pinning.
 
+        The Queen combines the movement capabilities of a Rook and a Bishop. It threatens
+        squares along ranks (horizontal), files (vertical), and diagonals. This method calculates
+        all valid squares the Queen threatens until blocked by another piece. If the blocking piece
+        belongs to the opponent, that square is treated as threatened.
+
+        :param square: The square where this queen is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: A list of squares that the Queen can threaten.
+        :rtype: list[Square]
+        """
         moves = []
         i_pos, pos_pos, j_pos, neg_pos, i_neg, neg_neg, j_neg, pos_neg = True, True, True, True, True, True, True, True
 
@@ -802,7 +1136,22 @@ class Queen(Piece):
         return moves
 
     def can_move(self, square, board):
+        """
+        Determines if this Queen has at least one valid move.
 
+        A Queen is considered able to move if:
+        - It is not pinned to its king (i.e., its move wouldn't expose the king to check).
+        - It threatens squares along lines of movement (ranks, files, diagonals).
+
+        A pinned Queen is further restricted and may have limited moves to respond to the pin.
+
+        :param square: The square where this queen is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: `True` if the Queen has at least one legal move, otherwise `False`.
+        :rtype: bool
+        """
         # if the piece is pinned, we need to check if the piece can capture the other piece that is pinning it
         if self.is_pinned(square, board):
 
@@ -841,7 +1190,40 @@ class Queen(Piece):
 
     @staticmethod
     def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
+        """
+        Finds the Queen that corresponds to a given move.
 
+        Chess moves provide limited information to locate a specific piece, such as its
+        type (Queen), the target square, and optional file or rank constraints. This
+        method performs a targeted search to find valid Queens that match the move's description.
+
+        If the `errors` flag is set to `True`, this method validates the legality of the
+        identified Queen(s) for the move. If a valid Queen cannot be determined, or if
+        multiple matching Queens are found, it raises appropriate exceptions.
+
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :param square: The square where the Queen is attempting to move.
+        :type square: Square
+        :param color: The color of the Queen being searched for (0 for white, 1 for black).
+        :type color: int
+        :param capture: Indicates whether the move involves capturing an opponent's piece.
+        :type capture: bool
+        :param file_limit: (Optional) Restricts to find Queens in a specific file (e.g., 'a', 'b', etc.).
+        :type file_limit: str or None
+        :param rank_limit: (Optional) Restricts to find Queens in a specific rank (e.g., '1', '2', etc.).
+        :type rank_limit: str or None
+        :param errors: If `True`, raises exceptions for invalid moves or ambiguities.
+                       If `False`, returns `None` for invalid moves instead.
+        :type errors: bool
+        :return: The Queen that can execute the move, or a list if multiples are found, or `None` when `errors=False`.
+        :rtype: Queen or list[Queen] or None
+        :raises ChessError.PieceNotFoundError: If no eligible Queen is found for the move.
+        :raises ChessError.MultiplePiecesFoundError: If more than one matching Queen is found.
+        :raises ChessError.NothingToCaptureError: If no opposing piece exists on the target square.
+        :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
+        :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
+        """
         found = []
         i_pos, pos_pos, j_pos, neg_pos, i_neg, neg_neg, j_neg, pos_neg = True, True, True, True, True, True, True, True
 
@@ -1074,13 +1456,54 @@ class Queen(Piece):
 
 
 class King(Piece):
+    """
+    Represents the King chess piece.
+
+    A subclass of the `Piece` class. The King is the most crucial piece in chess and has
+    restricted movement. It can move one square in any direction but cannot move into a square
+    under attack. Additionally, the King has special castling rules, which are implemented
+    in this class.
+
+    :ivar piecetype: The type of the piece, which is 'K' for King.
+    :type piecetype: str
+    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
+    :type color: int
+    :ivar moved: Indicates whether the King has moved. Used to determine if castling is allowed.
+    :type moved: bool
+    """
     def __init__(self, color, moved=False):
+        """
+        Initializes a King chess piece.
+
+        The King is initialized with a color, and whether it has moved.
+        The `color` is used to identify if the piece belongs to the white
+        or black side, and the `moved` attribute helps determine if this King can still
+        participate in castling.
+
+        :param color: The color of the piece (0 for white, 1 for black).
+        :type color: int
+        :param moved: Indicates whether the King has moved. Defaults to `False`.
+        :type moved: bool, optional
+        """
         super().__init__('K', color)
 
         self.moved = moved
 
     def threatens(self, square, board):
+        """
+        Determines the squares that this King can threaten.
 
+        The King threatens all adjacent squares in any direction (horizontally, vertically,
+        or diagonally). However, this is independent of whether those squares are under threat
+        themselves or are occupied by an opponent's piece.
+
+        :param square: The square where this King is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: A list of squares that the King can threaten.
+        :rtype: list[Square]
+        """
         moves = []
         delta_is = [1, 1, 0, -1, -1, -1, 0, 1]
         delta_js = [0, 1, 1, 1, 0, -1, -1, -1]
@@ -1101,6 +1524,20 @@ class King(Piece):
         return moves
 
     def can_move(self, square, board):
+        """
+        Determines if this King has at least one valid move.
+
+        The King can legally move to a square if:
+        - The square is one step away in any direction (horizontal, vertical, or diagonal).
+        - The square is not under attack by any of the opponent's pieces.
+
+        :param square: The square where this King is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: `True` if the King has at least one legal move, otherwise `False`.
+        :rtype: bool
+        """
         threatens = self.threatens(square, board)
         for threat in threatens:
             if len(board.threats_on(threat, self.color)) == 0:
@@ -1108,7 +1545,23 @@ class King(Piece):
         return False
 
     def can_castle(self, board, direction):
+        """
+        Determines if the King can perform a castling move.
 
+        Castling is a special move involving the King and one of the Rooks, executed under these conditions:
+        - The King and the chosen Rook (either kingside or queenside) have not moved yet.
+        - All squares between the King and the Rook are unoccupied.
+        - None of the squares the King travels through (or lands on) are under attack.
+
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :param direction: Specifies the side for castling:
+                          - `'K'` for kingside castling.
+                          - `'Q'` for queenside castling.
+        :type direction: str
+        :return: `True` if castling is allowed in the specified direction, otherwise `False`.
+        :rtype: bool
+        """
         # if the king moved, no castle
         if self.moved:
             return False
@@ -1154,7 +1607,40 @@ class King(Piece):
 
     @staticmethod
     def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
+        """
+        Finds the King that corresponds to a given move.
 
+        Since each side has only one King, this method validates whether the move involves the
+        King and checks the constraints provided (e.g., file, rank limits). If the King is under
+        check, additional conditions may apply to validate its moves.
+
+        If the `errors` flag is set to `True`, this method verifies the legality of the move and
+        raises exceptions when invalid. When `errors` is `False`, it will return `None` for invalid
+        moves instead of raising exceptions.
+
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :param square: The square where the King is attempting to move.
+        :type square: Square
+        :param color: The color of the King being searched for (0 for white, 1 for black).
+        :type color: int
+        :param capture: Indicates whether the move involves capturing an opponent's piece.
+        :type capture: bool
+        :param file_limit: (Optional) Restricts to find the King in a specific file (e.g., 'a', 'b', etc.).
+        :type file_limit: str or None
+        :param rank_limit: (Optional) Restricts to find the King in a specific rank (e.g., '1', '2', etc.).
+        :type rank_limit: str or None
+        :param errors: If `True`, raises exceptions for invalid moves or ambiguous cases.
+                       If `False`, returns `None` for invalid moves instead.
+        :type errors: bool
+        :return: The King if it matches the given move, or `None` when `errors=False`.
+        :rtype: King or None
+        :raises ChessError.PieceNotFoundError: If no King is found on the board matching the criteria.
+        :raises ChessError.NothingToCaptureError: If opponent's piece exists on the target square.
+        :raises ChessError.CaptureOwnPieceError: If an allied piece exists on the target square.
+        :raises ChessError.PieceOnSquareError: If an invalid move is attempted, such as landing
+                                               on an occupied square.
+        """
         found = []
         delta_is = [1, 1, 0, -1, -1, -1, 0, 1]
         delta_js = [0, 1, 1, 1, 0, -1, -1, -1]
@@ -1217,11 +1703,46 @@ class King(Piece):
 
 
 class Pawn(Piece):
+    """
+    Represents a Pawn chess piece.
+
+    A subclass of the `Piece` class. The Pawn has unique movement and capturing rules:
+    - It moves forward (one square at a time or two squares on its first move).
+    - It captures diagonally.
+    - Special rules include the "en passant" capture and promotion when reaching the opposite end of the board.
+
+    :ivar piecetype: The type of the piece, which is 'P' for Pawn.
+    :type piecetype: str
+    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
+    :type color: int
+    """
     def __init__(self, color):
+        """
+        Initializes a Pawn chess piece.
+
+        The Pawn is set up with its type ('P') and color, which determines its movement direction
+        (white moves upward, black moves downward).
+
+        :param color: The color of the Pawn (0 for white, 1 for black).
+        :type color: int
+        """
         super().__init__('P', color)
 
     def threatens(self, square, board):
+        """
+        Determines the squares that this Pawn can attack.
 
+        A Pawn threatens diagonally forward squares based on its color:
+        - For a white Pawn, this means threatening squares one step forward-left and forward-right.
+        - For a black Pawn, this means threatening squares one step backward-left and backward-right.
+
+        :param square: The square where this Pawn is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: A list of squares that the Pawn can attack or threaten.
+        :rtype: list[Square]
+        """
         moves = []
 
         # the direction the pawn threatens is determined by the player's color
@@ -1242,7 +1763,23 @@ class Pawn(Piece):
         return moves
 
     def can_move(self, square, board):
+        """
+        Checks if this Pawn has any valid moves.
 
+        The Pawn can move forward one square if unblocked, or two squares if it is its first move
+        and both squares are unblocked. Additionally:
+        - It can capture pieces diagonally forward on adjacent squares.
+        - It can also capture a piece via "en passant" if applicable.
+
+        This method also considers if the Pawn is pinned and adjusts its validity checks accordingly.
+
+        :param square: The square where this Pawn is currently located.
+        :type square: Square
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :return: `True` if the Pawn can make at least one valid move, otherwise `False`.
+        :rtype: bool
+        """
         # if the piece is pinned, we need to check if the piece can capture the other piece that is pinning it
         if self.is_pinned(square, board):
 
@@ -1289,7 +1826,42 @@ class Pawn(Piece):
 
     @staticmethod
     def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True, en=False):
+        """
+        Finds a Pawn on the board that matches a given move.
 
+        Pawns have unique behavior compared to other pieces:
+        - If not capturing, they are checked for one or two steps behind the target square, depending on
+          whether the move is a single or double square advance.
+        - If capturing, they are checked on diagonally adjacent squares.
+        - If "en passant" capture is involved, a hit on the diagonally adjacent square will be validated by
+          matching the Pawn that made the two-square move.
+
+        If the `errors` flag is set to `True`, exceptions are raised for invalid moves. Otherwise, invalid
+        moves will return `None` or an empty list.
+
+        :param board: The chessboard containing all pieces and their positions.
+        :type board: Board
+        :param square: The target square where the move is being attempted.
+        :type square: Square
+        :param color: The color of the Pawn being searched for (0 for white, 1 for black).
+        :type color: int
+        :param capture: Indicates whether the move involves capturing an opponent's piece.
+        :type capture: bool
+        :param file_limit: (Optional) Restricts to find Pawns in a specific file (e.g., 'a', 'b', etc.).
+        :type file_limit: str or None
+        :param rank_limit: (Optional) Restricts to find Pawns in a specific rank (e.g., '1', '2', etc.).
+        :type rank_limit: str or None
+        :param errors: If `True`, raises exceptions for invalid moves. If `False`, returns `None` for invalid cases.
+        :type errors: bool
+        :param en: Indicates whether the search includes checking for an "en passant" capture.
+        :type en: bool
+        :return: The Pawn that matches the given move, or a list of possible Pawns, or `None` for invalid moves.
+        :rtype: Pawn or list[Pawn] or None
+        :raises ChessError.PieceNotFoundError: If no Pawn is found on the board matching the criteria.
+        :raises ChessError.NothingToCaptureError: If no opponent's piece is present to capture on the target square.
+        :raises ChessError.CaptureOwnPieceError: If an allied piece is found on the target square.
+        :raises ChessError.MultiplePiecesFoundError: If several Pawns match, making the move ambiguous.
+        """
         x = 1 if color == 0 else -1
 
         if not capture:
@@ -1440,8 +2012,48 @@ class Pawn(Piece):
 
 
 class Square:
-    def __init__(self, i, j, piece=None):
+    """
+    Represents a square on a chessboard.
 
+    A square is one of 64 positions on a chessboard, identifiable by its
+    coordinates `(i, j)` and chess notation (e.g., 'e4', 'a1'). It also
+    stores the square's color and can optionally hold a chess piece.
+
+    :ivar i: The row position (coordinate) of the square on the board,
+        where 0 represents the top row (rank 8) and 7 represents the
+        bottom row (rank 1).
+    :type i: int
+    :ivar j: The column position (coordinate) of the square on the board,
+        where 0 represents the leftmost file ('a') and 7 represents the
+        rightmost file ('h').
+    :type j: int
+    :ivar c_notation: The chess notation string of the square (e.g., 'a8', 'd4').
+        This represents a file ('a' to 'h') combined with a rank ('1' to '8').
+    :type c_notation: str
+    :ivar color: The color of the square, where 0 represents light (white) and
+        1 represents dark (black).
+    :type color: int
+    :ivar piece: The chess piece currently occupying the square, or `None` if
+        the square is empty.
+    :type piece: Optional[Piece]
+    """
+    def __init__(self, i, j, piece=None):
+        """
+        Initializes a square on a chessboard.
+
+        This sets up the essential data for a square, including its position,
+        chess notation, color, and any chess piece located on it.
+
+        :param i: The row position of the square (0-7), where 0 is the top row (rank 8)
+            and 7 is the bottom row (rank 1).
+        :type i: int
+        :param j: The column position of the square (0-7), where 0 is the leftmost
+            file ('a') and 7 is the rightmost file ('h').
+        :type j: int
+        :param piece: The chess piece located on the square, or `None` if the square
+            is empty. Defaults to `None`.
+        :type piece: Optional[Piece]
+        """
         # i and j are the square's coordinates on the board
         # c_notation is the chess notation for the square (in a string form)
         # color will be a binary bool where light is 0 and dark is 1
@@ -1460,7 +2072,18 @@ class Square:
         self.piece = piece
 
     def __eq__(self, other):
+        """
+        Compares two squares for equality.
 
+        Two squares are considered equal if they have the same row (`i`)
+        and column (`j`) coordinates.
+
+        :param other: The other square to compare against.
+        :type other: Square or None
+        :return: `True` if the squares have the same coordinates,
+            otherwise `False`.
+        :rtype: bool
+        """
         if other is None:
             return False
 
@@ -1470,8 +2093,40 @@ class Square:
 
 
 class Board:
-    def __init__(self, board=None, two_moveP=None):
+    """
+    Represents a chessboard and its related operations.
 
+    The `Board` class encapsulates the 8x8 grid of a chessboard and provides methods for a
+    variety of essential chess operations. It handles initializing the board, querying individual
+    squares, moving pieces, undoing moves, detecting special conditions (e.g., check, checkmate,
+    and stalemate), and interacting with pieces on the board.
+
+    :ivar board: An 8x8 grid (list of lists) where each element is a `Square` object that
+        represents a square on the chessboard.
+    :type board: list[list[Square]]
+    :ivar two_moveP: Records the `Square` where a pawn moved two spaces forward during the
+        most recent move, for "en passant" capture handling.
+    :type two_moveP: Square or None
+    :ivar status: Tracks the current game state:
+        - 0: Game is in progress.
+        - 1: Checkmate has occurred, and the game is over.
+        - 2: Stalemate has occurred, and the game is over.
+    :type status: int
+    """
+    def __init__(self, board=None, two_moveP=None):
+        """
+        Initializes the chessboard.
+
+        If no board is provided, a default board is created with all pieces
+        arranged in their standard chess starting positions.
+
+        :param board: Optional pre-constructed 8x8 grid of `Square` objects. If not
+            provided, a new chessboard is constructed in the standard starting layout.
+        :type board: list[list[Square]] or None
+        :param two_moveP: Optional `Square` where a pawn moved two spaces forward
+            in the last move, used for handling "en passant" captures. Default is `None`.
+        :type two_moveP: Square or None
+        """
         if board is None:
 
             # creates board
@@ -1546,10 +2201,26 @@ class Board:
         self.status = 0
 
     def __iter__(self):
+        """
+        Allows iteration over the board's rows.
+
+        Each iteration yields one of the 8 rows (lists of `Square` objects) in the board.
+
+        :return: Iterator over the rows of the board.
+        :rtype: iter
+        """
         return iter(self.board)
 
     def __getitem__(self, pos):
+        """
+        Retrieves a specific `Square` object on the chessboard based on its coordinates.
 
+        :param pos: Tuple `(i, j)` representing the row and column of the square.
+        :type pos: tuple[int, int]
+        :return: The `Square` object located at the specified coordinates, or `None`
+            if the coordinates are out of bounds.
+        :rtype: Square or None
+        """
         i, j = pos
         if (i > 7) or (i < 0) or (j > 7) or (j < 0):
             return None
@@ -1558,6 +2229,16 @@ class Board:
 
     # returns a string that can be printed for a nice looking text-based board
     def __str__(self):
+        """
+        Converts the board into a human-readable string format.
+
+        Each square is represented by its piece symbol (if present) and color
+        (e.g., 'P0' for a white pawn, 'K1' for a black king). Empty squares are
+        represented as `--`.
+
+        :return: A string representation of the chessboard.
+        :rtype: str
+        """
         out = ""
 
         for i in range(0, 8):
@@ -1575,7 +2256,28 @@ class Board:
         return out
 
     def move(self, move, player):
+        """
+        Executes a move on the chessboard.
 
+        Updates the game state (`status`) in the event of checkmate or stalemate.
+
+        Raises an exception if the move is invalid.
+
+        :param move: The move object representing the player's action.
+        :type move: Move
+        :param player: The current player's color (0 for white, 1 for black).
+        :type player: int
+        :return: The executed move object for reference.
+        :rtype: Move
+        :raises ChessError.InvalidMoveError: If the move is invalid.
+        :raises ChessError.PromotionError: If an invalid promotion is attempted or a promotion is required.
+        :raises ChessError.InvalidCastleError: If an invalid castling move is attempted.
+        :raises ChessError.PieceNotFoundError: If no eligible piece is found for the move.
+        :raises ChessError.MultiplePiecesFoundError: If more than one matching piece is found.
+        :raises ChessError.NothingToCaptureError: If no opposing piece exists on the target square.
+        :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
+        :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
+        """
         prev_two_moveP = self.two_moveP
 
         # makes the move object
@@ -1632,7 +2334,21 @@ class Board:
         return m
 
     def undo_move(self, move, player, prev_two_moveP):
+        """
+        Reverses a previously executed move on the chessboard.
 
+        Essentially restores the board's state to what it was before a move,
+        including restoring captured pieces and undoing special moves
+        (e.g., castling and "en passant").
+
+        :param move: The move object to undo.
+        :type move: Move
+        :param player: The player's color (0 for white, 1 for black).
+        :type player: int
+        :param prev_two_moveP: The `Square` that stored the two-move pawn state
+            prior to the move. Used to restore the en passant state.
+        :type prev_two_moveP: Square or None
+        """
         # changes self.two_moveP back to what it was before
         self.two_moveP = prev_two_moveP
 
@@ -1655,7 +2371,17 @@ class Board:
 
     # returns the first square found containing the king of the specified color
     def find_king(self, color):
+        """
+        Finds the `Square` containing the King of the specified color.
 
+        Searches the board to locate the King for a given player.
+
+        :param color: The color of the King to locate (0 for white, 1 for black).
+        :type color: int
+        :return: The `Square` where the King is located, or `None` if the King
+            could not be found.
+        :rtype: Square or None
+        """
         for x in range(8):
 
             # if color is white, search from bottom up
@@ -1676,7 +2402,18 @@ class Board:
 
     # returns a list of squares that have pieces that are threatening the given square for the given player
     def threats_on(self, square, player):
+        """
+        Determines all opposing pieces currently threatening a given square.
 
+        A piece is considered "threatening" if it can legally capture the square (does not account for pinning).
+
+        :param square: The target square to analyze.
+        :type square: Square
+        :param player: The player being threatened (0 for white, 1 for black).
+        :type player: int
+        :return: A list of squares that contain pieces threatening the specified square.
+        :rtype: list[Square]
+        """
         threats = []
 
         pawns = Pawn.find(self, square, 1 - player, True, errors=False)
@@ -1720,7 +2457,16 @@ class Board:
     # returns true if given player is in check
     # returns false otherwise
     def check_for_check(self, player):
+        """
+        Determines if the player's King is currently in check.
 
+        A King is in check if one or more opposing pieces are threatening its square.
+
+        :param player: The player to check (0 for white, 1 for black).
+        :type player: int
+        :return: `True` if the player's King is in check, otherwise `False`.
+        :rtype: bool
+        """
         king_square = self.find_king(player)
         if king_square is None:
             return False
@@ -1738,7 +2484,17 @@ class Board:
     # returns true if the given player is in checkmate
     # returns false otherwise
     def check_for_mate(self, player):
+        """
+        Determines if the player is in checkmate.
 
+        A player is in checkmate if the King is in check and no legal moves can
+        remove it from check.
+
+        :param player: The player to check for checkmate (0 for white, 1 for black).
+        :type player: int
+        :return: `True` if the player's King is in checkmate, otherwise `False`.
+        :rtype: bool
+        """
         if not self.check_for_check(player):
             return False
 
@@ -1860,7 +2616,16 @@ class Board:
     # returns true if the given player is in stalemate (can't move any of their pieces)
     # returns false otherwise
     def check_for_stalemate(self, player):
+        """
+        Determines if the player is in stalemate.
 
+        A player is in stalemate if they are not in check and have no legal moves remaining.
+
+        :param player: The player to check for stalemate (0 for white, 1 for black).
+        :type player: int
+        :return: `True` if the player is in stalemate, otherwise `False`.
+        :rtype: bool
+        """
         for rank in self:
             for square in rank:
                 if square.piece is not None and square.piece.color == player and square.piece.can_move(square, self):
@@ -1870,8 +2635,15 @@ class Board:
 
     @staticmethod
     def get_coords(c_notation):
+        """
+        Converts chess notation (e.g., 'e4') into board coordinates `(i, j)`.
 
-        # changes file to to j coord
+        :param c_notation: The chess notation string.
+        :type c_notation: str
+        :return: A tuple `(i, j)` where `i` is the row and `j` is the column.
+        :rtype: tuple[int, int]
+        """
+        # changes file to j coord
         y = 0
         for i in range(8):
             if ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i] == c_notation[0]:
@@ -1885,7 +2657,16 @@ class Board:
 
     @staticmethod
     def get_c_notation(i, j):
+        """
+        Converts board coordinates `(i, j)` into chess notation (e.g., 'e4').
 
+        :param i: The row coordinate on the board.
+        :type i: int
+        :param j: The column coordinate on the board.
+        :type j: int
+        :return: The chess notation string.
+        :rtype: str
+        """
         # converts from coords to chess notation
         return ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j] + str(8 - i)
 
@@ -1893,7 +2674,28 @@ class Board:
     # the opposite of Board.disassemble_board
     @staticmethod
     def assemble_board(boardstring, moved):
+        """
+        Converts a board string representation back into a 2D array of `Square` objects.
 
+        Used for reconstructing a board's state from its serialized form.
+
+        `moved` is a 6 character string of zeros and ones that indicates which Rook or Kings have moved.
+        0 means unmoved, 1 means moved.
+        - The first character indicates whether the white Rook starting on A1 has moved
+        - The second character indicates whether the white King has moved
+        - The third character indicates whether the white Rook starting on H1 has moved
+        - The fourth character indicates whether the black Rook starting on A8 has moved
+        - The fifth character indicates whether the black King has moved
+        - The sixth character indicates whether the black Rook starting on H8 has moved
+
+        :param boardstring: Serialized string representation of the board.
+        :type boardstring: str
+        :param moved: String indicating whether certain pieces (e.g., Rooks, Kings)
+            have moved, for rules like castling.
+        :type moved: str
+        :return: A reconstructed board as a 2D list of `Square` objects.
+        :rtype: list[list[Square]]
+        """
         # splits the string into a 2D array of strings
         boardstringarray = boardstring.split(";")
         for i in range(len(boardstringarray)):
@@ -1944,7 +2746,30 @@ class Board:
     # the opposite of Board.assemble_board
     @staticmethod
     def disassemble_board(board):
+        """
+        Serializes the board into a string representation.
 
+        Used to store the board's state compactly in string form.
+
+        Returns two strings:
+        - The first string is the serialized board state
+        - The second string is a string of zeros and ones that indicates which Rook or Kings have moved
+
+        The `moved` string is a 6 character string of zeros and ones that indicates which Rook or Kings have moved.
+        0 means unmoved, 1 means moved.
+        - The first character indicates whether the white Rook starting on A1 has moved
+        - The second character indicates whether the white King has moved
+        - The third character indicates whether the white Rook starting on H1 has moved
+        - The fourth character indicates whether the black Rook starting on A8 has moved
+        - The fifth character indicates whether the black King has moved
+        - The sixth character indicates whether the black Rook starting on H8 has moved
+
+        :param board: The board in array form (8x8 list of `Square` objects).
+        :type board: list[list[Square]]
+        :return: A tuple containing the serialized board string and a string
+            indicating move states for certain pieces.
+        :rtype: tuple[str, str]
+        """
         boardstring = ""
         moved = ['0', '0', '0', '0', '0', '0']
         for rank in board:
@@ -1977,7 +2802,49 @@ class Board:
 
 
 class Move:
+    """
+    Represents a move in a chess game.
+
+    The `Move` class handles all aspects of parsing, validating, and storing information about a particular chess move.
+    It provides support for special moves like castles, promotions, and en passant, while accounting for chess rules.
+
+    :ivar piece: The piece being moved during this move.
+    :type piece: Piece or None
+    :ivar prev: The `Square` from which the piece is moved.
+    :type prev: Square or None
+    :ivar to: The `Square` to which the piece is moved.
+    :type to: Square or None
+    :ivar castle: Indicates the type of castling performed ('K' for king-side, 'Q' for queen-side,
+        or `None` if this is not a castling move).
+    :type castle: str or None
+    :ivar promotion: Indicates the piece type that a pawn is being promoted to, if applicable. Possible values
+        are 'R', 'N', 'B', 'Q', or `None` if the move is not a promotion.
+    :type promotion: str or None
+    :ivar en: Indicates whether this move is an en passant capture.
+    :type en: bool
+    """
     def __init__(self, move, player, board):
+        """
+        Initializes a move object based on the input move command, player, and the board.
+
+        This method processes standard notation for chess moves, determines the piece being moved, its starting
+        and destination squares, as well as any special characteristics of the move (e.g., castling, promotion,
+        or en passant).
+
+        :param move: The move command in standard chess notation, e.g., 'e4', 'Nf3', '0-0', or 'axb8Q'.
+        :type move: str
+        :param player: The player making the move (0 for white, 1 for black).
+        :type player: int
+        :param board: The board on which the move is executed.
+        :type board: Board
+        :raises ChessError.PromotionError: If an invalid promotion is attempted or a promotion is required.
+        :raises ChessError.InvalidCastleError: If an invalid castling move is attempted.
+        :raises ChessError.PieceNotFoundError: If no eligible piece is found for the move.
+        :raises ChessError.MultiplePiecesFoundError: If more than one matching piece is found.
+        :raises ChessError.NothingToCaptureError: If no opposing piece exists on the target square.
+        :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
+        :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
+        """
         piece = None
         prev = None
         to = None
@@ -2117,7 +2984,28 @@ class Move:
 
     @staticmethod
     def is_valid_c_notation(movename):
+        """
+        Validates whether the given chess move adheres to algebraic notation.
+        See https://en.wikipedia.org/wiki/Algebraic_notation_(chess) for more information on algebraic notation.
 
+        This method checks whether the `movename` string corresponds to a valid chess move in accordance
+        with standard chess rules (e.g., proper format for regular moves, promotions, castling, and captures).
+
+        This method does NOT check if the move is legal or not, but rather if the move syntax is correct.
+
+        :param movename: The move name to validate (e.g., 'e2e4', 'Nf3', '0-0').
+        :type movename: str
+        :return: `True` if the move is valid, otherwise `False`.
+        :rtype: bool
+
+        **Rules for a valid move string**:
+        - Must be at least two characters in length. (a pawn move)
+        - Can end with '+' (check) or '#' (checkmate) symbols, but this is never required.
+        - Castling must be in the format '0-0' (king-side) or '0-0-0' (queen-side).
+        - Must contain valid chess piece designations ('R', 'N', 'B', 'Q', 'K', or 'P'), if specified.
+        - Must use valid ranks ('1' to '8') and files ('a' to 'h').
+        - Captures are marked with 'x', e.g., 'Nxe5'.
+        """
         # any valid move must be at least 2 in length
         if len(movename) < 2:
             return False
