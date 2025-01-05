@@ -2,7 +2,7 @@
 
 | Version | Release Date | Changes/Notes                      | Author        | Status     |
 |---------|--------------|------------------------------------|---------------|------------|
-| 0.1.0   | 2024-12-18   | Initial release.                   | Gabe Becker   | Released   |
+| 0.1.0   | 2024-12-18   | Initial pre-release                | Gabe Becker   | Released   |
 | 0.2.0   | 2024-12-21   | bug fixes and refactoring          | Gabe Becker   | Released   |
 | 0.3.1   | 2024-12-21   | Initial release to pypi; bug fixes | Gabe Becker   | Released   |
 | 0.3.2   | 2024-12-23   | bug fixes                          | Gabe Becker   | Released   |
