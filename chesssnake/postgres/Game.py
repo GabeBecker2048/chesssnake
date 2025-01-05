@@ -1,6 +1,5 @@
-import importlib.resources
 
-from .Sql_Utils import execute_sql
+from .Sql_Utils import execute_sql, sql_db_init
 from . import GameError
 from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
@@ -9,12 +8,36 @@ from ..chesslib import Chess
 class Game(BaseGame):
     # this loads game data from the database into the game object
     # if the game does not exist in the database, a new one is created
-    def __init__(self, white_id: int=0, black_id: int=1, group_id: int=0, white_name: str='', black_name: str='', sql: bool=False, auto_sql: bool=False):
+    def __init__(self,
+                 white_id: int=0,
+                 black_id: int=1,
+                 group_id: int=0,
+                 white_name: str='',
+                 black_name: str='',
+                 sql: bool=False,
+                 auto_sql: bool=False,
+                 db_conn_str: str|None=None,
+                 db_name: str|None=None,
+                 db_user: str|None=None,
+                 db_password: str|None=None,
+                 db_host: str|None=None,
+                 db_port: str|None=None):
 
         super().__init__(white_id, black_id, group_id, white_name, black_name)
 
         self.sql = sql
         self.auto_sql = auto_sql
+
+        # If a conn_str is given programmatically, we use that
+        # Otherwise we attempt to load the database creds from environment variables
+        self.sql_creds = {
+            "conn_str": db_conn_str,
+            "name": db_name,
+            "user": db_user,
+            "password": db_password,
+            "host": db_host,
+            "port": db_port,
+        }
 
         # if sql=True, then we check the database to see if a game exists
         ## if it exists, we load the sql data into memory
@@ -47,7 +70,7 @@ class Game(BaseGame):
             execute_sql(f"""
                 UPDATE Games SET Board = '{boardstr}', Turn = '{self.turn}', PawnMove = {pawnmove}, Moved = '{moved}', Draw = {draw}
                 WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
-            """)
+            """, prog_sql_creds=self.sql_creds)
 
         return img
 
@@ -61,7 +84,7 @@ class Game(BaseGame):
             execute_sql(f"""
                 UPDATE Games SET Draw = '{self.draw}'
                 WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
-            """)
+            """, prog_sql_creds=self.sql_creds)
 
     # checks if a draw exists and accepts if offered
     # "player_id" refers to the player offering the draw
@@ -81,7 +104,7 @@ class Game(BaseGame):
             execute_sql(f"""
                 UPDATE Games SET Draw = NULL
                 WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
-            """)
+            """, prog_sql_creds=self.sql_creds)
 
     # checks if the game is over and deletes the game from the database accordingly
     def end_check(self):
@@ -105,25 +128,18 @@ class Game(BaseGame):
             WName = '{self.wname}', 
             BName = '{self.bname}'
             WHERE GroupId={self.gid} AND WhiteId={self.wid} AND BlackId={self.bid} 
-            """)
+            """, prog_sql_creds=self.sql_creds)
             return True
         else:
             return False
 
-    @staticmethod
-    def sql_db_init():
-        db_init_fp = str(importlib.resources.files('chesssnake').joinpath('data/init.sql'))
-
-        with open(db_init_fp, 'r') as db_init_file:
-            db_init = db_init_file.read()
-
-        execute_sql(db_init)
+    def db_init(self):
+        sql_db_init(prog_sql_creds=self.sql_creds)
 
     # checks the sql data if a game exists
     #   if it does, get the game data from the database
     #   if it doesn't, create the game and return the new game data
-    @staticmethod
-    def sql_game_init(white_id, black_id, group_id=0, white_name='', black_name=''):
+    def sql_game_init(self, white_id, black_id, group_id=0, white_name='', black_name=''):
         game = execute_sql(f"""
             DO $$
             BEGIN
@@ -136,7 +152,7 @@ class Game(BaseGame):
             END $$;
 
             SELECT * FROM Games WHERE GroupId={group_id} AND WhiteId={white_id} AND BlackId={black_id};
-        """)[0]
+        """, prog_sql_creds=self.sql_creds)[0]
 
         boardarray = Chess.Board.assemble_board(game[3], game[7])
         turn = int(game[4])
@@ -145,8 +161,8 @@ class Game(BaseGame):
 
         return boardarray, turn, draw, two_move_p
 
-    @staticmethod
-    def sql_current_games(player_id, gid=0):
+
+    def sql_current_games(self, player_id, gid=0):
 
         games = execute_sql(f"""
             WITH PlayerResult AS (
@@ -162,14 +178,13 @@ class Game(BaseGame):
             SELECT Result
             FROM PlayerResult
             WHERE Result IS NOT NULL;
-        """)
+        """, prog_sql_creds=self.sql_creds)
         games = [g[0] for g in games]
         return games
 
     # if the game exists, returns the white player's id and black player's id in that order
     # returns False if the game is not found in the database
-    @staticmethod
-    def sql_game_exists(player1, player2, gid=0):
+    def sql_game_exists(self, player1, player2, gid=0):
 
         games = execute_sql(f"""
             SELECT WhiteId, BlackId FROM Games 
@@ -177,7 +192,7 @@ class Game(BaseGame):
                 (WhiteId = {player1} AND BlackID = {player2}) OR 
                 (WhiteId = {player2} AND BlackID = {player1})
             )
-        """)
+        """, prog_sql_creds=self.sql_creds)
 
         if games:
             return games[0]
@@ -185,9 +200,9 @@ class Game(BaseGame):
         return False
 
     # removes a game from the database
-    @staticmethod
-    def sql_delete_game(wid, bid, gid=0):
-        execute_sql(f"DELETE FROM games WHERE GroupId = {gid} and WhiteId = {wid} and BlackId = {bid}")
+    def sql_delete_game(self, wid, bid, gid=0):
+        execute_sql(f"DELETE FROM games WHERE GroupId = {gid} and WhiteId = {wid} and BlackId = {bid}",
+                    prog_sql_creds=self.sql_creds)
 
 
 # the SQL wrapper function for the Challenges table

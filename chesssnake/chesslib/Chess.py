@@ -2764,8 +2764,8 @@ class Board:
         - The fifth character indicates whether the black King has moved
         - The sixth character indicates whether the black Rook starting on H8 has moved
 
-        :param board: The board in array form (8x8 list of `Square` objects).
-        :type board: list[list[Square]]
+        :param board: The board object that we are disassembling
+        :type board: Board
         :return: A tuple containing the serialized board string and a string
             indicating move states for certain pieces.
         :rtype: tuple[str, str]
