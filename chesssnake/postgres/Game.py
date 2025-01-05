@@ -1,8 +1,40 @@
 
-from .Sql_Utils import execute_sql, sql_db_init
+from .Sql_Utils import execute_sql, create_database_if_not_exists, initialize_connection_pool, sql_db_init
 from . import GameError
 from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
+
+
+def db_init(sql_creds=None, create_database=False):
+    """
+    Initializes the database environment by optionally creating the database, setting
+    up a connection pool, and initializing the database schema. This function provides
+    a streamlined way to prepare the database infrastructure for an application, ensuring
+    all essential components are properly configured.
+
+    :param sql_creds: Database credentials used to establish a connection.
+    :type sql_creds: dict, optional
+    :param create_database: Flag to indicate whether to create the database if it
+        does not exist. Requires appropriate permissions.
+    :type create_database: bool
+    :return: None
+    :raises GameError: If any errors occur during the database initialization steps.
+    """
+    try:
+        # create the database if it doesn't exist (require proper permissions)
+        if create_database:
+            create_database_if_not_exists(sql_creds=sql_creds)
+
+        # Initialize the connection pool with provided or environment credentials
+        initialize_connection_pool(sql_creds=sql_creds)
+
+        # Initialize database schema using the init.sql file
+        sql_db_init()
+
+        print("Database initialized successfully.")
+    except Exception as e:
+        print(f"Error while initializing the database: {e}")
+        raise GameError.GameError(f"Database initialization error: {str(e)}")
 
 
 class Game(BaseGame):
@@ -26,18 +58,6 @@ class Game(BaseGame):
     :type sql: bool
     :param auto_sql: Whether to automatically update the database after every state change. Default is False.
     :type auto_sql: bool
-    :param db_conn_str: Database connection string. Default is None.
-    :type db_conn_str: str or None
-    :param db_name: Database name. Default is None.
-    :type db_name: str or None
-    :param db_user: Database username. Default is None.
-    :type db_user: str or None
-    :param db_password: Database password. Default is None.
-    :type db_password: str or None
-    :param db_host: Database host address. Default is None.
-    :type db_host: str or None
-    :param db_port: Database port number. Default is None.
-    :type db_port: str or None
     """
 
     # this loads game data from the database into the game object
@@ -49,13 +69,7 @@ class Game(BaseGame):
                  white_name: str='',
                  black_name: str='',
                  sql: bool=False,
-                 auto_sql: bool=False,
-                 db_conn_str: str|None=None,
-                 db_name: str|None=None,
-                 db_user: str|None=None,
-                 db_password: str|None=None,
-                 db_host: str|None=None,
-                 db_port: str|None=None):
+                 auto_sql: bool=False):
         """
         Initializes a new chess game and synchronizes with the SQL database if required.
 
@@ -76,49 +90,20 @@ class Game(BaseGame):
         :type sql: bool
         :param auto_sql: Whether to automatically update the database after every state change. Default is False.
         :type auto_sql: bool
-        :param db_conn_str: Database connection string. Default is None.
-        :type db_conn_str: str or None
-        :param db_name: Database name. Default is None.
-        :type db_name: str or None
-        :param db_user: Database username. Default is None.
-        :type db_user: str or None
-        :param db_password: Database password. Default is None.
-        :type db_password: str or None
-        :param db_host: Database host address. Default is None.
-        :type db_host: str or None
-        :param db_port: Database port number. Default is None.
-        :type db_port: str or None
         """
 
         super().__init__(white_id, black_id, group_id, white_name, black_name)
-
         self.sql = sql
         self.auto_sql = auto_sql
-
-        # If a conn_str is given programmatically, we use that
-        # Otherwise we attempt to load the database creds from environment variables
-        self.sql_creds = {
-            "conn_str": db_conn_str,
-            "name": db_name,
-            "user": db_user,
-            "password": db_password,
-            "host": db_host,
-            "port": db_port,
-        }
 
         # if sql=True, then we check the database to see if a game exists
         ## if it exists, we load the sql data into memory
         ## if it doesn't, we create a blank game in the DB and load a new game into memory
         # if sql=False, we create a new game in memory only
         if sql or auto_sql:
-            boardarray, turn, draw, two_move_p = self.sql_game_init(white_id, black_id, group_id, white_name, black_name)
-            self.board = Chess.Board(
-                board=boardarray,
-                two_moveP=two_move_p
-            )
-
-            self.turn = turn
-            self.draw = draw
+            # Initialize or load game data
+            game_data = self.sql_game_init(white_id, black_id, group_id, white_name, black_name)
+            self.board, self.turn, self.draw, self.board.two_moveP = game_data
 
     # makes a given move, assuming it is the correct player's turn
     # if img=True, return a PIL.Image object. Otherwise, return None
@@ -154,15 +139,7 @@ class Game(BaseGame):
 
         # handle SQL updating
         if self.auto_sql:
-            boardstr, moved = Chess.Board.disassemble_board(self.board)
-            pawnmove = "NULL" if self.board.two_moveP is None else f"'{self.board.two_moveP.c_notation}'"
-            draw = "NULL" if (self.draw is not None and self.turn != self.draw) or self.draw is None else f"'{self.draw}'"
-
-            execute_sql(f"""
-                UPDATE Games SET Board = '{boardstr}', Turn = '{self.turn}', PawnMove = {pawnmove}, Moved = '{moved}', Draw = {draw}
-                WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
-            """, prog_sql_creds=self.sql_creds)
-
+            self.update_db()
         return img
 
     # offers a draw
@@ -179,14 +156,9 @@ class Game(BaseGame):
         :raises ChessError.DrawAlreadyOfferedError: If the same player has already made a draw offer.
         :raises ChessError.DrawWrongTurnError: If the player offers a draw out of turn.
         """
-
         super().draw_offer(player_id)
-
         if self.auto_sql:
-            execute_sql(f"""
-                UPDATE Games SET Draw = '{self.draw}'
-                WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
-            """, prog_sql_creds=self.sql_creds)
+            self.update_draw_status()
 
     # checks if a draw exists and accepts if offered
     # "player_id" refers to the player offering the draw
@@ -201,7 +173,6 @@ class Game(BaseGame):
         :raises ChessError.DrawNotOfferedError: If no draw offer exists.
         """
         super().draw_accept(player_id)
-
         self.end_check()
 
     # checks if a draw exists and declines if offered
@@ -217,24 +188,20 @@ class Game(BaseGame):
         :raises ChessError.DrawNotOfferedError: If there is no draw request to decline.
         """
         super().draw_decline(player_id)
-
         if self.auto_sql:
-            execute_sql(f"""
-                UPDATE Games SET Draw = NULL
-                WHERE GroupId = {self.gid} and WhiteId = {self.wid} and BlackId = {self.bid}
-            """, prog_sql_creds=self.sql_creds)
+            self.clear_draw_status()
 
     # checks if the game is over and deletes the game from the database accordingly
     def end_check(self):
         """
-        Checks if the game is over, either by draw or checkmate, and removes it from the SQL database if finished.
+        Checks if the game is over, either by draw or checkmate.
+        If `auto_sql=True`, removes it from the SQL database if finished.
 
         :return: True if the game is over, False otherwise.
         :rtype: bool
         """
-        if self.board.status != 0:
-            if self.auto_sql:
-                self.sql_delete_game(self.gid, self.wid, self.bid)
+        if self.board.status != 0 and self.auto_sql:
+            self.sql_delete_game(self.gid, self.wid, self.bid)
             return True
         return False
 
@@ -249,36 +216,61 @@ class Game(BaseGame):
         :return: True if the update was successful, False if SQL support is not enabled.
         :rtype: bool
         """
-        if self.sql or self.auto_sql:
-            execute_sql(f"""
-            UPDATE Games SET
-            Board = '{self.board.disassemble_board(self.board)[0]}', 
-            Turn = '{self.turn}', 
-            Pawnmove = {f"'{self.board.two_moveP.c_notation}'" if self.board.two_moveP else "NULL"}, 
-            Draw = {f"'{self.draw}'" if self.draw else "NULL"}, 
-            Moved = '{self.board.disassemble_board(self.board)[1]}', 
-            WName = '{self.wname}', 
-            BName = '{self.bname}'
-            WHERE GroupId={self.gid} AND WhiteId={self.wid} AND BlackId={self.bid} 
-            """, prog_sql_creds=self.sql_creds)
-            return True
-        else:
-            return False
-
-    def db_init(self):
+        query = """
+            UPDATE Games
+            SET Board = %(board)s,
+                Turn = %(turn)s,
+                PawnMove = %(pawnmove)s,
+                Draw = %(draw)s,
+                Moved = %(moved)s,
+                WName = %(wname)s,
+                BName = %(bname)s
+            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
         """
-        Initializes the database for game storage and interaction.
+        disassembled_board = self.board.disassemble_board(self.board)
+        params = {
+            "board": disassembled_board[0],
+            "turn": self.turn,
+            "pawnmove": self.board.two_moveP.c_notation if self.board.two_moveP else None,
+            "draw": self.draw,
+            "moved": disassembled_board[1],
+            "wname": self.wname,
+            "bname": self.bname,
+            "group_id": self.gid,
+            "white_id": self.wid,
+            "black_id": self.bid,
+        }
+        execute_sql(query, params=params)
 
-        This method sets up the connection to the database using the credentials provided through
-        environment variables or during the instantiation of the `Game` object.
-        Typically used to ensure the database schema is initialized or available for interaction.
+    def update_draw_status(self):
         """
-        sql_db_init(prog_sql_creds=self.sql_creds)
+        Updates the draw status in the database.
+        """
+        query = """
+            UPDATE Games
+            SET Draw = %(draw)s
+            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
+        """
+        params = {"draw": self.draw, "group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
+        execute_sql(query, params=params)
+
+    def clear_draw_status(self):
+        """
+        Clears the draw status in the database.
+        """
+        query = """
+            UPDATE Games
+            SET Draw = NULL
+            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
+        """
+        params = {"group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
+        execute_sql(query, params=params)
 
     # checks the sql data if a game exists
     #   if it does, get the game data from the database
     #   if it doesn't, create the game and return the new game data
-    def sql_game_init(self, white_id, black_id, group_id=0, white_name='', black_name=''):
+    @staticmethod
+    def sql_game_init(white_id, black_id, group_id=0, white_name='', black_name=''):
         """
         Initializes or loads a game from the SQL database.
 
@@ -288,26 +280,34 @@ class Game(BaseGame):
         :return: Tuple containing game data: board state, turn, draw status, pawn state.
         :rtype: tuple
         """
-        game = execute_sql(f"""
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM Games WHERE GroupId={group_id} AND WhiteId={white_id} AND BlackId={black_id}) THEN
-                    INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, Pawnmove, Draw, Moved, WName, BName)
-                    VALUES ({group_id}, {white_id}, {black_id},
-                    'R1 N1 B1 Q1 K1 B1 N1 R1;P1 P1 P1 P1 P1 P1 P1 P1;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;P0 P0 P0 P0 P0 P0 P0 P0;R0 N0 B0 Q0 K0 B0 N0 R0',
-                    '0', NULL, NULL, '000000', '{white_name}', '{black_name}');
-                END IF;
-            END $$;
+        query = """
+            INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, PawnMove, Draw, Moved, WName, BName)
+            VALUES (%(group_id)s, %(white_id)s, %(black_id)s, %(board)s, %(turn)s, %(pawnmove)s, %(draw)s, %(moved)s, %(wname)s, %(bname)s)
+            ON CONFLICT (GroupId, WhiteId, BlackId) DO NOTHING;
 
-            SELECT * FROM Games WHERE GroupId={group_id} AND WhiteId={white_id} AND BlackId={black_id};
-        """, prog_sql_creds=self.sql_creds)[0]
+            SELECT * FROM Games WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
+        """
+        params = {
+            "group_id": group_id,
+            "white_id": white_id,
+            "black_id": black_id,
+            "board": "R1 N1 B1 Q1 K1 B1 N1 R1;P1 P1 P1 P1 P1 P1 P1 P1;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;"
+                     "-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;P0 P0 P0 P0 P0 P0 P0 P0;R0 N0 B0 Q0 K0 B0 N0 R0",
+            "turn": 0,
+            "pawnmove": None,
+            "draw": None,
+            "moved": "000000",
+            "wname": white_name,
+            "bname": black_name
+        }
+        game = execute_sql(query, params=params)[0]
+        board = Chess.Board.assemble_board(game["board"], game["moved"])
+        turn = int(game["turn"])
+        draw = int(game["draw"]) if game["draw"] is not None else None
+        two_move_p = (Chess.Square(game["pawnmove"][0], game["pawnmove"][1])
+                      if game["pawnmove"] is not None else None)
 
-        boardarray = Chess.Board.assemble_board(game[3], game[7])
-        turn = int(game[4])
-        draw = int(game[6]) if game[6] else None
-        two_move_p = Chess.Square(Chess.Board.get_coords(game[5])[0], Chess.Board.get_coords(game[5])[1]) if game[5] else None
-
-        return boardarray, turn, draw, two_move_p
+        return board, turn, draw, two_move_p
 
 
     def sql_current_games(self, player_id: int, gid: int = 0):
@@ -378,11 +378,15 @@ class Game(BaseGame):
         :type white_id: int
         :param black_id: The ID of the black player.
         :type black_id: int
-        :param gid: The ID of the group.
+        :param gid: The ID of the group. (default is 0)
         :type gid: int
         """
-        execute_sql(f"DELETE FROM games WHERE GroupId = {gid} and WhiteId = {wid} and BlackId = {bid}",
-                    prog_sql_creds=self.sql_creds)
+        query = """
+            DELETE FROM Games
+            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
+        """
+        params = {"group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
+        execute_sql(query, params=params)
 
 
 # the SQL wrapper function for the Challenges table

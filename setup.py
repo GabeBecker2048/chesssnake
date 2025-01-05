@@ -14,7 +14,7 @@ with open('README.md') as f:
 
 setup(
     name="chesssnake",
-    version="0.5.1",
+    version="0.5.3",
     url="https://github.com/GabeBecker2048/chesssnake",
     description="A Python library for playing, visualizing, and storing chess games.",
     author="Gabe Becker",
