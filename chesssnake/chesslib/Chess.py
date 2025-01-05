@@ -1830,14 +1830,15 @@ class Pawn(Piece):
         Finds a Pawn on the board that matches a given move.
 
         Pawns have unique behavior compared to other pieces:
+
         - If not capturing, they are checked for one or two steps behind the target square, depending on
           whether the move is a single or double square advance.
         - If capturing, they are checked on diagonally adjacent squares.
         - If "en passant" capture is involved, a hit on the diagonally adjacent square will be validated by
           matching the Pawn that made the two-square move.
 
-        If the `errors` flag is set to `True`, exceptions are raised for invalid moves. Otherwise, invalid
-        moves will return `None` or an empty list.
+        If the `errors` flag is set to `True`, exceptions are raised for invalid moves.
+        Otherwise, invalid moves will return `None` or an empty list.
 
         :param board: The chessboard containing all pieces and their positions.
         :type board: Board

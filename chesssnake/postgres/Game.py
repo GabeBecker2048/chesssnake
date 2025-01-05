@@ -198,7 +198,7 @@ class Game(BaseGame):
 
         :param player_id: The player accepting the draw offer.
         :type player_id: int
-        :raises GameError.DrawNotOfferedError: If no draw offer exists.
+        :raises ChessError.DrawNotOfferedError: If no draw offer exists.
         """
         super().draw_accept(player_id)
 
