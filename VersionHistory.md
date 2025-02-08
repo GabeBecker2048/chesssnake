@@ -13,7 +13,7 @@ _Note: Some minor versions are missing. These "missing" updates were deemed too 
 | 0.4.0   | 2025-01-05   | chesslib documentation             | Gabe Becker   | Released |
 | 0.5.0   | 2025-01-05   | Major postgres changes             | Gabe Becker   | Released |
 | 0.5.1   | 2025-01-05   | postgres.Game documentation        | Gabe Becker   | Released |
-| 0.6.2   | 2025-02-08   | SQL_Utils and schema overhall      | Gabe Becker   | Latest   |
+| 0.6.0   | 2025-02-08   | SQL_Utils and schema overhall      | Gabe Becker   | Latest   |
 
 # Planned Releases
 
