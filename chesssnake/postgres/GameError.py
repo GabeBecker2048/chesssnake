@@ -2,18 +2,22 @@ class GameError(BaseException):
     def __init__(self, msg):
         super().__init__(msg)
 
-class SQLIdError(GameError):
+class SQLError(GameError):
+    def __init__(self, msg):
+        super().__init__(msg)
+
+class SQLIdError(SQLError):
     def __init__(self, white_id, black_id, group_id):
         msg = "\n".join([
             "One of the following ids is invalid for a PostgreSQL database:",
-            f"  {white_id}",
-            f"  {black_id}",
-            f"  {group_id}",
+            f"  white id: {white_id}",
+            f"  black id: {black_id}",
+            f"  group id: {group_id}",
             "IDs must be BIGINT NOT NULL."
         ])
         super().__init__(msg)
 
-class SQLAuthError(GameError):
+class SQLAuthError(SQLError):
     def __init__(self):
         msg = "\n".join([
             "The SQL database credentials are invalid.",
@@ -29,7 +33,6 @@ class SQLAuthError(GameError):
             "Option 4, set the database connection credentials when declaring a Game object. For example:",
             "  creds = {'name':'name', 'user':'user', 'pass':'password'}",
             "  db_init(sql_creds=creds)",
-            "  It is also recommended that you also set host and port"
         ])
         super().__init__(msg)
 
