@@ -1,3 +1,6 @@
+![image info](logo/chesssnake_logo_250.png)
+
+
 # Chesssnake
 
 *chesssnake* is a feature-packed Python library for playing, visualizing, and storing chess games
