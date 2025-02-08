@@ -1,4 +1,4 @@
-![image info](logo/chesssnake_logo_250.png)
+![](https://github.com/GabeBecker2048/chesssnake/blob/main/logo/chesssnake_logo_250.png)
 
 
 # Chesssnake
