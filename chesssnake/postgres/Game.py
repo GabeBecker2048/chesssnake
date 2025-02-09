@@ -1,5 +1,4 @@
-
-from .Sql_Utils import execute_sql, create_database_if_not_exists, initialize_connection_pool, sql_db_init
+from .PSql_Utils import execute_psql, psql_db_init, initialize_connection_pool
 from . import GameError
 from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
@@ -12,6 +11,14 @@ def db_init(sql_creds=None, create_database=False):
     a streamlined way to prepare the database infrastructure for an application, ensuring
     all essential components are properly configured.
 
+    If `create_database` is True, it attempts to create the database if it does not exist.
+    Recommended only for first time setup. Requires appropriate permissions to create the database.
+
+    If `sql_creds` is not provided, it attempts to read the database credentials from the
+    following environment variables: `CHESSDB_CONN_STR`, or
+    `CHESSDB_NAME`, `CHESSDB_USER`, `CHESSDB_PASS`, `CHESSDB_HOST`, and `CHESSDB_PORT`.
+    see the chesssnake.postgres "Getting Started" for more details.
+
     :param sql_creds: Database credentials used to establish a connection.
     :type sql_creds: dict, optional
     :param create_database: Flag to indicate whether to create the database if it
@@ -23,25 +30,21 @@ def db_init(sql_creds=None, create_database=False):
     try:
         # create the database if it doesn't exist (require proper permissions)
         if create_database:
-            create_database_if_not_exists(sql_creds=sql_creds)
+            psql_db_init(sql_creds=sql_creds)
 
         # Initialize the connection pool with provided or environment credentials
         initialize_connection_pool(sql_creds=sql_creds)
 
-        # Initialize database schema using the init.sql file
-        sql_db_init()
-
         print("Database initialized successfully.")
     except Exception as e:
-        print(f"Error while initializing the database: {e}")
-        raise GameError.GameError(f"Database initialization error: {str(e)}")
+        raise GameError.GameError(f"Database initialization error:\n{str(e)}")
 
 
 class Game(BaseGame):
     """
     Extends the functionality of the `Game` class from `chesssnake.chesslib` to include SQL database support.
 
-    The `Game` class manages chess gameplay logic while adding functionality for game persistence and interaction with an SQL database.
+    The `Game` class manages chess gameplay logic while adding functionality for game persistence and interaction with an PostgreSQL database.
     Games can be loaded, saved, and automatically updated in the database.
 
     :param white_id: ID of the player playing as white. Default is 0.
@@ -60,8 +63,6 @@ class Game(BaseGame):
     :type auto_sql: bool
     """
 
-    # this loads game data from the database into the game object
-    # if the game does not exist in the database, a new one is created
     def __init__(self,
                  white_id: int=0,
                  black_id: int=1,
@@ -99,16 +100,12 @@ class Game(BaseGame):
         # if sql=True, then we check the database to see if a game exists
         ## if it exists, we load the sql data into memory
         ## if it doesn't, we create a blank game in the DB and load a new game into memory
-        # if sql=False, we create a new game in memory only
         if sql or auto_sql:
             # Initialize or load game data
             game_data = self.sql_game_init(white_id, black_id, group_id, white_name, black_name)
             self.board, self.turn, self.draw, self.board.two_moveP = game_data
 
-    # makes a given move, assuming it is the correct player's turn
-    # if img=True, return a PIL.Image object. Otherwise, return None
-    # if save is a string to a filepath, we save a PNG image of the board to the given location
-    #   save implies img=True
+
     def move(self, move, img=False, save=None):
         """
         Executes a chess move if it is the active player's turn.
@@ -135,15 +132,13 @@ class Game(BaseGame):
         :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
         :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
         """
-        img = super().move(move, img, save)
+        img = super().move(move, img=img, save=save)
 
-        # handle SQL updating
         if self.auto_sql:
             self.update_db()
         return img
 
-    # offers a draw
-    # "player_id" refers to the player offering the draw
+
     def draw_offer(self, player_id):
         """
         Offers a draw in the current game.
@@ -160,23 +155,21 @@ class Game(BaseGame):
         if self.auto_sql:
             self.update_draw_status()
 
-    # checks if a draw exists and accepts if offered
-    # "player_id" refers to the player offering the draw
+
     def draw_accept(self, player_id):
         """
         Accepts the opponent's existing draw offer.
 
-        Marks the game as a draw. Automatically removes the game from the database if `auto_sql` is enabled.
+        Marks the game as a draw.
 
         :param player_id: The player accepting the draw offer.
         :type player_id: int
         :raises ChessError.DrawNotOfferedError: If no draw offer exists.
         """
         super().draw_accept(player_id)
-        self.end_check()
+        return True
 
-    # checks if a draw exists and declines if offered
-    # "player_id" refers to the player offering the draw
+
     def draw_decline(self, player_id):
         """
         Declines an active draw request.
@@ -191,30 +184,28 @@ class Game(BaseGame):
         if self.auto_sql:
             self.clear_draw_status()
 
-    # checks if the game is over and deletes the game from the database accordingly
-    def end_check(self):
+
+    def end(self):
         """
         Checks if the game is over, either by draw or checkmate.
-        If `auto_sql=True`, removes it from the SQL database if finished.
+        If the game is over, removes it from the SQL database.
 
-        :return: True if the game is over, False otherwise.
+        :return: True if the game is over and deleted, False otherwise.
         :rtype: bool
         """
-        if self.board.status != 0 and self.auto_sql:
-            self.sql_delete_game(self.gid, self.wid, self.bid)
+        if self.board.status != 0:
+            self.sql_delete_game()
             return True
         return False
+
 
     def update_db(self):
         """
         Updates the database with the current game state.
 
-        This method is designed for cases where `sql=True` but `auto_sql=False`.
         If SQL support is enabled (`sql` or `auto_sql`), updates the game's record in the database
-        with the current board state, turn, draw status, and player information.
-
-        :return: True if the update was successful, False if SQL support is not enabled.
-        :rtype: bool
+        with the current board state, turn, draw status, and player information. This function is for when
+        `sql` is True and `auto_sql` is False.
         """
         query = """
             UPDATE Games
@@ -240,7 +231,8 @@ class Game(BaseGame):
             "white_id": self.wid,
             "black_id": self.bid,
         }
-        execute_sql(query, params=params)
+        execute_psql(query, params=params)
+
 
     def update_draw_status(self):
         """
@@ -252,7 +244,8 @@ class Game(BaseGame):
             WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
         """
         params = {"draw": self.draw, "group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
-        execute_sql(query, params=params)
+        execute_psql(query, params=params)
+
 
     def clear_draw_status(self):
         """
@@ -264,11 +257,28 @@ class Game(BaseGame):
             WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
         """
         params = {"group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
-        execute_sql(query, params=params)
+        execute_psql(query, params=params)
 
-    # checks the sql data if a game exists
-    #   if it does, get the game data from the database
-    #   if it doesn't, create the game and return the new game data
+
+    def sql_delete_game(self):
+        """
+        Deletes the specified game from the database.
+
+        :param white_id: The ID of the white player.
+        :type white_id: int
+        :param black_id: The ID of the black player.
+        :type black_id: int
+        :param gid: The ID of the group. (default is 0)
+        :type gid: int
+        """
+        query = """
+            DELETE FROM Games
+            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
+        """
+        params = {"group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
+        execute_psql(query, params=params)
+
+
     @staticmethod
     def sql_game_init(white_id, black_id, group_id=0, white_name='', black_name=''):
         """
@@ -278,7 +288,7 @@ class Game(BaseGame):
         Otherwise, the existing game state is retrieved.
 
         :return: Tuple containing game data: board state, turn, draw status, pawn state.
-        :rtype: tuple
+        :rtype: tuple[str, int, int, Chess.Square | None]
         """
         query = """
             INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, PawnMove, Draw, Moved, WName, BName)
@@ -300,7 +310,7 @@ class Game(BaseGame):
             "wname": white_name,
             "bname": black_name
         }
-        game = execute_sql(query, params=params)[0]
+        game = execute_psql(query, params=params)[0]
         board = Chess.Board.assemble_board(game["board"], game["moved"])
         turn = int(game["turn"])
         draw = int(game["draw"]) if game["draw"] is not None else None
@@ -310,90 +320,76 @@ class Game(BaseGame):
         return board, turn, draw, two_move_p
 
 
-    def sql_current_games(self, player_id: int, gid: int = 0):
+    @staticmethod
+    def psql_current_games(player_id: int, gid: int = 0):
         """
-        Provides the list of current active games for a player from the SQL database.
+            Provides the list of current active games for a player from the SQL database.
 
-        This method queries the database to find active games associated with the given player ID within the specified group.
-        It determines opponents based on whether the player ID is set as WhiteId or BlackId in the database.
+            This method queries the database to find active games associated with the given player ID within the specified group.
+            It determines opponents based on whether the player ID is set as WhiteId or BlackId in the database.
 
-        :param player_id: The ID of the player for whom active games are being retrieved.
-        :type player_id: int
-        :param gid: The group ID for the games. Default is 0.
-        :type gid: int
-        :return: A list of IDs of opponents currently involved in active games with the given player.
-        :rtype: list[int]
-        """
-        games = execute_sql("""WITH PlayerResult AS (
+            :param player_id: The ID of the player for whom active games are being retrieved.
+            :type player_id: int
+            :param gid: The group ID for the games. Default is 0.
+            :type gid: int
+            :return: A list of IDs of opponents currently involved in active games with the given player.
+            :rtype: list[int]
+            """
+        query = """
+            WITH PlayerResult AS (
                 SELECT 
                     CASE 
-                        WHEN WhiteId = {player_id} THEN BlackId
-                        WHEN BlackId = {player_id} THEN WhiteId
+                        WHEN WhiteId = %s THEN BlackId
+                        WHEN BlackId = %s THEN WhiteId
                         ELSE NULL
                     END AS Result
                 FROM Games
-                WHERE GroupId = {gid}
+                WHERE GroupId = %s
             )
             SELECT Result
             FROM PlayerResult
             WHERE Result IS NOT NULL;
-        """, prog_sql_creds=self.sql_creds)
+            """
+        params = (player_id, player_id, gid)
+        games = execute_psql(query, params=params)
         games = [g[0] for g in games]
         return games
 
-    # if the game exists, returns the white player's id and black player's id in that order
-    # returns False if the game is not found in the database
-    def sql_game_exists(self, player1, player2, gid=0):
-        """
-        Checks if a game already exists between two players in the database.
 
-        :param player1: The ID of the first player.
-        :type player1: int
-        :param player2: The ID of the second player.
-        :type player2: int
-        :param gid: The ID of the group in which the players are playing.
-        :type gid: int
-        :return: Tuple of player IDs if the game exists, otherwise False.
-        :rtype: tuple | bool
+    @staticmethod
+    def psql_game_exists(player1: int, player2: int, gid: int = 0):
         """
-        games = execute_sql(f"""
-            SELECT WhiteId, BlackId FROM Games 
-            WHERE GroupId = {gid} AND (
-                (WhiteId = {player1} AND BlackID = {player2}) OR 
-                (WhiteId = {player2} AND BlackID = {player1})
-            )
-        """, prog_sql_creds=self.sql_creds)
+            Checks if a game already exists between two players in the database.
+
+            :param player1: The ID of the first player.
+            :type player1: int
+            :param player2: The ID of the second player.
+            :type player2: int
+            :param gid: The ID of the group in which the players are playing.
+            :type gid: int
+            :return: Tuple of player IDs if the game exists, in order of "White ID", "Black ID", otherwise None.
+            :rtype: tuple[int, int] | None
+            """
+        query = """
+                SELECT WhiteId, BlackId 
+                FROM Games 
+                WHERE GroupId = %s AND (
+                    (WhiteId = %s AND BlackID = %s) OR 
+                    (WhiteId = %s AND BlackID = %s)
+                )
+            """
+        params = (gid, player1, player2, player2, player1)
+        games = execute_psql(query, params=params)
 
         if games:
             return games[0]
 
-        return False
-
-    # removes a game from the database
-    def sql_delete_game(self, wid, bid, gid=0):
-        """
-        Deletes the specified game from the database.
-
-        :param white_id: The ID of the white player.
-        :type white_id: int
-        :param black_id: The ID of the black player.
-        :type black_id: int
-        :param gid: The ID of the group. (default is 0)
-        :type gid: int
-        """
-        query = """
-            DELETE FROM Games
-            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
-        """
-        params = {"group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
-        execute_sql(query, params=params)
+        return None
 
 
-# the SQL wrapper function for the Challenges table
-# This class is not compatible with non-SQL games
 class Challenge:
     """
-    SQL wrapper for challenges recorded in the `Challenges` SQL table.
+    SQL wrapper for challenges recorded in the `Challenges` PostgreSQL table.
 
     Allows issuing, validating, and deleting game challenges between players.
 
@@ -420,19 +416,21 @@ class Challenge:
             raise GameError.ChallengeError("You can't challenge yourself, silly")
 
         # checks if they are already in a game
-        if Game.sql_game_exists(gid, challenger, opponent):
+        if Game.psql_game_exists(gid, challenger, opponent):
             raise GameError.ChallengeError(f"There is an unresolved game between {challenger} and {opponent} already!")
 
         # check if the challenge exists already
         challenge = Challenge.exists(challenger, opponent, gid)
 
-        if not challenge:
-            raise Challenge.create_challenge(challenger, opponent, gid)
+        if challenge is None:
+            Challenge.create_challenge(challenger, opponent, gid)
+            print("Challenge created Successfully")
+            return False
 
-        elif challenger == challenge[0]:
+        elif challenger == challenge["challenger"]:
             raise GameError.ChallengeError(f"You have already challenged {opponent}! You must wait for them to accept")
 
-        # deletes users from challenges
+        # if the challenge exists and is valid, we delete the challenge in the
         Challenge.delete_challenge(challenger, opponent, gid)
 
     # if the challenge exists, returns the challenger id and the challenge id in that order
@@ -448,10 +446,10 @@ class Challenge:
         :type player2: int
         :param gid: Group ID. Default is 0.
         :type gid: int
-        :return: Tuple `(challenger, challenged)` if a challenge exists. Otherwise, False.
-        :rtype: tuple | bool
+        :return: True if a challenge exists. Otherwise, False.
+        :rtype: bool
         """
-        games = execute_sql(f"""
+        challenges = execute_psql(f"""
             SELECT Challenger, Challenged FROM Challenges 
             WHERE GroupId = {gid} AND (
                 (Challenger = {player1} AND Challenged = {player2}) OR 
@@ -459,8 +457,8 @@ class Challenge:
             )
         """)
 
-        if len(games) > 0:
-            return games[0]
+        if len(challenges) > 0:
+            return True
 
         return False
 
@@ -477,7 +475,7 @@ class Challenge:
         :param gid: Group ID. Default is 0.
         :type gid: int
         """
-        execute_sql(f"""
+        execute_psql(f"""
             DO $$
             BEGIN
                 IF NOT EXISTS (SELECT 1 FROM Challenges WHERE GroupId={gid} and Challenger={challenger} and Challenged={challenged}) THEN
@@ -500,4 +498,4 @@ class Challenge:
         :param gid: Group ID. Default is 0.
         :type gid: int
         """
-        execute_sql(f"DELETE FROM Challenges WHERE GroupId={gid} and Challenger={challenger} and Challenged={challenged}")
+        execute_psql(f"DELETE FROM Challenges WHERE GroupId={gid} and Challenger={challenger} and Challenged={challenged}")

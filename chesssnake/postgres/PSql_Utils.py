@@ -10,7 +10,7 @@ from . import GameError
 connection_pool = None
 
 
-def load_env_sql_creds():
+def load_env_psql_creds():
     """
     Loads SQL credentials from environment variables.
     :return: A dictionary with the SQL credentials.
@@ -25,13 +25,13 @@ def load_env_sql_creds():
     }
 
 
-def load_sql_conn_str(sql_creds=None):
+def load_psql_conn_str(sql_creds=None):
     """
     Constructs an SQL connection string from programmatic or environment-provided credentials.
     :param sql_creds: Optional programmatic SQL credentials.
     :return: A valid PostgreSQL connection string.
     """
-    env_sql_creds = load_env_sql_creds()
+    env_sql_creds = load_env_psql_creds()
     sql_creds = sql_creds or {}
 
     # Merge dictionaries, with sql_creds having priority
@@ -58,7 +58,7 @@ def initialize_connection_pool(minconn=1, maxconn=10, sql_creds=None):
         connection_pool = pool.SimpleConnectionPool(
             minconn=minconn,
             maxconn=maxconn,
-            dsn=load_sql_conn_str(sql_creds=sql_creds)
+            dsn=load_psql_conn_str(sql_creds=sql_creds)
         )
         if connection_pool:
             print("Database connection pool successfully initialized.")
@@ -86,7 +86,7 @@ def release_connection(conn):
         connection_pool.putconn(conn)
 
 
-def database_init(sql_creds=None, schema_init=True):
+def psql_db_init(sql_creds=None, schema_init=True):
     """
     Checks if the database exists and creates it if it does not, provided the user has sufficient permissions.
 
@@ -104,7 +104,7 @@ def database_init(sql_creds=None, schema_init=True):
     :raises GameError: If there is a failure due to missing permissions or other SQL errors.
     """
     # Use modified credentials without a database name to connect to the PostgreSQL server
-    admin_conn_creds = sql_creds.copy() if sql_creds else load_env_sql_creds()
+    admin_conn_creds = sql_creds.copy() if sql_creds else load_env_psql_creds()
     admin_conn_creds["name"] = None  # Remove db-name for admin-level connection
 
     db_name = sql_creds.get("name") if sql_creds else None
@@ -113,7 +113,7 @@ def database_init(sql_creds=None, schema_init=True):
 
     try:
         # Establish a connection to the server (not to a specific database)
-        with psycopg2.connect(load_sql_conn_str(admin_conn_creds)) as conn:
+        with psycopg2.connect(load_psql_conn_str(admin_conn_creds)) as conn:
             conn.autocommit = True
             with conn.cursor() as cur:
                 # Check if the database exists
@@ -134,10 +134,10 @@ def database_init(sql_creds=None, schema_init=True):
         raise GameError.SQLError(f"Database creation error: {e}")
 
     if schema_init:
-        db_schema_init(sql_creds=sql_creds)
+        psql_db_schema_init(sql_creds=sql_creds)
 
 
-def db_schema_init(sql_creds=None):
+def psql_db_schema_init(sql_creds=None):
     """
     Initializes the database schema by executing the `init.sql` script.
 
@@ -155,7 +155,7 @@ def db_schema_init(sql_creds=None):
     conn = None
     try:
         # Establish a direct connection using environment-based or provided credentials
-        conn = psycopg2.connect(load_sql_conn_str(sql_creds=sql_creds))
+        conn = psycopg2.connect(load_psql_conn_str(sql_creds=sql_creds))
         db_init_fp = str(importlib.resources.files('chesssnake').joinpath('data/init.sql'))
         with open(db_init_fp, 'r') as db_init_file:
             init_script = db_init_file.read()
@@ -179,7 +179,7 @@ def db_schema_init(sql_creds=None):
             conn.close()
 
 
-def execute_sql(statement, params=None):
+def execute_psql(statement, params=None):
     """
     Executes a SQL statement using a connection from the pool.
     :param statement: SQL query string, can include placeholders (%(placeholder)s).
