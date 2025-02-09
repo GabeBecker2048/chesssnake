@@ -97,7 +97,9 @@ class Game:
         :type save: str
         :return: None or a `PIL.Image` object if `img=True` or `save` is specified.
         :rtype: None or PIL.Image
-        :raises ChessError.MoveIntoCheckError: If the move would put the player in check.
+        :raises ChessError.InvalidNotationError: If the move is not in standard chess notation.
+        :raises ChessError.GameOverError: If the game is over (i.e., the game has ended).
+        :raises ChessError.MoveIntoCheckError: If the move puts the player in check.
         :raises ChessError.PromotionError: If an invalid promotion is attempted or a promotion is required.
         :raises ChessError.InvalidCastleError: If an invalid castling move is attempted.
         :raises ChessError.PieceNotFoundError: If no eligible piece is found for the move.
@@ -108,6 +110,9 @@ class Game:
         """
         if not Chess.Move.is_valid_c_notation(move):
             raise ChessError.InvalidNotationError(move)
+
+        if self.board.status != 0:
+            raise ChessError.GameOverError()
 
         m = self.board.move(move, self.turn)
         self.turn = 1 - self.turn  # Changes whose turn it is
@@ -128,9 +133,13 @@ class Game:
 
         :param player_id: The ID of the player offering the draw.
         :type player_id: int
+        :raises ChessError.GameOverError: If the game is over (i.e., the game has ended).
         :raises ChessError.DrawAlreadyOfferedError: If the same player has already made a draw offer.
         :raises ChessError.DrawWrongTurnError: If the player offers a draw out of turn.
         """
+        if self.board.status != 0:
+            raise ChessError.GameOverError()
+
         if (self.draw == 0 and player_id == self.wid) or (self.draw == 1 and player_id == self.bid):
             raise ChessError.DrawAlreadyOfferedError()
         elif (self.draw == 1 and player_id == self.wid) or (self.draw == 0 and player_id == self.bid):
@@ -148,8 +157,12 @@ class Game:
 
         :param player_id: The ID of the player accepting the draw.
         :type player_id: int
+        :raises ChessError.GameOverError: If the game is over (i.e., the game has ended).
         :raises ChessError.DrawNotOfferedError: If no draw offer exists to accept.
         """
+        if self.board.status != 0:
+            raise ChessError.GameOverError()
+
         if (self.draw == 0 and player_id == self.wid) or (
                 self.draw == 1 and player_id == self.bid) or self.draw is None:
             raise ChessError.DrawNotOfferedError()
@@ -164,8 +177,12 @@ class Game:
 
         :param player_id: The ID of the player declining the draw.
         :type player_id: int
+        :raises ChessError.GameOverError: If the game is over (i.e., the game has ended).
         :raises ChessError.DrawNotOfferedError: If no draw offer exists to decline.
         """
+        if self.board.status != 0:
+            raise ChessError.GameOverError()
+
         if (self.draw == 0 and player_id == self.wid) or (
                 self.draw == 1 and player_id == self.bid) or self.draw is None:
             raise ChessError.DrawNotOfferedError()
