@@ -21,6 +21,17 @@ class InvalidNotationError(ChessError):
         super().__init__(f"\"{user_input}\" is not in valid algebraic notation")
 
 
+class GameOverError(ChessError):
+    """
+    Raised when an action is attempted on a game that is already over.
+
+    This error is triggered when a player attempts to perform an illegal operation, such as making a move,
+    offering a draw, or any other game-related action after the game has ended.
+    """
+    def __init__(self):
+        super().__init__("The game is over. You cannot do anything else.")
+
+
 class PieceOnSquareError(ChessError):
     """
     Represents an error that occurs when a piece is already present on a specified

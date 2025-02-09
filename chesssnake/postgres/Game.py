@@ -3,6 +3,17 @@ from . import GameError
 from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
 
+# TODO
+# - Update all "SELECT" sql queries to use dict returns instead of lists
+# - Add "status" to "Game" database schema
+#   - Make draw_accept and update_db functions update the board status in the database
+# - Error checking for IDs using GameError.SQLIdError
+# - Fix Challenges class. Everything in there is mess
+#   - Challenge.challenge should be the "everything" function, and should create games if successful
+#   - Need to check if game exists as well as if challenge exists
+#   - Add proper error checking
+# - Docstrings need double checking, especially for possible errors. Both for Game and Challenges
+
 
 def db_init(sql_creds=None, create_database=False):
     """
@@ -167,7 +178,6 @@ class Game(BaseGame):
         :raises ChessError.DrawNotOfferedError: If no draw offer exists.
         """
         super().draw_accept(player_id)
-        return True
 
 
     def draw_decline(self, player_id):
