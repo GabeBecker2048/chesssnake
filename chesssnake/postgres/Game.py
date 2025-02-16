@@ -1,13 +1,9 @@
-from .PSql_Utils import execute_psql, psql_db_init, initialize_connection_pool
+from .PSql_Utils import execute_psql, psql_db_init, initialize_connection_pool, validate_ids
 from . import GameError
 from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
 
 # TODO
-# - Fix Challenges class. Everything in there is mess
-#   - Challenge.challenge should be the "everything" function, and should create games if successful
-#   - Need to check if game exists as well as if challenge exists
-#   - Add proper error checking
 # - Standardize dtypes in args and returns (either add them EVERYWHERE or NOWHERE!)
 # - Docstrings need double checking, especially for possible errors. Both for Game and Challenges
 
@@ -100,17 +96,8 @@ class Game(BaseGame):
         :param auto_sql: Whether to automatically update the database after every state change. Default is False.
         :type auto_sql: bool
         """
-        # Ensure IDs are the correct type
-        if not isinstance(white_id, int) or not isinstance(black_id, int) or not isinstance(group_id, int):
-            GameError.SQLIdError(white_id, black_id, group_id)
 
-        # Validate IDs are within the allowed BIGINT range
-        BIGINT_MIN = -9223372036854775808
-        BIGINT_MAX = 9223372036854775807
-        if not (BIGINT_MIN <= white_id <= BIGINT_MAX and
-                BIGINT_MIN <= black_id <= BIGINT_MAX and
-                BIGINT_MIN <= group_id <= BIGINT_MAX):
-            raise GameError.SQLIdError(white_id, black_id, group_id)
+        validate_ids(white_id, black_id, group_id)
 
         # if sql=True, then we check the database to see if a game exists
         ## if it exists, we load the sql data into memory
@@ -420,110 +407,119 @@ class Challenge:
     SQL wrapper for challenges recorded in the `Challenges` PostgreSQL table.
 
     Allows issuing, validating, and deleting game challenges between players.
-
-    Currently only supports databases will envs for database creds.
+    Supports challenges with proper validations to avoid conflicts or errors.
     """
+
     @staticmethod
-    def challenge(challenger=0, opponent=1, gid=0):
+    def challenge(challenger: int, opponent: int, gid: int = 0):
         """
         Issues a chess game challenge between two players.
 
-        Validates that no active game or challenge exists between the players before creating a new challenge.
+        Validates that no active game or challenge exists between the players before creating a new one.
         If a reciprocal challenge exists, the challenge is accepted, and it proceeds to game creation.
 
         :param challenger: ID of the player making the challenge.
-        :type challenger: int
         :param opponent: ID of the player being challenged.
-        :type opponent: int
         :param gid: Group ID. Default is 0.
-        :type gid: int
+        :raises ValueError: If any ID is invalid (not an integer or out of range).
         :raises GameError.ChallengeError: If the challenge cannot be created.
+        :return: True if a challenge already existed and was accepted, False if a new challenge was created.
         """
+        # Ensure inputs are valid
+        validate_ids(challenger, opponent, gid)
 
         if challenger == opponent:
-            raise GameError.ChallengeError("You can't challenge yourself, silly")
+            raise GameError.ChallengeError("You can't challenge yourself.")
 
-        # checks if they are already in a game
+        # Check if they are already in a game
         if Game.psql_game_exists(gid, challenger, opponent):
             raise GameError.ChallengeError(f"There is an unresolved game between {challenger} and {opponent} already!")
 
-        # check if the challenge exists already
+        # Check if a challenge already exists
         challenge = Challenge.exists(challenger, opponent, gid)
 
         if challenge is None:
+            # If no challenge exists, create a new one
             Challenge.create_challenge(challenger, opponent, gid)
-            print("Challenge created Successfully")
+            print("Challenge created successfully.")
             return False
-
         elif challenger == challenge["challenger"]:
-            raise GameError.ChallengeError(f"You have already challenged {opponent}! You must wait for them to accept")
+            raise GameError.ChallengeError(f"You have already challenged {opponent}! Wait for them to accept.")
 
-        # if the challenge exists and is valid, we delete the challenge in the
+        # If the challenge exists and is valid, delete it (i.e., accept it)
         Challenge.delete_challenge(challenger, opponent, gid)
+        return True
 
-    # if the challenge exists, returns the challenger id and the challenge id in that order
-    # otherwise, returns False
     @staticmethod
-    def exists(player1, player2, gid=0):
+    def exists(player1: int, player2: int, gid: int = 0) -> dict | None:
         """
         Checks if a challenge exists between two players.
 
-        :param player1: First player ID.
-        :type player1: int
-        :param player2: Second player ID.
-        :type player2: int
+        :param player1: ID of the first player.
+        :param player2: ID of the second player.
         :param gid: Group ID. Default is 0.
-        :type gid: int
-        :return: True if a challenge exists. Otherwise, False.
-        :rtype: bool
+        :return: A dictionary containing the challenger and challenge details if a challenge exists, otherwise None.
         """
-        challenges = execute_psql(f"""
-            SELECT Challenger, Challenged FROM Challenges 
-            WHERE GroupId = {gid} AND (
-                (Challenger = {player1} AND Challenged = {player2}) OR 
-                (Challenger = {player2} AND Challenged = {player1})
+        Challenge._validate_ids(player1, player2, gid)
+
+        query = """
+            SELECT Challenger, Challenged 
+            FROM Challenges 
+            WHERE GroupId = %(gid)s AND (
+                (Challenger = %(player1)s AND Challenged = %(player2)s) OR 
+                (Challenger = %(player2)s AND Challenged = %(player1)s)
             )
-        """)
+        """
+        params = {"gid": gid, "player1": player1, "player2": player2}
+        challenges = execute_psql(query, params=params)
 
         if len(challenges) > 0:
-            return True
+            return {"challenger": challenges[0]["Challenger"], "challenged": challenges[0]["Challenged"]}
+        return None
 
-        return False
-
-    # if the challenge does not exist in the database, a new one is created
     @staticmethod
-    def create_challenge(challenger, challenged, gid=0):
+    def create_challenge(challenger: int, challenged: int, gid: int = 0):
         """
         Creates a new challenge between two players in the database.
 
-        :param challenger: The ID of the player issuing the challenge.
-        :type challenger: int
-        :param challenged: The ID of the player being challenged.
-        :type challenged: int
+        :param challenger: ID of the player issuing the challenge.
+        :param challenged: ID of the player being challenged.
         :param gid: Group ID. Default is 0.
-        :type gid: int
+        :raises ValueError: If any ID is invalid.
         """
-        execute_psql(f"""
+        Challenge._validate_ids(challenger, challenged, gid)
+
+        query = """
             DO $$
             BEGIN
-                IF NOT EXISTS (SELECT 1 FROM Challenges WHERE GroupId={gid} and Challenger={challenger} and Challenged={challenged}) THEN
+                IF NOT EXISTS (
+                    SELECT 1 
+                    FROM Challenges 
+                    WHERE GroupId = %(gid)s AND Challenger = %(challenger)s AND Challenged = %(challenged)s
+                ) THEN
                     INSERT INTO Challenges (GroupId, Challenger, Challenged)
-                    VALUES ({gid}, {challenger}, {challenged});
+                    VALUES (%(gid)s, %(challenger)s, %(challenged)s);
                 END IF;
             END $$;
-        """)
+        """
+        params = {"gid": gid, "challenger": challenger, "challenged": challenged}
+        execute_psql(query, params=params)
 
-    # if the challenge exists in the database, it is deleted
     @staticmethod
-    def delete_challenge(challenger, challenged, gid=0):
+    def delete_challenge(challenger: int, challenged: int, gid: int = 0):
         """
         Deletes an existing challenge between two players from the database.
 
-        :param challenger: The ID of the player who issued the challenge.
-        :type challenger: int
-        :param challenged: The ID of the player who was challenged.
-        :type challenged: int
+        :param challenger: ID of the player who issued the challenge.
+        :param challenged: ID of the player who was challenged.
         :param gid: Group ID. Default is 0.
-        :type gid: int
+        :raises ValueError: If any ID is invalid.
         """
-        execute_psql(f"DELETE FROM Challenges WHERE GroupId={gid} and Challenger={challenger} and Challenged={challenged}")
+        Challenge._validate_ids(challenger, challenged, gid)
+
+        query = """
+            DELETE FROM Challenges 
+            WHERE GroupId = %(gid)s AND Challenger = %(challenger)s AND Challenged = %(challenged)s
+        """
+        params = {"gid": gid, "challenger": challenger, "challenged": challenged}
+        execute_psql(query, params=params)

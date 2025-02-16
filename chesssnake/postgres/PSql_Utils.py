@@ -178,6 +178,22 @@ def psql_db_schema_init(sql_creds=None):
         if conn:
             conn.close()
 
+def validate_ids(*ids: int):
+    """
+    Validates that all provided IDs are integers and within the PostgreSQL BIGINT range.
+
+    :param ids: Variable-length list of IDs (challenger, challenged, gid).
+    :raises ValueError: If any ID is invalid.
+    """
+
+    BIGINT_MIN = -9223372036854775808
+    BIGINT_MAX = 9223372036854775807
+
+    for id_ in ids:
+        if not isinstance(id_, int):
+            raise GameError.SQLIdError(id_)
+        if not (BIGINT_MIN <= id_ <= BIGINT_MAX):
+            raise GameError.SQLIdError(id_)
 
 def execute_psql(statement, params=None):
     """
