@@ -13,7 +13,7 @@ class SQLIdError(SQLError):
             f"  white id: {white_id}",
             f"  black id: {black_id}",
             f"  group id: {group_id}",
-            "IDs must be BIGINT NOT NULL."
+            "All IDs must be BIGINT NOT NULL."
         ])
         super().__init__(msg)
 
