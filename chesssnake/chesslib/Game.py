@@ -32,7 +32,16 @@ class Game:
     :type draw: int or None
     """
 
-    def __init__(self, white_id: int = 0, black_id: int = 1, group_id: int = 0, white_name: str = '', black_name: str = ''):
+    def __init__(self,
+                 white_id: int = 0,
+                 black_id: int = 1,
+                 group_id: int = 0,
+                 white_name: str = '',
+                 black_name: str = '',
+                 board : Chess.Board = None,
+                 turn: int = 0,
+                 draw: int = None,
+                 ):
         """
         Initializes a new chess game.
 
@@ -55,9 +64,9 @@ class Game:
         self.bid = black_id
         self.wname = white_name
         self.bname = black_name
-        self.board = Chess.Board()
-        self.turn = 0
-        self.draw = 0
+        self.board = Chess.Board() if board is None else board
+        self.turn = turn
+        self.draw = draw
 
     def __str__(self):
         """

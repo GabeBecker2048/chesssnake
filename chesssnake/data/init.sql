@@ -18,6 +18,7 @@ CREATE TABLE Games (
     PawnMove CHAR(2) CHECK (PawnMove ~ '^[a-h][1-8]$') DEFAULT NULL,
     Draw BOOLEAN DEFAULT NULL,
     Moved CHAR(6) NOT NULL,
+    Status INTEGER NOT NULL CHECK (Status BETWEEN 0 AND 4),
     WName TEXT DEFAULT NULL,
     BName TEXT DEFAULT NULL,
     CreatedAt TIMESTAMP DEFAULT NOW(),

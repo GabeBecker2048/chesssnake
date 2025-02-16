@@ -80,7 +80,7 @@ class Game(BaseGame):
                  group_id: int=0,
                  white_name: str='',
                  black_name: str='',
-                 sql: bool=False,
+                 sql: bool=True,
                  auto_sql: bool=False):
         """
         Initializes a new chess game and synchronizes with the SQL database if required.
@@ -103,18 +103,23 @@ class Game(BaseGame):
         :param auto_sql: Whether to automatically update the database after every state change. Default is False.
         :type auto_sql: bool
         """
-
-        super().__init__(white_id, black_id, group_id, white_name, black_name)
-        self.sql = sql
-        self.auto_sql = auto_sql
-
         # if sql=True, then we check the database to see if a game exists
         ## if it exists, we load the sql data into memory
         ## if it doesn't, we create a blank game in the DB and load a new game into memory
         if sql or auto_sql:
             # Initialize or load game data
             game_data = self.sql_game_init(white_id, black_id, group_id, white_name, black_name)
-            self.board, self.turn, self.draw, self.board.two_moveP = game_data
+
+
+        super().__init__(white_id,
+                         black_id,
+                         group_id,
+                         white_name = game_data["wname"],
+                         black_name = game_data["bname"],
+                         board = game_data["board"],
+                         draw = game_data["draw"])
+        self.sql = sql
+        self.auto_sql = auto_sql
 
 
     def move(self, move, img=False, save=None):
@@ -290,37 +295,44 @@ class Game(BaseGame):
         If the specified players are not already in a game, a new record is created in the database.
         Otherwise, the existing game state is retrieved.
 
-        :return: Tuple containing game data: board state, turn, draw status, pawn state.
-        :rtype: tuple[str, int, int, Chess.Square | None]
+        :return: dict containing game data: board, turn, last pawn move, draw status, game status, and player names.
+        :rtype: dict | None
         """
         query = """
-            INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, PawnMove, Draw, Moved, WName, BName)
-            VALUES (%(group_id)s, %(white_id)s, %(black_id)s, %(board)s, %(turn)s, %(pawnmove)s, %(draw)s, %(moved)s, %(wname)s, %(bname)s)
+            INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, PawnMove, Draw, Moved, Status, WName, BName)
+            VALUES (%(group_id)s, %(white_id)s, %(black_id)s, %(board)s, %(turn)s, %(pawnmove)s, %(draw)s, %(moved)s, %(status)s, %(wname)s, %(bname)s)
             ON CONFLICT (GroupId, WhiteId, BlackId) DO NOTHING;
 
             SELECT * FROM Games WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
         """
         params = {
-            "group_id": group_id,
-            "white_id": white_id,
-            "black_id": black_id,
-            "board": "R1 N1 B1 Q1 K1 B1 N1 R1;P1 P1 P1 P1 P1 P1 P1 P1;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;"
-                     "-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;P0 P0 P0 P0 P0 P0 P0 P0;R0 N0 B0 Q0 K0 B0 N0 R0",
-            "turn": 0,
-            "pawnmove": None,
-            "draw": None,
-            "moved": "000000",
-            "wname": white_name,
-            "bname": black_name
+            "group_id" : group_id,
+            "white_id" : white_id,
+            "black_id" : black_id,
+            "board"    : "R1 N1 B1 Q1 K1 B1 N1 R1;P1 P1 P1 P1 P1 P1 P1 P1;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;"
+                         "-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;P0 P0 P0 P0 P0 P0 P0 P0;R0 N0 B0 Q0 K0 B0 N0 R0",
+            "turn"     : 0,
+            "pawnmove" : None,
+            "draw"     : None,
+            "moved"    : "000000",
+            "status"   : 0,
+            "wname"    : white_name,
+            "bname"    : black_name
         }
-        game = execute_psql(query, params=params)[0]
-        board = Chess.Board.assemble_board(game["board"], game["moved"])
-        turn = int(game["turn"])
-        draw = int(game["draw"]) if game["draw"] is not None else None
-        two_move_p = (Chess.Square(game["pawnmove"][0], game["pawnmove"][1])
-                      if game["pawnmove"] is not None else None)
+        game: execute_psql(query, params=params)[0]
 
-        return board, turn, draw, two_move_p
+        pawnmove = Chess.Square(game["pawnmove"][0], game["pawnmove"][1]) if game["pawnmove"] is not None else None
+        boardarr = Chess.Board.assemble_board(game["board"], game["moved"])
+        board = Chess.Board(board=boardarr, two_moveP=pawnmove)
+        board.status = int(game["status"])
+
+        return {
+            "board"    : board,
+            "turn"     : int(game["turn"]),
+            "draw"     : int(game["draw"]) if game["draw"] is not None else None,
+            "wname"    : game["wname"],
+            "bname"    : game["bname"]
+        }
 
 
     @staticmethod
