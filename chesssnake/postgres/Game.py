@@ -4,7 +4,6 @@ from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
 
 # TODO
-# - Update all "SELECT" sql queries to use dict returns instead of lists
 # - Add "status" to "Game" database schema
 #   - Make draw_accept and update_db functions update the board status in the database
 # - Error checking for IDs using GameError.SQLIdError
@@ -12,6 +11,7 @@ from ..chesslib import Chess
 #   - Challenge.challenge should be the "everything" function, and should create games if successful
 #   - Need to check if game exists as well as if challenge exists
 #   - Add proper error checking
+# - Standardize dtypes in args and returns (either add them EVERYWHERE or NOWHERE!)
 # - Docstrings need double checking, especially for possible errors. Both for Game and Challenges
 
 
@@ -273,13 +273,6 @@ class Game(BaseGame):
     def sql_delete_game(self):
         """
         Deletes the specified game from the database.
-
-        :param white_id: The ID of the white player.
-        :type white_id: int
-        :param black_id: The ID of the black player.
-        :type black_id: int
-        :param gid: The ID of the group. (default is 0)
-        :type gid: int
         """
         query = """
             DELETE FROM Games
@@ -352,17 +345,17 @@ class Game(BaseGame):
                         WHEN WhiteId = %s THEN BlackId
                         WHEN BlackId = %s THEN WhiteId
                         ELSE NULL
-                    END AS Result
+                    END AS OpponentId
                 FROM Games
                 WHERE GroupId = %s
             )
-            SELECT Result
+            SELECT OpponentId
             FROM PlayerResult
-            WHERE Result IS NOT NULL;
+            WHERE OpponentId IS NOT NULL;
             """
         params = (player_id, player_id, gid)
         games = execute_psql(query, params=params)
-        games = [g[0] for g in games]
+        games = [g['OpponentId'] for g in games]
         return games
 
 
@@ -377,8 +370,8 @@ class Game(BaseGame):
             :type player2: int
             :param gid: The ID of the group in which the players are playing.
             :type gid: int
-            :return: Tuple of player IDs if the game exists, in order of "White ID", "Black ID", otherwise None.
-            :rtype: tuple[int, int] | None
+            :return: Dict of player IDs with keys "WhiteID" and "BlackID" if the game exists, otherwise None.
+            :rtype: dict | None
             """
         query = """
                 SELECT WhiteId, BlackId 
