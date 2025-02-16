@@ -4,6 +4,7 @@ from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
 
 # TODO
+# - Test new changes
 # - Standardize dtypes in args and returns (either add them EVERYWHERE or NOWHERE!)
 # - Docstrings need double checking, especially for possible errors. Both for Game and Challenges
 
