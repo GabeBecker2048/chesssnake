@@ -4,7 +4,6 @@ from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
 
 # TODO
-# - Error checking for IDs using GameError.SQLIdError
 # - Fix Challenges class. Everything in there is mess
 #   - Challenge.challenge should be the "everything" function, and should create games if successful
 #   - Need to check if game exists as well as if challenge exists
@@ -101,6 +100,18 @@ class Game(BaseGame):
         :param auto_sql: Whether to automatically update the database after every state change. Default is False.
         :type auto_sql: bool
         """
+        # Ensure IDs are the correct type
+        if not isinstance(white_id, int) or not isinstance(black_id, int) or not isinstance(group_id, int):
+            GameError.SQLIdError(white_id, black_id, group_id)
+
+        # Validate IDs are within the allowed BIGINT range
+        BIGINT_MIN = -9223372036854775808
+        BIGINT_MAX = 9223372036854775807
+        if not (BIGINT_MIN <= white_id <= BIGINT_MAX and
+                BIGINT_MIN <= black_id <= BIGINT_MAX and
+                BIGINT_MIN <= group_id <= BIGINT_MAX):
+            raise GameError.SQLIdError(white_id, black_id, group_id)
+
         # if sql=True, then we check the database to see if a game exists
         ## if it exists, we load the sql data into memory
         ## if it doesn't, we create a blank game in the DB and load a new game into memory
