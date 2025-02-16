@@ -4,8 +4,6 @@ from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
 
 # TODO
-# - Add "status" to "Game" database schema
-#   - Make draw_accept and update_db functions update the board status in the database
 # - Error checking for IDs using GameError.SQLIdError
 # - Fix Challenges class. Everything in there is mess
 #   - Challenge.challenge should be the "everything" function, and should create games if successful
@@ -183,6 +181,8 @@ class Game(BaseGame):
         :raises ChessError.DrawNotOfferedError: If no draw offer exists.
         """
         super().draw_accept(player_id)
+        if self.auto_sql:
+            self.update_draw_status()
 
 
     def draw_decline(self, player_id):
@@ -229,6 +229,7 @@ class Game(BaseGame):
                 PawnMove = %(pawnmove)s,
                 Draw = %(draw)s,
                 Moved = %(moved)s,
+                Status = %(status)s,
                 WName = %(wname)s,
                 BName = %(bname)s
             WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
@@ -240,6 +241,7 @@ class Game(BaseGame):
             "pawnmove": self.board.two_moveP.c_notation if self.board.two_moveP else None,
             "draw": self.draw,
             "moved": disassembled_board[1],
+            "status": self.board.status,
             "wname": self.wname,
             "bname": self.bname,
             "group_id": self.gid,
@@ -255,10 +257,10 @@ class Game(BaseGame):
         """
         query = """
             UPDATE Games
-            SET Draw = %(draw)s
+            SET Draw = %(draw)s, Status = %(status)s
             WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
         """
-        params = {"draw": self.draw, "group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
+        params = {"draw": self.draw, "status": self.board.status, "group_id": self.gid, "white_id": self.wid, "black_id": self.bid}
         execute_psql(query, params=params)
 
 
