@@ -2,15 +2,16 @@
 
 _Note: Some minor versions are missing (e.g., documentation only updates, minor bug fixes). These "missing" updates were deemed too inconsequential to include_
 
-| Version | Release Date | Changes/Notes                        | Author        | Status   |
-|---------|--------------|--------------------------------------|---------------|----------|
-| 0.1.0   | 2024-12-18   | Initial pre-release                  | Gabe Becker   | Released |
-| 0.2.0   | 2024-12-21   | bug fixes and refactoring (chesslib) | Gabe Becker   | Released |
-| 0.3.0   | 2024-12-21   | bug fixes and refactoring (postgres) | Gabe Becker   | Released |
-| 0.3.1   | 2024-12-21   | Initial release to pypi; bug fixes   | Gabe Becker   | Released |
-| 0.4.0   | 2025-01-05   | Initial documentation release        | Gabe Becker   | Released |
-| 0.5.0   | 2025-01-05   | Major postgres changes               | Gabe Becker   | Released |
-| 0.6.0   | 2025-02-08   | SQL_Utils and schema overhall        | Gabe Becker   | Latest   |
+| Version | Release Date | Changes/Notes                                      | Author        | Status   |
+|---------|--------------|----------------------------------------------------|---------------|----------|
+| 0.1.0   | 2024-12-18   | Initial pre-release                                | Gabe Becker   | Released |
+| 0.2.0   | 2024-12-21   | bug fixes and refactoring (chesslib)               | Gabe Becker   | Released |
+| 0.3.0   | 2024-12-21   | bug fixes and refactoring (postgres)               | Gabe Becker   | Released |
+| 0.3.1   | 2024-12-21   | Initial release to pypi; bug fixes                 | Gabe Becker   | Released |
+| 0.4.0   | 2025-01-05   | Initial documentation release                      | Gabe Becker   | Released |
+| 0.5.0   | 2025-01-05   | Major PostgreSql changes                           | Gabe Becker   | Released |
+| 0.6.0   | 2025-02-08   | PostgreSql SQL_Utils and schema overhall           | Gabe Becker   | Latest   |
+| 0.6.6   | 2025-02-16   | PostgreSql Major fixes to adjust to schema overall | Gabe Becker   | Latest   |
 
 # Planned Releases
 
@@ -20,3 +21,4 @@ _Note: Some minor versions are missing (e.g., documentation only updates, minor 
 | 0.8.0   | TBD                  | Performance improvements and optimizations, finish documentation | Gabe Becker | Planned     |
 | 0.9.0   | TBD                  | Staging for full release, documentation full release             | Gabe Becker | Planned     |
 | 1.0.0   | TBD                  | First major stable release with full features                    | Gabe Becker | Planned     |
+| 2.0.0   | TBD                  | AI/Stockfish support                                             | Gabe Becker | Planned     |

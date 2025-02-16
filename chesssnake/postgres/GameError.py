@@ -7,12 +7,10 @@ class SQLError(GameError):
         super().__init__(msg)
 
 class SQLIdError(SQLError):
-    def __init__(self, white_id, black_id, group_id):
+    def __init__(self, id_):
         msg = "\n".join([
-            "One of the following ids is invalid for a PostgreSQL database:",
-            f"  white id: {white_id}",
-            f"  black id: {black_id}",
-            f"  group id: {group_id}",
+            "One of the given ids is invalid for a PostgreSQL database:",
+            f"  id: {id_}",
             "All IDs must be BIGINT NOT NULL."
         ])
         super().__init__(msg)
