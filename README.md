@@ -10,37 +10,42 @@ Pronounced "chess - snake", in reference to Python being a type of snake. It is 
 ## Features
 
 - Play chess in Python with an easy-to-use and intuitive API
-- Store and retrieve chess games in a PostgreSQL database, without having to write any sql
-  - Highly optimized SQL included
+- Store and retrieve chess games through a REST **api-endpoint** backed by PostgreSQL — many game clients can share one database, without writing any SQL
 - Generate PNG or JPEG images files of your game
 - PIL image support for manipulating images of your chess games
 - Includes a highly optimized python-only chess library
+
+## Architecture
+
+chesssnake is split into three tiers so that many lightweight game clients can share a single database:
+
+1. **Game client** — the `Game` object runs the chess engine locally and syncs game state over REST.
+2. **api-endpoint** — a REST server (`chesssnake api-endpoint`) that exposes a thin persistence API.
+3. **Database** — the api-endpoint owns the PostgreSQL connection and does all SQL.
 
 ## Installation
 
 ### Basic Installation
 
-To install the core features of Chesssnake, run:
+To install the core features of Chesssnake (local, in-memory games and image rendering), run:
 
 ```bash
 pip install chesssnake
 ```
 
-### With PostgreSQL Support
+### To play remote (persisted) games
 
-This library uses [psycopg2](https://pypi.org/project/psycopg2/) to communicate with postgres. There are two ways to install psycopg2: with a binary or from source
-
-To install chesssnake with PostgresSQL support, using psycopg2-binary **(recommended for beginners, development, and for non-serious purposes)**
+Install the client extra (adds `requests`):
 ```commandline
-pip install chesssnake[postgres-binary]
+pip install chesssnake[client]
 ```
 
-To install chesssnake with PostgresSQL support, using psycopg2 from source **(recommended for production and packaging)**
-```commandline
-pip install chesssnake[postgres]
-```
+### To run the api-endpoint server
 
-See [psycopg2 build prerequisites](https://www.psycopg.org/docs/install.html#build-prerequisites) for prerequisites when installing from source
+Install the api extra (adds FastAPI, uvicorn, and a PostgreSQL driver):
+```commandline
+pip install chesssnake[api]
+```
 
 ## Usage
 This library's API is focused around a `Game` object. Every `Game` object represents a game between two players
@@ -71,51 +76,55 @@ game.save('/path/to/your/image1.png')
 game.move('Bc5', save='/path/to/your/image2.png')
 ```
 
-### With PostgreSQL support
+### Persisting games through the api-endpoint
 
-If you've installed chesssnake with PostgreSQL support, you can store and retrieve games from a database.
+To store and retrieve games, run the api-endpoint server and point your `Game` clients at it.
 
-Before using chesssnake, you must create environment variables that point to your database. There are many ways to do this, but for this example I will use the [python-dotenv](https://pypi.org/project/python-dotenv/) package to load variables from a `.env` file
+**1. Run the server.** The server reads its database credentials from environment variables. There are many ways to set these; for this example I use the [python-dotenv](https://pypi.org/project/python-dotenv/) package with a `.env` file:
 
-Create a file named `.env`. Add your database information
 ```commandline
 CHESSDB_NAME='name_of_your_postgresql_db'
 CHESSDB_USER='user_for_your_postgresql_db'
 CHESSDB_PASS='password_for_your_postgresql_user'
-CHESSDB_HOST='host_for_your_postgresql_db'
-CHESSDB_PORT='port_for_your_postgres_db'
+CHESSDB_HOST='host_for_your_postgresql_db'   # optional, defaults to localhost
+CHESSDB_PORT='port_for_your_postgres_db'     # optional, defaults to 5432
 ```
-`CHESSDB_HOST` and `CHESSDB_PORT` are optional, and will default to `localhost` and `5432` respectively
+(You can also set a single `CHESSDB_CONN_STR` connection string instead.)
 
-Now creating and storing games with PostgreSQL is easy:
+Then start the server (the `--init-db` flag creates the schema on first run):
+
+```commandline
+chesssnake api-endpoint --host 0.0.0.0 --port 8000 --init-db
+```
+
+Interactive API docs are served at `http://<host>:8000/docs`.
+
+**2. Connect game clients.** Any number of clients can share the one endpoint. Set `remote=True` and give the endpoint URL via the `api_url` argument or the `CHESSSNAKE_API_URL` environment variable:
 
 ```Python3
 from chesssnake import Game
-from dotenv import load_dotenv
 
-# load our env vars
-load_dotenv()
-
-# Initialize a new game with PostgreSQL
-## If a game already exists in our database, we load the game into memory
-## If it doesn't, chesssnake creates a new game in the database and loads a new game into memory
-## Uniqueness of games is determined by unique combinations of "white_id", "black_id", and "group_id" (all BIG INTs)
+# If a game already exists for these ids it is loaded; otherwise a new one is created.
+# Games are unique per (white_id, black_id, group_id) — all BIGINTs.
 game = Game(
   white_id=123,
   black_id=456,
   group_id=789,
-  white_name="Bob", 
-  black_name="Phil", 
-  sql=True
+  white_name="Bob",
+  black_name="Phil",
+  remote=True,
+  api_url="http://localhost:8000",
 )
 
-game.move('e4') # Bob's move
-game.move('e5') # Phil's move
+game.move('e4')  # Bob's move
+game.move('e5')  # Phil's move
 
-# update the database with any new moves
-game.update_db()
+# push the new state to the api-endpoint
+game.sync()
 ```
 
-If you use `auto_sql` instead of `sql`, your games will be automatically updated with every move and with less transactions.
+Pass `auto_sync=True` instead of calling `sync()` to have every move and draw action pushed to the endpoint automatically.
 
-For more information on using chesssnake with PostgreSQL, see the docs (coming soon)
+Without `remote=True`, a `Game` is a purely local, in-memory game (no server or database required).
+
+For more information, see the docs (coming soon)
