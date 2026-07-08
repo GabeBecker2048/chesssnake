@@ -8,9 +8,8 @@ client, so nothing here imports ``chesslib``. Every operation goes through
 lowercase column name).
 """
 
-from .PSql_Utils import execute_psql, psql_db_init, initialize_connection_pool, validate_ids
 from . import GameError
-
+from .PSql_Utils import execute_psql, initialize_connection_pool, psql_db_init, validate_ids
 
 # The serialized starting position, matching Board.disassemble_board's format.
 INITIAL_BOARD = (

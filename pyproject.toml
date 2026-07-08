@@ -48,7 +48,27 @@ dev = [
     "uvicorn>=0.29",
     "requests>=2.31",
     "httpx>=0.27",
+    "ruff>=0.9",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["chesssnake", "tests"]
+
+[tool.ruff.lint]
+# A pragmatic starter set: pyflakes (F), pycodestyle (E/W), import sorting (I),
+# and pyupgrade (UP). Stricter rule families (bugbear, complexity, etc.) can be
+# layered on in later refactor phases.
+select = ["E", "F", "W", "I", "UP"]
+# Line length is enforced by the formatter for code; don't also flag long
+# docstrings/comments, which are plentiful in the engine.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally compare with `== None` to exercise Square.__eq__ (E711),
+# and use `pytest.importorskip(...)` before importing optional deps (E402).
+"tests/**" = ["E711", "E402"]

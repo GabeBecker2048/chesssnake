@@ -6,9 +6,8 @@ The client's ApiClient is wired to an in-process TestClient (see conftest's
 """
 
 import pytest
-
-from chesssnake.remote.Game import Game, Challenge
 from chesssnake.postgres import GameError
+from chesssnake.remote.Game import Challenge, Game
 
 
 def make_game(remote_client, **kwargs):

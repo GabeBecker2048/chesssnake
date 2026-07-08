@@ -1,6 +1,5 @@
 """Unit tests for coordinate <-> notation conversion and the Square class."""
 
-import pytest
 
 from chesssnake.chesslib.Chess import Board, Square
 

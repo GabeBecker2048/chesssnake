@@ -1,9 +1,8 @@
 """Unit tests for the chesslib Game controller: turns, errors, and draw offers."""
 
 import pytest
-
-from chesssnake.chesslib.Game import Game
 from chesssnake.chesslib import ChessError
+from chesssnake.chesslib.Game import Game
 
 
 def test_new_game_defaults():
