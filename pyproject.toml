@@ -1,3 +1,35 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "chesssnake"
+version = "0.6.6"
+description = "A robust Chess API and backend"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Gabe Becker", email = "gabebecker2048@gmail.com" }]
+dependencies = ["pillow>=11.3"]
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/GabeBecker2048/chesssnake"
+
+[project.optional-dependencies]
+postgres = ["psycopg2~=2.9.9"]
+postgres-binary = ["psycopg2-binary~=2.9.9"]
+
+[tool.setuptools.packages.find]
+include = ["chesssnake*"]
+
+[tool.setuptools.package-data]
+chesssnake = ["data/*.sql", "data/*.ttf", "data/img/*.png"]
