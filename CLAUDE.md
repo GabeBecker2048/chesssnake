@@ -58,26 +58,27 @@ The three tiers and where they live:
 
 1. **Client** (`src/chesssnake/remote/`) — `Game`/`Challenge` (`game.py`) run the engine locally; `ApiClient` (`client.py`) is a thin `requests`-style wrapper. `requests` is imported lazily, only on the `remote=True` path, so local games and the engine stay dependency-free.
 2. **Server** (`src/chesssnake/api/server.py`) — a FastAPI `app` exposing a thin persistence API (get-or-create, update, draw patch/clear, delete, current/exists, challenges, `/health`). It **never imports the `engine`** — it only moves serialized strings/ids in and out of Postgres. Domain errors are mapped to JSON `{error_type, detail}` with status codes (id→422, challenge→409, sql→500); the client re-raises the matching `GameError` type.
-3. **Database** (`src/chesssnake/postgres/`) — the SQL. `operations.py` holds the pure query functions the server calls; `sql.py` the pool + `execute_psql`; `errors.py` the `GameError` exception types (now `Exception`-based so FastAPI can catch them); `data/init.sql` the schema.
+3. **Database** (`src/chesssnake/db/`) — the SQL, behind a common interface (`db/__init__.py` re-exports the operations so callers depend on `chesssnake.db`, leaving room for a future `db/sqlite.py`). `db/postgres.py` holds the pure query functions the server calls (the PostgreSQL backend); `db/sql.py` the pool + `execute_psql`; `db/errors.py` the `GameError` exception types (now `Exception`-based so FastAPI can catch them); `data/init.sql` the schema.
 
 `src/chesssnake/cli.py` is the `chesssnake` console-script entry point (`api-endpoint`, `init-db` subcommands). `src/chesssnake/assets.py` (`asset_path`) centralizes packaged-data lookups.
 
-When changing **gameplay** behavior, edit `engine` — every tier inherits it. When changing **persistence**, edit `postgres/operations.py` (SQL) and mirror the endpoint in `api/server.py` + the method in `remote/client.py`.
+When changing **gameplay** behavior, edit `engine` — every tier inherits it. When changing **persistence**, edit `db/postgres.py` (SQL) and mirror the endpoint in `api/server.py` + the method in `remote/client.py`.
 
 ### `engine/` — the chess engine (no external deps beyond Pillow, for rendering)
 
-`Chess.py` was split into focused modules; the package `__init__.py` re-exports the public names so `from chesssnake.engine import Board, Move, Square, Game, img` works.
+`Chess.py` was split into focused modules; the package `__init__.py` re-exports the public names so `from chesssnake.engine import Board, Move, Square, Game, Color, PieceType, GameStatus, render_board` works.
 
-- `pieces.py` — `Piece` and subclasses `Rook/Knight/Bishop/Queen/King/Pawn`. Each piece implements `threatens(square, board)` (squares it attacks, ignoring pins), `can_move(square, board)` (legality including pin analysis), and a `@staticmethod find(...)` that resolves a target square + optional file/rank disambiguation back to the piece that made the move (this is how algebraic notation is parsed into a concrete piece).
-- `square.py` — `Square(i, j, piece)`. **Coordinate system: `i` = row index 0–7 from the top (i=0 is rank 8, i=7 is rank 1); `j` = file index 0–7 (j=0 is file a). Color: `0` = white, `1` = black.**
-- `board.py` — `Board`. `board[i, j]` returns the `Square` or `None` if off-board — off-board returning `None` is load-bearing for the sliding-piece search loops.
-  - `Board.status`: `0` in play, `1` checkmate, `2` stalemate/draw (the schema allows 0–4). Set inside `Board.move()`.
+- `enums.py` — `Color(IntEnum)` (WHITE=0/BLACK=1, with `.opponent`), `PieceType` (a plain `Enum`; `.value` is the letter code `'K'/'Q'/...`, used at serialization/render boundaries — never `str()` an enum member), and `GameStatus(IntEnum)` (IN_PLAY/CHECKMATE/DRAW). These are threaded through the engine; **serialization always converts via `int(color)` / `piecetype.value`** so the wire format stays byte-identical across Python versions.
+- `pieces.py` — `Piece` and subclasses `Rook/Knight/Bishop/Queen/King/Pawn`. Movement uses `(di, dj)` direction-vector tables through shared `_slide`/`_step` scan helpers. Each piece implements `threatens(square, board)` (squares it attacks, ignoring pins), `can_move(square, board)` (pin-aware), `find_all(...) -> list[Square]` (never raises; used for threat detection) and `find_one(...) -> Square` (resolves algebraic notation, validates the target, raises on 0/ambiguous). Sliding pieces share `_pinned_move_allowed`.
+- `square.py` — `Square(i, j, piece)`. **Coordinate system: `i` = row index 0–7 from the top (i=0 is rank 8, i=7 is rank 1); `j` = file index 0–7 (j=0 is file a). Piece color: `Color.WHITE`=0, `Color.BLACK`=1.**
+- `board.py` — `Board`. `board[i, j]` returns the `Square` or `None` if off-board — off-board returning `None` is load-bearing for the sliding-piece scan loops. `board.lifted(square)` is a context manager that temporarily removes a piece (used by pin/mate analysis).
+  - `Board.status`: a `GameStatus` (`IN_PLAY`/`CHECKMATE`/`DRAW`; the schema allows 0–4). Set inside `Board.move()`.
   - `Board.two_moveP`: the `Square` a pawn double-stepped to last move, for en passant.
 - `move.py` — the `Move` class parses/validates one algebraic move against a board.
-- `notation.py` — coordinate↔notation helpers (`get_coords`, `get_c_notation`), `is_valid_c_notation` (the notation gate called before any move), and the `FILES` constant. `Board.get_coords`/`Board.get_c_notation`/`Move.is_valid_c_notation` are kept as thin facades delegating here.
-- `image.py` — `img(board, p1, p2, move=None) -> PIL.Image`. Composites piece PNGs from `data/img/` onto a template, renders both white- and black-oriented boards, overlays player names (truncated to 10 chars) and highlights the last move in orange. All coordinates are in 68px tiles.
+- `notation.py` — the `FILES`/`RANKS` constants, coordinate↔notation helpers (`get_coords`, `get_c_notation`), `is_valid_c_notation` (the notation gate called before any move), and `matches_disambiguation`. `Board.get_coords`/`Board.get_c_notation`/`Move.is_valid_c_notation` are kept as thin facades delegating here.
+- `image.py` — `render_board(board, white_name, black_name, move=None) -> PIL.Image`. Composites piece PNGs from `data/img/` (cached) onto a template, renders both white- and black-oriented boards via `_render_side`, overlays player names (truncated to 10 chars) and highlights the last move in orange. All coordinates are in 68px tiles.
 - `errors.py` — gameplay exception hierarchy rooted at `ChessError`. `move()` raises these for illegal/ambiguous input (see the `Game.move` docstring for the full list).
-- `game.py` — the base `Game` controller (turns, move validation, draw offers, rendering) that `remote/game.py`'s `Game` subclasses.
+- `game.py` — the base `Game` controller (turns, move validation, draw offers, rendering) that `remote/game.py`'s `Game` subclasses. `turn` is a `Color`; `draw` is `Color | None`.
 
 ### `remote/` — the client (tier 1)
 
@@ -88,16 +89,18 @@ When changing **gameplay** behavior, edit `engine` — every tier inherits it. W
 
 ### `api/` — the server (tier 2)
 
-- `server.py` — the FastAPI `app`. Pydantic models validate bodies; a `lifespan` handler initializes the connection pool from env creds (and runs schema init if `CHESSSNAKE_INIT_DB` is set). Routes delegate straight to `postgres/operations.py`.
+- `server.py` — the FastAPI `app`. Pydantic models validate bodies; a `lifespan` handler initializes the connection pool from env creds (and runs schema init if `CHESSSNAKE_INIT_DB` is set). Routes delegate to the `db` layer (`from ..db import postgres as ops`).
 
-### `postgres/` — the database layer (tier 3)
+### `db/` — the database layer (tier 3)
 
-- `operations.py` — the pure SQL operations the server calls (`game_get_or_create`, `game_update`, `game_update_draw/clear`, `game_delete`, `current_games`, `game_exists`, `challenge*`, `db_init`). They deal only in primitives/dicts — **no `engine` import** — and validate ids via `validate_ids`.
+- `__init__.py` — the common interface: re-exports the operation functions and `errors`/`sql`/`postgres` so callers use `chesssnake.db`. A future `db/sqlite.py` can implement the same functions behind this interface.
+- `postgres.py` — the PostgreSQL backend: the pure SQL operations the server calls (`game_get_or_create`, `game_update`, `game_update_draw/clear`, `game_delete`, `current_games`, `game_exists`, `challenge*`, `db_init`). They deal only in primitives/dicts — **no `engine` import** — and validate ids via `validate_ids`.
 - `sql.py` — connection pooling (`initialize_connection_pool`), credential loading, and `execute_psql(statement, params)`, which every query goes through. `execute_psql` always commits on success and rolls back on error, and returns a list of dict-like rows (or `None`). It uses a `RealDictCursor`, so **query results are dict rows keyed by column name — and PostgreSQL folds unquoted identifiers to lowercase, so the keys are lowercase** (`row['opponentid']`, not `row['OpponentId']`) unless a query quotes the alias. Credentials come from `CHESSDB_CONN_STR` or the `CHESSDB_NAME/USER/PASS/HOST/PORT` env vars (host/port default to `localhost`/`5432`); pass a `sql_creds` dict to override.
 - `data/init.sql` — idempotent schema for `Games` and `Challenges` (composite PKs `(GroupId, WhiteId, BlackId)` / `(GroupId, Challenger, Challenged)`, an `UpdatedAt` trigger, and partial-key indexes). `Turn`/`Draw`/`Status` are stored as `INTEGER` (not booleans) to match how the code reads them. There is no `Groups` table — `GroupId` is just a discriminator, not a foreign key.
-- `errors.py` — SQL/challenge exception hierarchy rooted at `GameError` (an `Exception` subclass, separate from the engine's `ChessError`; shared by client and server for error mapping).
+- `errors.py` — SQL/challenge exception hierarchy rooted at `GameError` (an `Exception` subclass, separate from the engine's `ChessError`; shared by client and server for error mapping). (Its `### db/` header replaces the former `postgres/` package.)
 
 ## Conventions
 
 - Docstrings are reStructuredText (`:param:`/`:type:`/`:raises:`) and thorough — match that style, and keep the `:raises:` lists accurate since they're the closest thing to a spec for `move()`.
-- The sliding-piece `threatens`/`find` methods are intentionally repetitive (one unrolled block per direction) for performance; follow the existing pattern rather than abstracting it when editing.
+- Piece movement is data-driven: `(di, dj)` direction-vector tables fed through the shared `_slide`/`_step` scan helpers in `pieces.py`. Add a piece or tweak movement by editing its direction table, not by unrolling per-direction blocks. (This replaces the engine's earlier hand-unrolled loops, which were consolidated in the Phase 2 refactor.)
+- Enums are the source of truth for color/piece-type/status; convert to primitives (`int(color)`, `piecetype.value`) only at the serialization and rendering boundaries — never rely on `str()` of an enum member.

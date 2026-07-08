@@ -1,6 +1,9 @@
 """The `Board`: the 8x8 grid plus move/undo and check/mate detection."""
 
+from contextlib import contextmanager
+
 from . import errors, notation
+from .enums import Color, GameStatus, PieceType
 from .move import Move
 from .pieces import Bishop, King, Knight, Pawn, Queen, Rook
 from .square import Square
@@ -108,11 +111,22 @@ class Board:
 
         self.board = board
         self.two_moveP = two_moveP
-        # status meaning:
-        #   - a "0" status means the game is in play
-        #   - a "1" status means the game ended with checkmate
-        #   - a "2" status means the game ended with stalemate
-        self.status = 0
+        self.status = GameStatus.IN_PLAY
+
+    @contextmanager
+    def lifted(self, square):
+        """
+        Context manager that temporarily removes the piece on ``square``.
+
+        The piece is restored when the block exits (even on exception), making
+        "remove piece, inspect board, put it back" analyses exception-safe.
+        """
+        piece = square.piece
+        square.piece = None
+        try:
+            yield
+        finally:
+            square.piece = piece
 
     def __iter__(self):
         """
@@ -159,8 +173,8 @@ class Board:
             out += str(8-i) + "\t"
             for j in range(0, 8):
                 if self[i, j].piece is not None:
-                    out += self[i, j].piece.piecetype
-                    out += str(self[i, j].piece.color)
+                    out += self[i, j].piece.piecetype.value
+                    out += str(int(self[i, j].piece.color))
                     out += " "
                 else:
                     out += "-- "
@@ -192,6 +206,7 @@ class Board:
         :raises errors.CaptureOwnPieceError: If a piece of the same color exists on the target square.
         :raises errors.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
         """
+        player = Color(player)
         prev_two_moveP = self.two_moveP
 
         # makes the move object
@@ -199,12 +214,12 @@ class Board:
 
         # if en passant, delete the old piece
         if m.en:
-            x = 1 if player == 0 else -1
+            x = 1 if player == Color.WHITE else -1
             self[m.to.i + x, m.to.j].piece = None
 
         # moving the rook for castling
         if m.castle is not None:
-            x = 7 if player == 0 else 0
+            x = 7 if player == Color.WHITE else 0
             j1 = 7 if m.castle == 'K' else 0
             j2 = 5 if m.castle == 'K' else 3
             self[x, j1].piece = None
@@ -232,17 +247,17 @@ class Board:
             raise errors.MoveIntoCheckError
 
         # changes the game status if a mate or stalemate is detected
-        if self.check_for_mate(1 - player):
-            self.status = 1
-        elif not self.check_for_check(1-player) and self.check_for_stalemate(1 - player):
-            self.status = 2
+        if self.check_for_mate(player.opponent):
+            self.status = GameStatus.CHECKMATE
+        elif not self.check_for_check(player.opponent) and self.check_for_stalemate(player.opponent):
+            self.status = GameStatus.DRAW
 
         # if no pawns where moved two squares, the board remembers
         if prev_two_moveP is not None and self.two_moveP == prev_two_moveP:
             self.two_moveP = None
 
         # if the piece is a rook or a king, sets moved to True
-        if new_piece.piecetype == 'K' or new_piece.piecetype == 'R':
+        if new_piece.piecetype in (PieceType.KING, PieceType.ROOK):
             new_piece.moved = True
 
         return m
@@ -264,16 +279,17 @@ class Board:
         :type prev_two_moveP: Square or None
         """
         # changes self.two_moveP back to what it was before
+        player = Color(player)
         self.two_moveP = prev_two_moveP
 
         # if en passant, places back the old piece
         if move.en:
-            x = 1 if player == 0 else -1
-            self[move.to.i + x, move.to.j].piece = Pawn(1 - player)
+            x = 1 if player == Color.WHITE else -1
+            self[move.to.i + x, move.to.j].piece = Pawn(player.opponent)
 
         # moving the rook for castling
         if move.castle is not None:
-            x = 7 if player == 0 else 0
+            x = 7 if player == Color.WHITE else 0
             j1 = 7 if move.castle == 'K' else 0
             j2 = 5 if move.castle == 'K' else 3
             self[x, j1].piece = Rook(player, moved=False)
@@ -296,18 +312,19 @@ class Board:
             could not be found.
         :rtype: Square or None
         """
+        color = Color(color)
         for x in range(8):
 
             # if color is white, search from bottom up
             # if color is black, search from top down
-            i = 7 - x if color == 0 else x
+            i = 7 - x if color == Color.WHITE else x
 
             # search from right to left (it is common to kingside castle, which is towards the right)
             for j in range(7, -1, -1):
 
                 if (
                         self[i, j].piece is not None
-                        and self[i, j].piece.piecetype == 'K'
+                        and self[i, j].piece.piecetype == PieceType.KING
                         and self[i, j].piece.color == color
                 ):
                     return self[i, j]
@@ -328,44 +345,15 @@ class Board:
         :return: A list of squares that contain pieces threatening the specified square.
         :rtype: list[Square]
         """
+        opponent = Color(player).opponent
+
         threats = []
-
-        pawns = Pawn.find(self, square, 1 - player, True, errors=False)
-        if isinstance(pawns, Square):
-            threats.append(pawns)
-        elif pawns is not None:
-            threats.extend(pawns)
-
-        rooks = Rook.find(self, square, 1 - player, False, errors=False)
-        if isinstance(rooks, Square):
-            threats.append(rooks)
-        elif rooks is not None:
-            threats.extend(rooks)
-
-        knights = Knight.find(self, square, 1 - player, False, errors=False)
-        if isinstance(knights, Square):
-            threats.append(knights)
-        elif knights is not None:
-            threats.extend(knights)
-
-        bishops = Bishop.find(self, square, 1 - player, False, errors=False)
-        if isinstance(bishops, Square):
-            threats.append(bishops)
-        elif bishops is not None:
-            threats.extend(bishops)
-
-        queens = Queen.find(self, square, 1 - player, False, errors=False)
-        if isinstance(queens, Square):
-            threats.append(queens)
-        elif queens is not None:
-            threats.extend(queens)
-
-        kings = King.find(self, square, 1 - player, False, errors=False)
-        if isinstance(kings, Square):
-            threats.append(kings)
-        elif kings is not None:
-            threats.extend(kings)
-
+        threats.extend(Pawn.find_all(self, square, opponent, capture=True))
+        threats.extend(Rook.find_all(self, square, opponent))
+        threats.extend(Knight.find_all(self, square, opponent))
+        threats.extend(Bishop.find_all(self, square, opponent))
+        threats.extend(Queen.find_all(self, square, opponent))
+        threats.extend(King.find_all(self, square, opponent))
         return threats
 
     # returns true if given player is in check
@@ -385,15 +373,7 @@ class Board:
         if king_square is None:
             return False
 
-        threats = self.threats_on(king_square, player)
-
-        # if there are zero threats on the king, he is not in check
-        if len(threats) == 0:
-            return False
-
-        # if there are threats on the king, he is in check
-        else:
-            return True
+        return len(self.threats_on(king_square, player)) > 0
 
     # returns true if the given player is in checkmate
     # returns false otherwise
@@ -409,6 +389,7 @@ class Board:
         :return: `True` if the player's King is in checkmate, otherwise `False`.
         :rtype: bool
         """
+        player = Color(player)
         if not self.check_for_check(player):
             return False
 
@@ -425,9 +406,7 @@ class Board:
         # Kg8->h8, would incorrectly look safe).
         delta_is = [1, 1, 0, -1, -1, -1, 0, 1]
         delta_js = [0, 1, 1, 1, 0, -1, -1, -1]
-        king_piece = king_square.piece
-        king_square.piece = None
-        try:
+        with self.lifted(king_square):
             for index in range(8):
 
                 psquare = self[king_square.i + delta_is[index], king_square.j + delta_js[index]]
@@ -435,13 +414,10 @@ class Board:
                 # if there is a square that the king can move to, returns false
                 if (
                         psquare is not None
-                        and (psquare.piece is None
-                             or (psquare.piece is not None and psquare.piece.color == 1 - player))
+                        and (psquare.piece is None or psquare.piece.color == player.opponent)
                         and len(self.threats_on(psquare, player)) == 0
                 ):
                     return False
-        finally:
-            king_square.piece = king_piece
 
         # checks if the piece threatening can be taken OR if the piece threatening can be blocked
         if len(threats) == 1:  # this will only work if there is only one threatening piece
@@ -450,14 +426,14 @@ class Board:
             threat = threats[0]
 
             # if the piece can be taken, returns False
-            if len(self.threats_on(threat, 1 - player)) > 0:
+            if len(self.threats_on(threat, player.opponent)) > 0:
                 return False
 
             # blocking
-            if threat.piece.piecetype == 'R' or threat.piece.piecetype == 'B' or threat.piece.piecetype == 'Q':
+            if threat.piece.piecetype in (PieceType.ROOK, PieceType.BISHOP, PieceType.QUEEN):
                 pbsquares = []
                 # horizontal and vertical
-                if threat.piece.piecetype == 'R' or threat.piece.piecetype == 'Q':
+                if threat.piece.piecetype in (PieceType.ROOK, PieceType.QUEEN):
 
                     # if they are on the same rank...
                     if threat.i == king_square.i:
@@ -486,7 +462,7 @@ class Board:
                             pbsquares.append(self[x, threat.j])
 
                 # diagonal
-                if threat.piece.piecetype == 'B' or threat.piece.piecetype == 'Q':
+                if threat.piece.piecetype in (PieceType.BISHOP, PieceType.QUEEN):
 
                     delta_i = threat.i - king_square.j
                     delta_j = threat.j - king_square.j
@@ -517,21 +493,20 @@ class Board:
                 # if any of the possible blocking squares (pbsquares) are blockable, returns false
                 for pbsquare in pbsquares:
 
-                    # this checks if a pawn can block the threat by moving forward (ie the "capture" parameter is False)
-                    pawn = Pawn.find(self, pbsquare, player, False, errors=False)
-                    if isinstance(pawn, Pawn):
+                    # a friendly pawn can block the threat by advancing (a non-capture move)
+                    if Pawn.find_all(self, pbsquare, player, capture=False):
                         return False
 
                     # this is a list of pieces that threaten the possible blocking squares
                     # possible blocking threats (pbthreats)
-                    pbthreats = self.threats_on(pbsquare, 1 - player)
+                    pbthreats = self.threats_on(pbsquare, player.opponent)
                     if len(pbthreats) != 0:
 
                         # kings and pawns need to be excluded from this list:
                         #   - kings can't block a check
                         #   - pawns can't block a check by capturing
                         for square in pbthreats:
-                            if square.piece.piecetype != 'P' and square.piece.piecetype != 'K':
+                            if square.piece.piecetype not in (PieceType.PAWN, PieceType.KING):
                                 return False
 
         return True
@@ -549,6 +524,7 @@ class Board:
         :return: `True` if the player is in stalemate, otherwise `False`.
         :rtype: bool
         """
+        player = Color(player)
         for rank in self:
             for square in rank:
                 if square.piece is not None and square.piece.color == player and square.piece.can_move(square, self):
@@ -665,19 +641,19 @@ class Board:
         for rank in board:
             for square in rank:
                 if square.piece is not None:
-                    boardstring += square.piece.piecetype + str(square.piece.color) + " "
+                    boardstring += square.piece.piecetype.value + str(int(square.piece.color)) + " "
 
-                    if (square.i == 7 and square.j == 0) and square.piece.piecetype == 'R' and square.piece.moved:
+                    if (square.i == 7 and square.j == 0) and square.piece.piecetype == PieceType.ROOK and square.piece.moved:
                         moved[0] = "1"
-                    elif (square.i == 7 and square.j == 4) and square.piece.piecetype == 'K' and square.piece.moved:
+                    elif (square.i == 7 and square.j == 4) and square.piece.piecetype == PieceType.KING and square.piece.moved:
                         moved[1] = "1"
-                    elif (square.i == 7 and square.j == 7) and square.piece.piecetype == 'R' and square.piece.moved:
+                    elif (square.i == 7 and square.j == 7) and square.piece.piecetype == PieceType.ROOK and square.piece.moved:
                         moved[2] = "1"
-                    elif (square.i == 0 and square.j == 0) and square.piece.piecetype == 'R' and square.piece.moved:
+                    elif (square.i == 0 and square.j == 0) and square.piece.piecetype == PieceType.ROOK and square.piece.moved:
                         moved[3] = "1"
-                    elif (square.i == 0 and square.j == 4) and square.piece.piecetype == 'K' and square.piece.moved:
+                    elif (square.i == 0 and square.j == 4) and square.piece.piecetype == PieceType.KING and square.piece.moved:
                         moved[4] = "1"
-                    elif (square.i == 0 and square.j == 7) and square.piece.piecetype == 'R' and square.piece.moved:
+                    elif (square.i == 0 and square.j == 7) and square.piece.piecetype == PieceType.ROOK and square.piece.moved:
                         moved[5] = "1"
 
                 else:

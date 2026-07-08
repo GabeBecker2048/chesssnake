@@ -74,7 +74,7 @@ def get_connection():
     """
     if not connection_pool:
         raise errors.SQLError("Connection pool is not initialized.\n"
-                                 "    Use chessnake.postgres.Sql_Utils.initialize_connection_pool")
+                                 "    Use chesssnake.db.sql.initialize_connection_pool")
     return connection_pool.getconn()
 
 

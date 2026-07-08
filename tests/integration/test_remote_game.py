@@ -7,7 +7,7 @@ The client's ApiClient is wired to an in-process TestClient (see conftest's
 
 import pytest
 
-from chesssnake.postgres import errors as GameError
+from chesssnake.db import errors as GameError
 from chesssnake.remote.game import Challenge, Game
 
 
@@ -42,7 +42,7 @@ def test_auto_sync_persists_each_move(remote_client):
 
     reloaded = make_game(remote_client, white_id=3, black_id=4, group_id=10)
     p = piece_at(reloaded.board, "e4")
-    assert p is not None and p.piecetype == "P"
+    assert p is not None and p.piecetype.value == "P"
     assert reloaded.turn == 1
 
 
