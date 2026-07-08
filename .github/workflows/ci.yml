@@ -16,8 +16,8 @@ jobs:
       # Uses the ruff version pinned in uv.lock for reproducibility.
       - name: Ruff lint
         run: uv run ruff check
-      # `ruff format --check` will be added once the codebase is formatted
-      # (the next Phase 0 checklist item).
+      - name: Ruff format
+        run: uv run ruff format --check
       - name: mypy (lenient)
         run: uv run mypy
 
@@ -51,3 +51,15 @@ jobs:
       # and exercise the api-endpoint + remote client (api/client extras).
       - name: Integration tests
         run: uv run --extra api --extra client pytest tests/integration
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      # Runs the whole suite (unit + integration) so the coverage number is
+      # authoritative, and fails the build if it drops below the gate.
+      - name: Tests with coverage gate
+        run: uv run --extra api --extra client pytest --cov --cov-report=term-missing --cov-fail-under=75

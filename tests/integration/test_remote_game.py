@@ -10,6 +10,8 @@ import pytest
 from chesssnake.db import errors as GameError
 from chesssnake.remote.game import Challenge, Game
 
+pytestmark = pytest.mark.integration
+
 
 def make_game(remote_client, **kwargs):
     kwargs.setdefault("remote", True)
