@@ -1,11 +1,11 @@
-import importlib.resources
 from os import getenv
 
 import psycopg2
 from psycopg2 import pool, sql
 from psycopg2.extras import RealDictCursor
 
-from . import GameError
+from ..assets import asset_path
+from . import errors
 
 # Initialize the database connection pool
 connection_pool = None
@@ -44,7 +44,7 @@ def load_psql_conn_str(sql_creds=None):
     elif _sql_creds.get("name") and _sql_creds.get("user") and _sql_creds.get("password"):
         return "dbname='{name}' user='{user}' password='{password}' host='{host}' port='{port}'".format(**_sql_creds)
     else:
-        raise GameError.SQLAuthError()
+        raise errors.SQLAuthError()
 
 
 def initialize_connection_pool(minconn=1, maxconn=10, sql_creds=None):
@@ -64,7 +64,7 @@ def initialize_connection_pool(minconn=1, maxconn=10, sql_creds=None):
         if connection_pool:
             print("Database connection pool successfully initialized.")
     except psycopg2.Error as e:
-        raise GameError.SQLError(f"Failed to initialize database connection pool: {str(e)}")
+        raise errors.SQLError(f"Failed to initialize database connection pool: {str(e)}")
 
 
 def get_connection():
@@ -73,7 +73,7 @@ def get_connection():
     :return: A connection object from the pool.
     """
     if not connection_pool:
-        raise GameError.SQLError("Connection pool is not initialized.\n"
+        raise errors.SQLError("Connection pool is not initialized.\n"
                                  "    Use chessnake.postgres.Sql_Utils.initialize_connection_pool")
     return connection_pool.getconn()
 
@@ -132,11 +132,11 @@ def psql_db_init(sql_creds=None, schema_init=True):
                 else:
                     print(f"Database '{db_name}' already exists.")
     except psycopg2.errors.InsufficientPrivilege as e:
-        raise GameError.SQLError(
+        raise errors.SQLError(
             f"Insufficient privileges to create the database '{db_name}'. Ensure the user has appropriate permissions:\n{e}"
         )
     except psycopg2.Error as e:
-        raise GameError.SQLError(f"Database creation error: {e}")
+        raise errors.SQLError(f"Database creation error: {e}")
 
     if schema_init:
         psql_db_schema_init(sql_creds=sql_creds)
@@ -161,7 +161,7 @@ def psql_db_schema_init(sql_creds=None):
     try:
         # Establish a direct connection using environment-based or provided credentials
         conn = psycopg2.connect(load_psql_conn_str(sql_creds=sql_creds))
-        db_init_fp = str(importlib.resources.files('chesssnake').joinpath('data/init.sql'))
+        db_init_fp = asset_path('init.sql')
         with open(db_init_fp) as db_init_file:
             init_script = db_init_file.read()
 
@@ -173,12 +173,12 @@ def psql_db_schema_init(sql_creds=None):
         print("Database schema initialized successfully.")
 
     except FileNotFoundError as e:
-        raise GameError.SQLError(
+        raise errors.SQLError(
             f"{e}\n"
             f"Database initialization file not found, likely due to corrupt or modified installation.\n"
             f"Try reinstalling chesssnake.")
     except psycopg2.Error as e:
-        raise GameError.SQLError(f"Database initialization error:\n{e}")
+        raise errors.SQLError(f"Database initialization error:\n{e}")
     finally:
         if conn:
             conn.close()
@@ -196,9 +196,9 @@ def validate_ids(*ids: int):
 
     for id_ in ids:
         if not isinstance(id_, int):
-            raise GameError.SQLIdError(id_)
+            raise errors.SQLIdError(id_)
         if not (BIGINT_MIN <= id_ <= BIGINT_MAX):
-            raise GameError.SQLIdError(id_)
+            raise errors.SQLIdError(id_)
 
 def execute_psql(statement, params=None):
     """
@@ -225,7 +225,7 @@ def execute_psql(statement, params=None):
     except psycopg2.Error as e:
         if conn is not None:
             conn.rollback()
-        raise GameError.SQLError(f"SQL execution error: {e}")
+        raise errors.SQLError(f"SQL execution error: {e}")
     finally:
         if conn is not None:
             release_connection(conn)

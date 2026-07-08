@@ -6,7 +6,7 @@ Subcommands:
   chesssnake init-db        Initialize the database schema, then exit.
 
 Database credentials are read from the CHESSDB_* environment variables
-(see chesssnake.postgres.PSql_Utils).
+(see chesssnake.postgres.sql).
 """
 
 import argparse
@@ -28,7 +28,7 @@ def _run_api_endpoint(args):
 
 
 def _run_init_db(_args):
-    from .postgres.PSql_Utils import initialize_connection_pool, psql_db_schema_init
+    from .postgres.sql import initialize_connection_pool, psql_db_schema_init
     initialize_connection_pool()
     psql_db_schema_init()
 

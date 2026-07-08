@@ -3,13 +3,13 @@ Server-side database operations for the chesssnake API.
 
 These are the pure PostgreSQL operations that back the REST API. They deal only
 in primitive values (ints, strings, dicts) — the chess engine lives on the
-client, so nothing here imports ``chesslib``. Every operation goes through
+client, so nothing here imports the ``engine``. Every operation goes through
 ``execute_psql`` (parameterized, committing, RealDictCursor rows keyed by
 lowercase column name).
 """
 
-from . import GameError
-from .PSql_Utils import execute_psql, initialize_connection_pool, psql_db_init, validate_ids
+from . import errors
+from .sql import execute_psql, initialize_connection_pool, psql_db_init, validate_ids
 
 # The serialized starting position, matching Board.disassemble_board's format.
 INITIAL_BOARD = (
@@ -28,7 +28,7 @@ def db_init(sql_creds=None, create_database=False):
     exist (requires appropriate permissions). If ``sql_creds`` is not provided,
     credentials are read from the ``CHESSDB_*`` environment variables.
 
-    :raises GameError.GameError: If any step of initialization fails.
+    :raises errors.GameError: If any step of initialization fails.
     """
     try:
         if create_database:
@@ -36,7 +36,7 @@ def db_init(sql_creds=None, create_database=False):
         initialize_connection_pool(sql_creds=sql_creds)
         print("Database initialized successfully.")
     except Exception as e:
-        raise GameError.GameError(f"Database initialization error:\n{str(e)}")
+        raise errors.GameError(f"Database initialization error:\n{str(e)}")
 
 
 # --- Games -----------------------------------------------------------------
@@ -227,16 +227,16 @@ def challenge(challenger, opponent, group_id=0):
     Runs the whole check-and-mutate sequence server-side so concurrent clients
     stay consistent.
 
-    :raises GameError.ChallengeError: On self-challenge, an existing game, or a
+    :raises errors.ChallengeError: On self-challenge, an existing game, or a
         duplicate outstanding challenge.
     """
     validate_ids(challenger, opponent, group_id)
 
     if challenger == opponent:
-        raise GameError.ChallengeError("You can't challenge yourself.")
+        raise errors.ChallengeError("You can't challenge yourself.")
 
     if game_exists(challenger, opponent, group_id):
-        raise GameError.ChallengeError(
+        raise errors.ChallengeError(
             f"There is an unresolved game between {challenger} and {opponent} already!"
         )
 
@@ -245,7 +245,7 @@ def challenge(challenger, opponent, group_id=0):
         challenge_create(challenger, opponent, group_id)
         return False
     elif challenger == existing["challenger"]:
-        raise GameError.ChallengeError(
+        raise errors.ChallengeError(
             f"You have already challenged {opponent}! Wait for them to accept."
         )
 

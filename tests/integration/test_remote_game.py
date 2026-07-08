@@ -6,8 +6,9 @@ The client's ApiClient is wired to an in-process TestClient (see conftest's
 """
 
 import pytest
-from chesssnake.postgres import GameError
-from chesssnake.remote.Game import Challenge, Game
+
+from chesssnake.postgres import errors as GameError
+from chesssnake.remote.game import Challenge, Game
 
 
 def make_game(remote_client, **kwargs):
@@ -16,7 +17,7 @@ def make_game(remote_client, **kwargs):
 
 
 def piece_at(board, c_notation):
-    from chesssnake.chesslib import Chess
+    from chesssnake import engine as Chess
     i, j = Chess.Board.get_coords(c_notation)
     return board[i, j].piece
 

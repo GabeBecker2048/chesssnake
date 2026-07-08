@@ -1,7 +1,8 @@
-"""Shared helpers for chesslib unit tests."""
+"""Shared helpers for engine unit tests."""
 
 import pytest
-from chesssnake.chesslib import Chess
+
+from chesssnake import engine as Chess
 
 
 def _make_board(pieces, two_moveP=None, moved="111111"):

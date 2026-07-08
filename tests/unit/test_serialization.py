@@ -1,6 +1,6 @@
 """Unit tests for board serialization (disassemble_board / assemble_board)."""
 
-from chesssnake.chesslib.Chess import Board
+from chesssnake.engine import Board
 
 
 def test_initial_board_disassembles_to_expected_string():
