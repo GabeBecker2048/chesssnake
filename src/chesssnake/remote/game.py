@@ -1,7 +1,7 @@
 """
 Remote-capable ``Game``.
 
-By default this is exactly the in-memory ``chesslib`` game (no network, no extra
+By default this is exactly the in-memory engine game (no network, no extra
 dependencies). Pass ``remote=True`` (with an ``api_url`` or the
 ``CHESSSNAKE_API_URL`` environment variable) to load/persist the game through a
 ``chesssnake api-endpoint`` REST server: the chess engine still runs locally and
@@ -10,8 +10,8 @@ only serialized state crosses the wire, so many clients can share one database.
 
 import os
 
-from ..chesslib import Chess
-from ..chesslib.Game import Game as BaseGame
+from ..engine import Board, Square
+from ..engine.game import Game as BaseGame
 
 
 def _make_client(api_url=None, client=None):
@@ -63,19 +63,19 @@ class Game(BaseGame):
     @staticmethod
     def _board_from_state(state):
         if state["pawnmove"] is not None:
-            i, j = Chess.Board.get_coords(state["pawnmove"])
-            pawnmove = Chess.Square(i, j)
+            i, j = Board.get_coords(state["pawnmove"])
+            pawnmove = Square(i, j)
         else:
             pawnmove = None
-        board = Chess.Board(
-            board=Chess.Board.assemble_board(state["board"], state["moved"]),
+        board = Board(
+            board=Board.assemble_board(state["board"], state["moved"]),
             two_moveP=pawnmove,
         )
         board.status = int(state["status"])
         return board
 
     def _state_payload(self):
-        boardstring, moved = Chess.Board.disassemble_board(self.board)
+        boardstring, moved = Board.disassemble_board(self.board)
         return {
             "board": boardstring,
             "turn": self.turn,

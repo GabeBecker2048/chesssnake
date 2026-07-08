@@ -1,9 +1,10 @@
-import importlib.resources
 from copy import deepcopy
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .Chess import Board, Move
+from ..assets import asset_path
+from .board import Board
+from .move import Move
 
 
 # takes in board AFTER move and move object
@@ -34,20 +35,20 @@ def img(board: Board, p1: str, p2: str, move: Move = None):
     if len(p2) > 10:
         p2 = p2[:10]
 
-    Roboto_fp = str(importlib.resources.files('chesssnake').joinpath('data/Roboto-Black.ttf'))
+    Roboto_fp = asset_path('Roboto-Black.ttf')
 
     big_font = ImageFont.truetype(Roboto_fp, 60)
     small_font = ImageFont.truetype(Roboto_fp, 15)
 
     # gets the blank template
-    img = Image.open(str(importlib.resources.files('chesssnake').joinpath('data/img/template.png')))
+    img = Image.open(asset_path('img/template.png'))
 
-    wboard = Image.open(str(importlib.resources.files('chesssnake').joinpath('data/img/blankboard.png')))
-    bboard = Image.open(str(importlib.resources.files('chesssnake').joinpath('data/img/blankboard.png')))
+    wboard = Image.open(asset_path('img/blankboard.png'))
+    bboard = Image.open(asset_path('img/blankboard.png'))
 
     if move is not None:
         # adds orange squares
-        orange_square = Image.open(str(importlib.resources.files('chesssnake').joinpath('data/img/orange.png'))).convert('RGBA')
+        orange_square = Image.open(asset_path('img/orange.png')).convert('RGBA')
         wboard.alpha_composite(orange_square, (move.prev.j * 68, move.prev.i * 68))
         wboard.alpha_composite(orange_square, (move.to.j * 68, move.to.i * 68))
         bboard.alpha_composite(orange_square, ((7 - move.prev.j) * 68, (7 - move.prev.i) * 68))
@@ -61,7 +62,7 @@ def img(board: Board, p1: str, p2: str, move: Move = None):
                 # gets the piece image
                 ptype = board[x, y].piece.piecetype
                 color = board[x, y].piece.color
-                piece = Image.open(str(importlib.resources.files('chesssnake').joinpath(f'data/img/{ptype}{color}.png'))).convert('RGBA')
+                piece = Image.open(asset_path(f'img/{ptype}{color}.png')).convert('RGBA')
 
                 # gets the image coords
                 i = 68 * x
@@ -105,7 +106,7 @@ def img(board: Board, p1: str, p2: str, move: Move = None):
                 # gets the piece image
                 ptype = reversed_board[x][y].piece.piecetype
                 color = reversed_board[x][y].piece.color
-                piece = Image.open(str(importlib.resources.files('chesssnake').joinpath(f'data/img/{ptype}{color}.png'))).convert('RGBA')
+                piece = Image.open(asset_path(f'img/{ptype}{color}.png')).convert('RGBA')
 
                 # gets the image coords
                 i = 68 * x
