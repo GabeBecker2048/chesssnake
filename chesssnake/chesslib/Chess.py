@@ -2505,21 +2505,30 @@ class Board:
 
         threats = self.threats_on(king_square, player)
 
-        # checks if the kings can move
+        # checks if the king can move.
+        # The king is temporarily lifted off the board so it does not block a
+        # sliding attacker's line of sight to the square behind it (otherwise an
+        # escape square "behind" the king along the checking line, e.g. a back-rank
+        # Kg8->h8, would incorrectly look safe).
         delta_is = [1, 1, 0, -1, -1, -1, 0, 1]
         delta_js = [0, 1, 1, 1, 0, -1, -1, -1]
-        for index in range(8):
+        king_piece = king_square.piece
+        king_square.piece = None
+        try:
+            for index in range(8):
 
-            psquare = self[king_square.i + delta_is[index], king_square.j + delta_js[index]]
+                psquare = self[king_square.i + delta_is[index], king_square.j + delta_js[index]]
 
-            # if there is a square that the king can move to, returns false
-            if (
-                    psquare is not None
-                    and (psquare.piece is None
-                         or (psquare.piece is not None and psquare.piece.color == 1 - player))
-                    and len(self.threats_on(psquare, player)) == 0
-            ):
-                return False
+                # if there is a square that the king can move to, returns false
+                if (
+                        psquare is not None
+                        and (psquare.piece is None
+                             or (psquare.piece is not None and psquare.piece.color == 1 - player))
+                        and len(self.threats_on(psquare, player)) == 0
+                ):
+                    return False
+        finally:
+            king_square.piece = king_piece
 
         # checks if the piece threatening can be taken OR if the piece threatening can be blocked
         if len(threats) == 1:  # this will only work if there is only one threatening piece
@@ -2943,13 +2952,12 @@ class Move:
                     square = Pawn.find(board, to, player, capture, en=True, file_limit=file_limit)
                     en = True
 
-                else:
-                    piece = square.piece
-                    prev = square
+                piece = square.piece
+                prev = square
 
-                    # makes sure the player cannot move a pawn to opponent's back rank without promoting
-                    if i == (0 if player == 0 else 7) and promotion is None:
-                        raise ChessError.PromotionError(need_promotion=True)
+                # makes sure the player cannot move a pawn to opponent's back rank without promoting
+                if i == (0 if player == 0 else 7) and promotion is None:
+                    raise ChessError.PromotionError(need_promotion=True)
 
         # castling
         else:
@@ -3015,7 +3023,7 @@ class Move:
         if '+' == movename[-1]:
             movename = movename[:-1]
         if '#' == movename[-1]:
-            movename = movename[-1]
+            movename = movename[:-1]
 
         # if the move is a castling move, returns true
         if movename == "0-0" or movename == "0-0-0":

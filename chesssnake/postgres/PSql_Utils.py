@@ -103,13 +103,17 @@ def psql_db_init(sql_creds=None, schema_init=True):
     :type sql_creds: dict or None
     :raises GameError: If there is a failure due to missing permissions or other SQL errors.
     """
-    # Use modified credentials without a database name to connect to the PostgreSQL server
-    admin_conn_creds = sql_creds.copy() if sql_creds else load_env_psql_creds()
-    admin_conn_creds["name"] = None  # Remove db-name for admin-level connection
+    # Merge provided credentials over the environment defaults so the database
+    # name can come from either source.
+    creds = {**load_env_psql_creds(), **(sql_creds or {})}
 
-    db_name = sql_creds.get("name") if sql_creds else None
+    db_name = creds.get("name")
     if not db_name:
         raise ValueError("Database name is not provided in the credentials.")
+
+    # Use modified credentials without a database name to connect to the PostgreSQL server
+    admin_conn_creds = creds.copy()
+    admin_conn_creds["name"] = None  # Remove db-name for admin-level connection
 
     try:
         # Establish a connection to the server (not to a specific database)
@@ -198,21 +202,29 @@ def validate_ids(*ids: int):
 def execute_psql(statement, params=None):
     """
     Executes a SQL statement using a connection from the pool.
+
+    The statement is always committed on success and rolled back on failure, so
+    writes are persisted (even when the statement also returns rows, e.g. an
+    ``INSERT ... RETURNING`` or a combined ``INSERT; SELECT``) and a failed
+    transaction is never handed back to the pool.
+
     :param statement: SQL query string, can include placeholders (%(placeholder)s).
     :param params: Dictionary of parameters for the query (optional).
-    :return: Query results in case of SELECT queries, or None otherwise.
+    :return: A list of result rows for statements that return data, otherwise None.
     """
     conn = None
     try:
         conn = get_connection()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(statement, params)
-            # Fetch results if the query is a SELECT
-            if cur.description:
-                return cur.fetchall()
-            conn.commit()
+            # Fetch results if the statement returned any rows (e.g. a SELECT)
+            result = cur.fetchall() if cur.description else None
+        conn.commit()
+        return result
     except psycopg2.Error as e:
+        if conn is not None:
+            conn.rollback()
         raise GameError.SQLError(f"SQL execution error: {e}")
     finally:
-        if conn:
+        if conn is not None:
             release_connection(conn)

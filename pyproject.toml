@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chesssnake"
-version = "0.6.6"
+version = "0.6.7"
 description = "A robust Chess API and backend"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,3 +33,13 @@ include = ["chesssnake*"]
 
 [tool.setuptools.package-data]
 chesssnake = ["data/*.sql", "data/*.ttf", "data/img/*.png"]
+
+[dependency-groups]
+dev = [
+    "pgserver>=0.1.4",
+    "psycopg2-binary>=2.9.12",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
