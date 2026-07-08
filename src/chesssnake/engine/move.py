@@ -28,6 +28,7 @@ class Move:
     :ivar en: Indicates whether this move is an en passant capture.
     :type en: bool
     """
+
     def __init__(self, move, player, board):
         """
         Initializes a move object based on the input move command, player, and the board.
@@ -59,10 +60,8 @@ class Move:
 
         # regular movement (not castling)
         if move != "0-0" and move != "0-0-0":
-
             if move[0] in "RNBQKP":
-
-                if move[0] == 'P' and move[-1] in "RNBQ":
+                if move[0] == "P" and move[-1] in "RNBQ":
                     promotion = move[-1]
                     coords = notation.get_coords(move[-3:-1])
 
@@ -80,33 +79,43 @@ class Move:
                 capture = False
 
                 # checks if there is a file limit, rank limit, or capture
-                for char in (move[1:-3] if (move[0] == 'P' and promotion is not None) else move[1:-2]):
+                for char in move[1:-3] if (move[0] == "P" and promotion is not None) else move[1:-2]:
                     if char in FILES:
                         file_limit = char
                         continue
                     elif char in RANKS:
                         rank_limit = char
                         continue
-                    elif char == 'x':
+                    elif char == "x":
                         capture = True
                         continue
 
                 try:
-                    if move[0] == 'R':
+                    if move[0] == "R":
                         square = Rook.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
-                    elif move[0] == 'N':
-                        square = Knight.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
-                    elif move[0] == 'B':
-                        square = Bishop.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
-                    elif move[0] == 'Q':
-                        square = Queen.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
-                    elif move[0] == 'K':
+                    elif move[0] == "N":
+                        square = Knight.find_one(
+                            board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit
+                        )
+                    elif move[0] == "B":
+                        square = Bishop.find_one(
+                            board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit
+                        )
+                    elif move[0] == "Q":
+                        square = Queen.find_one(
+                            board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit
+                        )
+                    elif move[0] == "K":
                         square = King.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
-                    elif move[0] == 'P':
+                    elif move[0] == "P":
                         try:
-                            square = Pawn.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
+                            square = Pawn.find_one(
+                                board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit
+                            )
                         except errors.NothingToCaptureError:
-                            square = Pawn.find_one(board, to, player, capture, en=True, file_limit=file_limit, rank_limit=rank_limit)
+                            square = Pawn.find_one(
+                                board, to, player, capture, en=True, file_limit=file_limit, rank_limit=rank_limit
+                            )
                             en = True
 
                 except errors.ChessError as e:
@@ -119,7 +128,6 @@ class Move:
                     # makes sure the player cannot move a pawn to opponent's back rank without promoting
                     if piece.piecetype == PieceType.PAWN and i == (0 if player == 0 else 7) and promotion is None:
                         raise errors.PromotionError(need_promotion=True)
-
 
             # pawn exclusive movement
             elif move[0] in FILES:
@@ -139,7 +147,7 @@ class Move:
                 i, j = coords
                 to = board[i, j]
 
-                capture = True if move[1] == 'x' else False
+                capture = True if move[1] == "x" else False
 
                 try:
                     square = Pawn.find_one(board, to, player, capture, file_limit=file_limit)
@@ -156,28 +164,25 @@ class Move:
 
         # castling
         else:
-
             x = 7 if player == 0 else 0
 
             piece = board.find_king(player).piece
 
             # king side castle
             if move == "0-0":
-
                 prev, to = board[x, 4], board[x, 6]
-                castle = 'K'
+                castle = "K"
 
-                if not piece.can_castle(board, 'K'):
-                    raise errors.InvalidCastleError('K')
+                if not piece.can_castle(board, "K"):
+                    raise errors.InvalidCastleError("K")
 
             # queen side castle
             else:
-
                 prev, to = board[x, 4], board[x, 2]
-                castle = 'Q'
+                castle = "Q"
 
-                if not piece.can_castle(board, 'Q'):
-                    raise errors.InvalidCastleError('Q')
+                if not piece.can_castle(board, "Q"):
+                    raise errors.InvalidCastleError("Q")
 
         self.piece = piece
         self.prev = prev

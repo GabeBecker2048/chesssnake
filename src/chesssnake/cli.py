@@ -20,15 +20,13 @@ def _run_api_endpoint(args):
     try:
         import uvicorn
     except ImportError:
-        sys.exit(
-            "The api-endpoint requires FastAPI and uvicorn. "
-            "Install them with: pip install chesssnake[api]"
-        )
+        sys.exit("The api-endpoint requires FastAPI and uvicorn. Install them with: pip install chesssnake[api]")
     uvicorn.run("chesssnake.api.server:app", host=args.host, port=args.port)
 
 
 def _run_init_db(_args):
     from .db.sql import initialize_connection_pool, psql_db_schema_init
+
     initialize_connection_pool()
     psql_db_schema_init()
 

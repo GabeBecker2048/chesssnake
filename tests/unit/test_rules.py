@@ -42,11 +42,11 @@ def test_en_passant_capture():
     g.move("e4")
     g.move("Nf6")
     g.move("e5")
-    g.move("d5")        # black double-steps next to the white e5 pawn
-    g.move("exd6")      # white captures en passant
-    assert piece_at(g.board, "d6") is not None       # capturing pawn advanced
+    g.move("d5")  # black double-steps next to the white e5 pawn
+    g.move("exd6")  # white captures en passant
+    assert piece_at(g.board, "d6") is not None  # capturing pawn advanced
     assert piece_at(g.board, "d6").piecetype.value == "P"
-    assert piece_at(g.board, "d5") is None           # captured pawn removed
+    assert piece_at(g.board, "d5") is None  # captured pawn removed
 
 
 def test_kingside_castle():

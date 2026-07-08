@@ -41,6 +41,7 @@ def db_init(sql_creds=None, create_database=False):
 
 # --- Games -----------------------------------------------------------------
 
+
 def game_get_or_create(group_id, white_id, black_id, white_name="", black_name=""):
     """
     Loads the game for ``(group_id, white_id, black_id)``, creating a fresh one if
@@ -94,9 +95,17 @@ def game_update(group_id, white_id, black_id, board, turn, pawnmove, draw, moved
         WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
     """
     params = {
-        "board": board, "turn": turn, "pawnmove": pawnmove, "draw": draw,
-        "moved": moved, "status": status, "wname": wname, "bname": bname,
-        "group_id": group_id, "white_id": white_id, "black_id": black_id,
+        "board": board,
+        "turn": turn,
+        "pawnmove": pawnmove,
+        "draw": draw,
+        "moved": moved,
+        "status": status,
+        "wname": wname,
+        "bname": bname,
+        "group_id": group_id,
+        "white_id": white_id,
+        "black_id": black_id,
     }
     execute_psql(query, params=params)
 
@@ -180,6 +189,7 @@ def game_exists(player1, player2, group_id=0):
 
 # --- Challenges ------------------------------------------------------------
 
+
 def challenge_exists(player1, player2, group_id=0):
     """Returns ``{"challenger", "challenged"}`` for a pending challenge, or ``None``."""
     validate_ids(player1, player2, group_id)
@@ -236,18 +246,14 @@ def challenge(challenger, opponent, group_id=0):
         raise errors.ChallengeError("You can't challenge yourself.")
 
     if game_exists(challenger, opponent, group_id):
-        raise errors.ChallengeError(
-            f"There is an unresolved game between {challenger} and {opponent} already!"
-        )
+        raise errors.ChallengeError(f"There is an unresolved game between {challenger} and {opponent} already!")
 
     existing = challenge_exists(challenger, opponent, group_id)
     if existing is None:
         challenge_create(challenger, opponent, group_id)
         return False
     elif challenger == existing["challenger"]:
-        raise errors.ChallengeError(
-            f"You have already challenged {opponent}! Wait for them to accept."
-        )
+        raise errors.ChallengeError(f"You have already challenged {opponent}! Wait for them to accept.")
 
     # A reciprocal challenge exists: accept it by deleting the stored challenge.
     challenge_delete(existing["challenger"], existing["challenged"], group_id)

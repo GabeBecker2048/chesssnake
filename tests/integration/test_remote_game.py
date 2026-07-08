@@ -20,6 +20,7 @@ def make_game(remote_client, **kwargs):
 
 def piece_at(board, c_notation):
     from chesssnake import engine as Chess
+
     i, j = Chess.Board.get_coords(c_notation)
     return board[i, j].piece
 
