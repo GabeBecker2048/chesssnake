@@ -34,6 +34,7 @@ client = ["requests>=2.31"]
 api = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "psycopg2-binary>=2.9"]
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["chesssnake*"]
 
 [tool.setuptools.package-data]
@@ -57,7 +58,7 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-src = ["chesssnake", "tests"]
+src = ["src", "tests"]
 
 [tool.ruff.lint]
 # A pragmatic starter set: pyflakes (F), pycodestyle (E/W), import sorting (I),

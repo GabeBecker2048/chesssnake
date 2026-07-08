@@ -3,7 +3,7 @@ FastAPI application backing ``chesssnake api-endpoint``.
 
 This is a thin persistence layer: it stores and retrieves serialized game state
 in PostgreSQL. The chess engine runs on the client, so this server never imports
-``chesslib`` — it only moves strings and ids in and out of the database.
+the ``engine`` — it only moves strings and ids in and out of the database.
 
 Run it with ``chesssnake api-endpoint`` (see ``chesssnake.cli``), or point an ASGI
 server at ``chesssnake.api.server:app``. Database credentials are read from the
@@ -18,17 +18,17 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ..postgres import GameError, PSql_Utils
+from ..postgres import errors, sql
 from ..postgres import operations as ops
 
 
 @asynccontextmanager
 async def lifespan(_app):
     # Initialize the connection pool from environment credentials (once).
-    if PSql_Utils.connection_pool is None:
-        PSql_Utils.initialize_connection_pool()
+    if sql.connection_pool is None:
+        sql.initialize_connection_pool()
     if os.getenv("CHESSSNAKE_INIT_DB"):
-        PSql_Utils.psql_db_schema_init()
+        sql.psql_db_schema_init()
     yield
 
 
@@ -91,22 +91,22 @@ def _error(status_code, exc):
     )
 
 
-@app.exception_handler(GameError.SQLIdError)
+@app.exception_handler(errors.SQLIdError)
 async def _handle_id_error(_request, exc):
     return _error(422, exc)
 
 
-@app.exception_handler(GameError.ChallengeError)
+@app.exception_handler(errors.ChallengeError)
 async def _handle_challenge_error(_request, exc):
     return _error(409, exc)
 
 
-@app.exception_handler(GameError.SQLError)
+@app.exception_handler(errors.SQLError)
 async def _handle_sql_error(_request, exc):
     return _error(500, exc)
 
 
-@app.exception_handler(GameError.GameError)
+@app.exception_handler(errors.GameError)
 async def _handle_game_error(_request, exc):
     return _error(400, exc)
 

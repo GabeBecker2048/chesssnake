@@ -1,7 +1,7 @@
 """Unit tests for coordinate <-> notation conversion and the Square class."""
 
 
-from chesssnake.chesslib.Chess import Board, Square
+from chesssnake.engine import Board, Square
 
 
 def test_get_coords_known_squares():

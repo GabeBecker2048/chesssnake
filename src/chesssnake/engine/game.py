@@ -1,4 +1,7 @@
-from . import Chess, ChessError, ChessImg
+from . import errors as ChessError
+from .board import Board
+from .image import img as render_board
+from .move import Move
 
 
 class Game:
@@ -36,7 +39,7 @@ class Game:
                  group_id: int = 0,
                  white_name: str = '',
                  black_name: str = '',
-                 board : Chess.Board = None,
+                 board : Board = None,
                  turn: int = 0,
                  draw: int = None,
                  ):
@@ -62,7 +65,7 @@ class Game:
         self.bid = black_id
         self.wname = white_name
         self.bname = black_name
-        self.board = Chess.Board() if board is None else board
+        self.board = Board() if board is None else board
         self.turn = turn
         self.draw = draw
 
@@ -115,7 +118,7 @@ class Game:
         :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
         :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
         """
-        if not Chess.Move.is_valid_c_notation(move):
+        if not Move.is_valid_c_notation(move):
             raise ChessError.InvalidNotationError(move)
 
         if self.board.status != 0:
@@ -125,7 +128,7 @@ class Game:
         self.turn = 1 - self.turn  # Changes whose turn it is
 
         if img or save:
-            image = ChessImg.img(self.board, self.wname, self.bname, m)
+            image = render_board(self.board, self.wname, self.bname, m)
             if save:
                 image.save(save)
             return image
@@ -203,4 +206,4 @@ class Game:
         :param image_fp: The file path where the board image will be saved.
         :type image_fp: str
         """
-        ChessImg.img(self.board, self.wname, self.bname).save(image_fp)
+        render_board(self.board, self.wname, self.bname).save(image_fp)
