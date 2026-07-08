@@ -8,7 +8,7 @@ from chesssnake.engine import errors as ChessError
 
 def test_new_game_defaults():
     g = Game(white_name="A", black_name="B")
-    assert g.turn == 0          # white to move
+    assert g.turn == 0  # white to move
     assert g.draw is None
     assert g.board.status == 0  # in play
 
@@ -46,10 +46,10 @@ def test_is_players_turn():
 
 def test_draw_offer_and_accept_ends_in_draw():
     g = Game(white_id=10, black_id=20)
-    g.draw_offer(10)             # white (to move) offers
+    g.draw_offer(10)  # white (to move) offers
     assert g.draw == 0
-    g.draw_offer(20)             # black offering back accepts the draw
-    assert g.board.status == 2   # draw / stalemate status
+    g.draw_offer(20)  # black offering back accepts the draw
+    assert g.board.status == 2  # draw / stalemate status
 
 
 def test_double_draw_offer_raises():
@@ -62,7 +62,7 @@ def test_double_draw_offer_raises():
 def test_draw_offer_out_of_turn_raises():
     g = Game(white_id=10, black_id=20)  # white to move
     with pytest.raises(ChessError.DrawWrongTurnError):
-        g.draw_offer(20)                # black offers out of turn
+        g.draw_offer(20)  # black offers out of turn
 
 
 def test_decline_with_no_offer_raises():

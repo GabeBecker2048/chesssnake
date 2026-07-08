@@ -30,6 +30,7 @@ class Board:
         - 2: Stalemate has occurred, and the game is over.
     :type status: int
     """
+
     def __init__(self, board=None, two_moveP=None):
         """
         Initializes the chessboard.
@@ -45,34 +46,30 @@ class Board:
         :type two_moveP: Square or None
         """
         if board is None:
-
             # creates board
             board = []
 
             # sets up back rank template with same index as j
-            backrank = ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+            backrank = ["R", "N", "B", "Q", "K", "B", "N", "R"]
 
             # vertical
             for i in range(8):
-
                 # adds new rank
                 board.append([])
 
                 # horizontal
                 for j in range(8):
-
                     # black backrank
                     if i == 0:
-
-                        if backrank[j] == 'R':
+                        if backrank[j] == "R":
                             piece = Rook(1)
-                        elif backrank[j] == 'N':
+                        elif backrank[j] == "N":
                             piece = Knight(1)
-                        elif backrank[j] == 'B':
+                        elif backrank[j] == "B":
                             piece = Bishop(1)
-                        elif backrank[j] == 'Q':
+                        elif backrank[j] == "Q":
                             piece = Queen(1)
-                        elif backrank[j] == 'K':
+                        elif backrank[j] == "K":
                             piece = King(1)
                         else:
                             piece = None
@@ -89,16 +86,15 @@ class Board:
 
                     # white backrank
                     elif i == 7:
-
-                        if backrank[j] == 'R':
+                        if backrank[j] == "R":
                             piece = Rook(0)
-                        elif backrank[j] == 'N':
+                        elif backrank[j] == "N":
                             piece = Knight(0)
-                        elif backrank[j] == 'B':
+                        elif backrank[j] == "B":
                             piece = Bishop(0)
-                        elif backrank[j] == 'Q':
+                        elif backrank[j] == "Q":
                             piece = Queen(0)
-                        elif backrank[j] == 'K':
+                        elif backrank[j] == "K":
                             piece = King(0)
                         else:
                             piece = None
@@ -170,7 +166,7 @@ class Board:
         out = ""
 
         for i in range(0, 8):
-            out += str(8-i) + "\t"
+            out += str(8 - i) + "\t"
             for j in range(0, 8):
                 if self[i, j].piece is not None:
                     out += self[i, j].piece.piecetype.value
@@ -220,21 +216,21 @@ class Board:
         # moving the rook for castling
         if m.castle is not None:
             x = 7 if player == Color.WHITE else 0
-            j1 = 7 if m.castle == 'K' else 0
-            j2 = 5 if m.castle == 'K' else 3
+            j1 = 7 if m.castle == "K" else 0
+            j2 = 5 if m.castle == "K" else 3
             self[x, j1].piece = None
             self[x, j2].piece = Rook(player, moved=True)
 
         # pawn promotions
         new_piece = m.piece
         if m.promotion is not None:
-            if m.promotion == 'Q':
+            if m.promotion == "Q":
                 new_piece = Queen(player)
-            elif m.promotion == 'R':
+            elif m.promotion == "R":
                 new_piece = Rook(player)
-            elif m.promotion == 'B':
+            elif m.promotion == "B":
                 new_piece = Bishop(player)
-            elif m.promotion == 'N':
+            elif m.promotion == "N":
                 new_piece = Knight(player)
 
         # sets the board correctly
@@ -290,8 +286,8 @@ class Board:
         # moving the rook for castling
         if move.castle is not None:
             x = 7 if player == Color.WHITE else 0
-            j1 = 7 if move.castle == 'K' else 0
-            j2 = 5 if move.castle == 'K' else 3
+            j1 = 7 if move.castle == "K" else 0
+            j2 = 5 if move.castle == "K" else 3
             self[x, j1].piece = Rook(player, moved=False)
             self[x, j2].piece = None
 
@@ -314,18 +310,16 @@ class Board:
         """
         color = Color(color)
         for x in range(8):
-
             # if color is white, search from bottom up
             # if color is black, search from top down
             i = 7 - x if color == Color.WHITE else x
 
             # search from right to left (it is common to kingside castle, which is towards the right)
             for j in range(7, -1, -1):
-
                 if (
-                        self[i, j].piece is not None
-                        and self[i, j].piece.piecetype == PieceType.KING
-                        and self[i, j].piece.color == color
+                    self[i, j].piece is not None
+                    and self[i, j].piece.piecetype == PieceType.KING
+                    and self[i, j].piece.color == color
                 ):
                     return self[i, j]
 
@@ -375,6 +369,28 @@ class Board:
 
         return len(self.threats_on(king_square, player)) > 0
 
+    def _squares_between(self, a, b):
+        """
+        Squares strictly between two colinear squares ``a`` and ``b`` (exclusive).
+
+        Works for a shared rank, file, or diagonal — the only lines along which a
+        sliding piece can check a king. Returns an empty list when the squares are
+        adjacent (nothing can be interposed).
+
+        :param a: One endpoint square (e.g. the king's square).
+        :type a: Square
+        :param b: The other endpoint square (e.g. the checking piece's square).
+        :type b: Square
+        :return: The list of `Square` objects strictly between ``a`` and ``b``.
+        :rtype: list[Square]
+        """
+        di = b.i - a.i
+        dj = b.j - a.j
+        steps = max(abs(di), abs(dj))
+        step_i = (di > 0) - (di < 0)  # sign of di (-1, 0, or 1)
+        step_j = (dj > 0) - (dj < 0)  # sign of dj (-1, 0, or 1)
+        return [self[a.i + s * step_i, a.j + s * step_j] for s in range(1, steps)]
+
     # returns true if the given player is in checkmate
     # returns false otherwise
     def check_for_mate(self, player):
@@ -408,20 +424,18 @@ class Board:
         delta_js = [0, 1, 1, 1, 0, -1, -1, -1]
         with self.lifted(king_square):
             for index in range(8):
-
                 psquare = self[king_square.i + delta_is[index], king_square.j + delta_js[index]]
 
                 # if there is a square that the king can move to, returns false
                 if (
-                        psquare is not None
-                        and (psquare.piece is None or psquare.piece.color == player.opponent)
-                        and len(self.threats_on(psquare, player)) == 0
+                    psquare is not None
+                    and (psquare.piece is None or psquare.piece.color == player.opponent)
+                    and len(self.threats_on(psquare, player)) == 0
                 ):
                     return False
 
         # checks if the piece threatening can be taken OR if the piece threatening can be blocked
         if len(threats) == 1:  # this will only work if there is only one threatening piece
-
             # this is the only threat, now saved to threat
             threat = threats[0]
 
@@ -431,68 +445,12 @@ class Board:
 
             # blocking
             if threat.piece.piecetype in (PieceType.ROOK, PieceType.BISHOP, PieceType.QUEEN):
-                pbsquares = []
-                # horizontal and vertical
-                if threat.piece.piecetype in (PieceType.ROOK, PieceType.QUEEN):
-
-                    # if they are on the same rank...
-                    if threat.i == king_square.i:
-                        if threat.j > king_square.j:
-                            upper = threat.j
-                            lower = king_square.j
-                        else:
-                            upper = king_square.j
-                            lower = threat.j
-
-                        # loops through all squares between the threatening piece and the king
-                        for x in range(lower + 1, upper):
-                            pbsquares.append(self[threat.i, x])
-
-                    # if they are on the same file...
-                    elif threat.j == king_square.j:
-                        if threat.i > king_square.i:
-                            upper = threat.i
-                            lower = king_square.i
-                        else:
-                            upper = king_square.i
-                            lower = threat.i
-
-                        # loops through all squares between the threatening piece and the king
-                        for x in range(lower + 1, upper):
-                            pbsquares.append(self[x, threat.j])
-
-                # diagonal
-                if threat.piece.piecetype in (PieceType.BISHOP, PieceType.QUEEN):
-
-                    delta_i = threat.i - king_square.j
-                    delta_j = threat.j - king_square.j
-
-                    # this is the number of squares diagonally inbetween the threat and the king
-                    num_between = abs(delta_i) - 1
-
-                    # threat is positive i positive j compared to king
-                    if delta_i > 0 < delta_j:
-                        for x in range(num_between):
-                            pbsquares.append(self[threat.i - x, threat.j - x])
-
-                    # threat is negative i positive j compared to king
-                    elif delta_i < 0 < delta_j:
-                        for x in range(num_between):
-                            pbsquares.append(self[threat.i + x, threat.j - x])
-
-                    # threat is negative i negative j compared to king
-                    elif delta_i < 0 > delta_j:
-                        for x in range(num_between):
-                            pbsquares.append(self[threat.i + x, threat.j + x])
-
-                    # threat is positive i negative j compared to king
-                    elif delta_i > 0 > delta_j:
-                        for x in range(num_between):
-                            pbsquares.append(self[threat.i - x, threat.j + x])
+                # the squares between the (sliding) checker and the king — any of
+                # which a friendly piece could interpose on to block the check
+                pbsquares = self._squares_between(king_square, threat)
 
                 # if any of the possible blocking squares (pbsquares) are blockable, returns false
                 for pbsquare in pbsquares:
-
                     # a friendly pawn can block the threat by advancing (a non-capture move)
                     if Pawn.find_all(self, pbsquare, player, capture=False):
                         return False
@@ -501,7 +459,6 @@ class Board:
                     # possible blocking threats (pbthreats)
                     pbthreats = self.threats_on(pbsquare, player.opponent)
                     if len(pbthreats) != 0:
-
                         # kings and pawns need to be excluded from this list:
                         #   - kings can't block a check
                         #   - pawns can't block a check by capturing
@@ -572,14 +529,13 @@ class Board:
         for i in range(8):
             board.append([])
             for j in range(8):
-
                 # creates the piece
                 if boardstringarray[i][j][0] == "R":
                     if (
-                        (i == 7 and j == 0 and moved[0] == '1') or
-                        (i == 7 and j == 7 and moved[2] == '1') or
-                        (i == 0 and j == 0 and moved[0] == '1') or
-                        (i == 0 and j == 7 and moved[2] == '1')
+                        (i == 7 and j == 0 and moved[0] == "1")
+                        or (i == 7 and j == 7 and moved[2] == "1")
+                        or (i == 0 and j == 0 and moved[0] == "1")
+                        or (i == 0 and j == 7 and moved[2] == "1")
                     ):
                         piece = Rook(boardstringarray[i][j][1], True)
                     else:
@@ -591,10 +547,7 @@ class Board:
                 elif boardstringarray[i][j][0] == "Q":
                     piece = Queen(boardstringarray[i][j][1])
                 elif boardstringarray[i][j][0] == "K":
-                    if (
-                        (i == 7 and j == 4 and moved[1] == '1') or
-                        (i == 0 and j == 4 and moved[1] == '1')
-                    ):
+                    if (i == 7 and j == 4 and moved[1] == "1") or (i == 0 and j == 4 and moved[1] == "1"):
                         piece = King(boardstringarray[i][j][1], True)
                     else:
                         piece = King(boardstringarray[i][j][1], False)
@@ -637,23 +590,47 @@ class Board:
         :rtype: tuple[str, str]
         """
         boardstring = ""
-        moved = ['0', '0', '0', '0', '0', '0']
+        moved = ["0", "0", "0", "0", "0", "0"]
         for rank in board:
             for square in rank:
                 if square.piece is not None:
                     boardstring += square.piece.piecetype.value + str(int(square.piece.color)) + " "
 
-                    if (square.i == 7 and square.j == 0) and square.piece.piecetype == PieceType.ROOK and square.piece.moved:
+                    if (
+                        (square.i == 7 and square.j == 0)
+                        and square.piece.piecetype == PieceType.ROOK
+                        and square.piece.moved
+                    ):
                         moved[0] = "1"
-                    elif (square.i == 7 and square.j == 4) and square.piece.piecetype == PieceType.KING and square.piece.moved:
+                    elif (
+                        (square.i == 7 and square.j == 4)
+                        and square.piece.piecetype == PieceType.KING
+                        and square.piece.moved
+                    ):
                         moved[1] = "1"
-                    elif (square.i == 7 and square.j == 7) and square.piece.piecetype == PieceType.ROOK and square.piece.moved:
+                    elif (
+                        (square.i == 7 and square.j == 7)
+                        and square.piece.piecetype == PieceType.ROOK
+                        and square.piece.moved
+                    ):
                         moved[2] = "1"
-                    elif (square.i == 0 and square.j == 0) and square.piece.piecetype == PieceType.ROOK and square.piece.moved:
+                    elif (
+                        (square.i == 0 and square.j == 0)
+                        and square.piece.piecetype == PieceType.ROOK
+                        and square.piece.moved
+                    ):
                         moved[3] = "1"
-                    elif (square.i == 0 and square.j == 4) and square.piece.piecetype == PieceType.KING and square.piece.moved:
+                    elif (
+                        (square.i == 0 and square.j == 4)
+                        and square.piece.piecetype == PieceType.KING
+                        and square.piece.moved
+                    ):
                         moved[4] = "1"
-                    elif (square.i == 0 and square.j == 7) and square.piece.piecetype == PieceType.ROOK and square.piece.moved:
+                    elif (
+                        (square.i == 0 and square.j == 7)
+                        and square.piece.piecetype == PieceType.ROOK
+                        and square.piece.moved
+                    ):
                         moved[5] = "1"
 
                 else:

@@ -22,7 +22,7 @@ def load_env_psql_creds():
         "user": getenv("CHESSDB_USER"),
         "password": getenv("CHESSDB_PASS"),
         "host": getenv("CHESSDB_HOST", "localhost"),
-        "port": getenv("CHESSDB_PORT", "5432")
+        "port": getenv("CHESSDB_PORT", "5432"),
     }
 
 
@@ -57,9 +57,7 @@ def initialize_connection_pool(minconn=1, maxconn=10, sql_creds=None):
     global connection_pool
     try:
         connection_pool = pool.SimpleConnectionPool(
-            minconn=minconn,
-            maxconn=maxconn,
-            dsn=load_psql_conn_str(sql_creds=sql_creds)
+            minconn=minconn, maxconn=maxconn, dsn=load_psql_conn_str(sql_creds=sql_creds)
         )
         if connection_pool:
             print("Database connection pool successfully initialized.")
@@ -73,8 +71,9 @@ def get_connection():
     :return: A connection object from the pool.
     """
     if not connection_pool:
-        raise errors.SQLError("Connection pool is not initialized.\n"
-                                 "    Use chesssnake.db.sql.initialize_connection_pool")
+        raise errors.SQLError(
+            "Connection pool is not initialized.\n    Use chesssnake.db.sql.initialize_connection_pool"
+        )
     return connection_pool.getconn()
 
 
@@ -161,7 +160,7 @@ def psql_db_schema_init(sql_creds=None):
     try:
         # Establish a direct connection using environment-based or provided credentials
         conn = psycopg2.connect(load_psql_conn_str(sql_creds=sql_creds))
-        db_init_fp = asset_path('init.sql')
+        db_init_fp = asset_path("init.sql")
         with open(db_init_fp) as db_init_file:
             init_script = db_init_file.read()
 
@@ -176,12 +175,14 @@ def psql_db_schema_init(sql_creds=None):
         raise errors.SQLError(
             f"{e}\n"
             f"Database initialization file not found, likely due to corrupt or modified installation.\n"
-            f"Try reinstalling chesssnake.")
+            f"Try reinstalling chesssnake."
+        )
     except psycopg2.Error as e:
         raise errors.SQLError(f"Database initialization error:\n{e}")
     finally:
         if conn:
             conn.close()
+
 
 def validate_ids(*ids: int):
     """
@@ -199,6 +200,7 @@ def validate_ids(*ids: int):
             raise errors.SQLIdError(id_)
         if not (BIGINT_MIN <= id_ <= BIGINT_MAX):
             raise errors.SQLIdError(id_)
+
 
 def execute_psql(statement, params=None):
     """

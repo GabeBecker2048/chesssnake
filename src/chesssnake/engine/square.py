@@ -29,6 +29,7 @@ class Square:
         the square is empty.
     :type piece: Optional[Piece]
     """
+
     def __init__(self, i: int, j: int, piece=None):
         """
         Initializes a square on a chessboard.

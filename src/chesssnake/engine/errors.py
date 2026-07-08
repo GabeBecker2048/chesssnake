@@ -9,6 +9,7 @@ class ChessError(Exception):
     Used to handle and distinguish errors within the chess logic or
     system-specific exceptions during gameplay or chess computation.
     """
+
     def __init__(self, message):
         super().__init__(message)
 
@@ -20,8 +21,9 @@ class InvalidNotationError(ChessError):
     This class represents an error thrown when the user provides input
     that does not conform to standard algebraic notation in chess.
     """
+
     def __init__(self, user_input):
-        super().__init__(f"\"{user_input}\" is not in valid algebraic notation")
+        super().__init__(f'"{user_input}" is not in valid algebraic notation')
 
 
 class GameOverError(ChessError):
@@ -31,6 +33,7 @@ class GameOverError(ChessError):
     This error is triggered when a player attempts to perform an illegal operation, such as making a move,
     offering a draw, or any other game-related action after the game has ended.
     """
+
     def __init__(self):
         super().__init__("The game is over. You cannot do anything else.")
 
@@ -46,6 +49,7 @@ class PieceOnSquareError(ChessError):
     This exception handles cases where placement or movement of pieces violates the rules
     concerning square occupancy in chess games.
     """
+
     def __init__(self, square, is_same_color):
         if is_same_color:
             super().__init__(f"There is already a piece on {square.c_notation}")
@@ -61,6 +65,7 @@ class NothingToCaptureError(ChessError):
     This exception indicates that a capture move has been attempted on a square
     where no piece is present.
     """
+
     def __init__(self, square):
         super().__init__(f"There is not a piece to capture on {square.c_notation}")
 
@@ -72,8 +77,11 @@ class CaptureOwnPieceError(ChessError):
     This exception indicates that a player is trying to make an invalid move
     by attempting to capture one of their own pieces.
     """
+
     def __init__(self, square):
-        super().__init__(f"The piece on {square.c_notation} belongs to the player. Players cannot capture their own pieces")
+        super().__init__(
+            f"The piece on {square.c_notation} belongs to the player. Players cannot capture their own pieces"
+        )
 
 
 class PieceNotFoundError(ChessError):
@@ -85,6 +93,7 @@ class PieceNotFoundError(ChessError):
     specified square. It provides a descriptive error message for debugging
     or informational purposes.
     """
+
     def __init__(self, square, piecetype):
         piece = PieceType(piecetype).full_name
         super().__init__(f"No {piece}s can move to {square.c_notation}")
@@ -99,6 +108,7 @@ class MultiplePiecesFoundError(ChessError):
     same type to the same square, indicating ambiguity in the move notation. It
     provides detailed information about the conflicting pieces and their positions.
     """
+
     def __init__(self, square, found):
         piece = PieceType(found[0].piece.piecetype).full_name
         message = f"Multiple {piece}s can move to {square.c_notation}. The {piece}s are:"
@@ -116,6 +126,7 @@ class PromotionError(ChessError):
     promotion outside the opponent's back rank or failing to promote upon
     reaching the opponent's back rank.
     """
+
     def __init__(self, invalid_promotion=False, need_promotion=False):
         if invalid_promotion:
             super().__init__("You cannot promote unless you are on your opponent's back rank")
@@ -134,10 +145,11 @@ class InvalidCastleError(ChessError):
     that is either not allowed by the rules of the game or is attempted under
     invalid conditions.
     """
+
     def __init__(self, side):
-        if side == 'K':
+        if side == "K":
             super().__init__("You cannot kingside castle")
-        elif side == 'Q':
+        elif side == "Q":
             super().__init__("You cannot queenside castle")
         else:
             super().__init__("You cannot castle that way")
@@ -151,6 +163,7 @@ class MoveIntoCheckError(ChessError):
     when a move is attempted which would cause the player's king to end
     up in check.
     """
+
     def __init__(self):
         super().__init__("Making that move would put you in check")
 
@@ -164,6 +177,7 @@ class DrawWrongTurnError(ChessError):
     valid when it is a player's turn. This error helps ensure the rules of chess
     are adhered to during gameplay.
     """
+
     def __init__(self):
         super().__init__("You can only offer a draw when it is your turn")
 
@@ -176,6 +190,7 @@ class DrawAlreadyOfferedError(ChessError):
     This error is used in the chess game logic to enforce the rule that a player
     cannot repeatedly offer a draw when it has already been proposed.
     """
+
     def __init__(self):
         super().__init__("You have already offered a draw")
 
@@ -187,5 +202,6 @@ class DrawNotOfferedError(ChessError):
     This class is specifically used in the context of chess applications to indicate
     that an operation requiring a draw offer cannot proceed because no draw was offered.
     """
+
     def __init__(self):
         super().__init__("You have not been offered a draw")
