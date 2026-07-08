@@ -1,6 +1,4 @@
-from . import Chess
-from . import ChessImg
-from . import ChessError
+from . import Chess, ChessError, ChessImg
 
 
 class Game:

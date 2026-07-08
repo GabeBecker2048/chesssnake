@@ -1,7 +1,6 @@
 """Shared helpers for chesslib unit tests."""
 
 import pytest
-
 from chesssnake.chesslib import Chess
 
 

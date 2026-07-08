@@ -10,8 +10,8 @@ only serialized state crosses the wire, so many clients can share one database.
 
 import os
 
-from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
+from ..chesslib.Game import Game as BaseGame
 
 
 def _make_client(api_url=None, client=None):
