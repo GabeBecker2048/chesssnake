@@ -18,6 +18,8 @@ jobs:
         run: uv run ruff check
       # `ruff format --check` will be added once the codebase is formatted
       # (the next Phase 0 checklist item).
+      - name: mypy (lenient)
+        run: uv run mypy
 
   test:
     name: unit (py${{ matrix.python-version }})

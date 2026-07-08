@@ -18,8 +18,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ..postgres import errors, sql
-from ..postgres import operations as ops
+from ..db import errors, sql
+from ..db import postgres as ops
 
 
 @asynccontextmanager

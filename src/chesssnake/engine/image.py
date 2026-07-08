@@ -1,148 +1,104 @@
-from copy import deepcopy
+"""Board rendering: composite piece PNGs into a two-sided board image."""
+
+from functools import cache
 
 from PIL import Image, ImageDraw, ImageFont
 
 from ..assets import asset_path
 from .board import Board
 from .move import Move
+from .notation import FILES
+
+# The rendered board uses 68x68 pixel tiles.
+TILE = 68
 
 
-# takes in board AFTER move and move object
-# returns PIL.Image object
-def img(board: Board, p1: str, p2: str, move: Move = None):
+@cache
+def _piece_image(piecetype_value, color):
+    """Load (and cache) the RGBA sprite for a piece, e.g. ``('Q', 0)`` -> Q0.png."""
+    return Image.open(asset_path(f"img/{piecetype_value}{color}.png")).convert("RGBA")
+
+
+@cache
+def _orange_square():
+    """Load (and cache) the RGBA last-move highlight tile."""
+    return Image.open(asset_path("img/orange.png")).convert("RGBA")
+
+
+def _render_side(grid, small_font, flip, highlights):
     """
-    Generates a visual representation of a chessboard in its current state.
+    Render a single 8x8 board image from an already-oriented ``grid`` of squares.
 
-    This function produces a graphical representation of the chessboard after a specified move,
-    highlighting the last move for both the white and black perspectives. It also overlays player
-    names on the image.
-
-    :param board: The chessboard object representing the current game state (after the move).
-    :type board: Board
-    :param p1: Name of the player playing as white. Names longer than 10 characters will be truncated.
-    :type p1: str
-    :param p2: Name of the player playing as black. Names longer than 10 characters will be truncated.
-    :type p2: str
-    :param move: The move object representing the most recent move. If provided, the source (`prev`) and
-        destination (`to`) squares of the move will be highlighted. Default is `None`.
-    :type move: Move or None
-    :return: A PIL.Image object representing the visualized chessboard with the latest move highlighted.
-    :rtype: PIL.Image
+    :param grid: 8x8 list of :class:`Square` rows in display order (top row first).
+    :param flip: ``True`` for the black-oriented board (mirrored rank/file labels).
+    :param highlights: ``(row, col)`` grid positions to shade for the last move.
     """
-    if len(p1) > 10:
-        p1 = p1[:10]
+    board_img = Image.open(asset_path("img/blankboard.png"))
 
-    if len(p2) > 10:
-        p2 = p2[:10]
+    for row, col in highlights:
+        board_img.alpha_composite(_orange_square(), (TILE * col, TILE * row))
 
-    Roboto_fp = asset_path('Roboto-Black.ttf')
+    draw = ImageDraw.Draw(board_img)
+    for x in range(8):
+        for y in range(8):
+            piece = grid[x][y].piece
+            if piece is not None:
+                board_img.alpha_composite(
+                    _piece_image(piece.piecetype.value, int(piece.color)), (TILE * y, TILE * x)
+                )
 
-    big_font = ImageFont.truetype(Roboto_fp, 60)
-    small_font = ImageFont.truetype(Roboto_fp, 15)
+            # rank number down the left edge
+            if y == 0:
+                number = x + 1 if flip else 8 - x
+                draw.text((0, TILE * x), str(number), (255, 255, 255), font=small_font)
 
-    # gets the blank template
-    img = Image.open(asset_path('img/template.png'))
+            # file letter along the bottom edge
+            if x == 7:
+                file = FILES[7 - y] if flip else FILES[y]
+                draw.text((TILE * y + 57, TILE * 7 + 50), file, (255, 255, 255), font=small_font)
 
-    wboard = Image.open(asset_path('img/blankboard.png'))
-    bboard = Image.open(asset_path('img/blankboard.png'))
+    return board_img
 
+
+def render_board(board: Board, white_name: str, black_name: str, move: "Move | None" = None):
+    """
+    Render the current board from both players' perspectives onto one image.
+
+    Produces the white-oriented and black-oriented boards side by side, overlays
+    the (truncated) player names, and highlights the source and destination of
+    ``move`` in orange when supplied.
+
+    :param board: The board to render (after the move has been applied).
+    :param white_name: White's name (truncated to 10 characters).
+    :param black_name: Black's name (truncated to 10 characters).
+    :param move: The most recent move, whose squares are highlighted, or ``None``.
+    :return: A composited :class:`PIL.Image.Image` of both boards.
+    :rtype: PIL.Image.Image
+    """
+    white_name = white_name[:10]
+    black_name = black_name[:10]
+
+    roboto = asset_path("Roboto-Black.ttf")
+    big_font = ImageFont.truetype(roboto, 60)
+    small_font = ImageFont.truetype(roboto, 15)
+
+    template = Image.open(asset_path("img/template.png"))
+
+    # the last move's squares, expressed in each board's own (row, col) coordinates
+    white_highlights, black_highlights = [], []
     if move is not None:
-        # adds orange squares
-        orange_square = Image.open(asset_path('img/orange.png')).convert('RGBA')
-        wboard.alpha_composite(orange_square, (move.prev.j * 68, move.prev.i * 68))
-        wboard.alpha_composite(orange_square, (move.to.j * 68, move.to.i * 68))
-        bboard.alpha_composite(orange_square, ((7 - move.prev.j) * 68, (7 - move.prev.i) * 68))
-        bboard.alpha_composite(orange_square, ((7 - move.to.j) * 68, (7 - move.to.i) * 68))
+        for square in (move.prev, move.to):
+            white_highlights.append((square.i, square.j))
+            black_highlights.append((7 - square.i, 7 - square.j))
 
-    # creates the white board image (wboard)
-    for x in range(8):
-        for y in range(8):
+    white_grid = board.board
+    black_grid = [list(reversed(row)) for row in reversed(board.board)]
 
-            if board[x, y].piece is not None:
-                # gets the piece image
-                ptype = board[x, y].piece.piecetype
-                color = board[x, y].piece.color
-                piece = Image.open(asset_path(f'img/{ptype}{color}.png')).convert('RGBA')
+    template.alpha_composite(_render_side(white_grid, small_font, False, white_highlights), (0, 0))
+    template.alpha_composite(_render_side(black_grid, small_font, True, black_highlights), (646, 0))
 
-                # gets the image coords
-                i = 68 * x
-                j = 68 * y
+    draw = ImageDraw.Draw(template)
+    draw.text((0, 544), white_name, (255, 255, 255), font=big_font)
+    draw.text((646, 544), black_name, (255, 255, 255), font=big_font)
 
-                # adds the piece to the correct spot
-                wboard.alpha_composite(piece, (j, i))
-
-            if y == 0:
-                number = 8 - x
-
-                i = 68 * x
-                j = 68 * y
-
-                # adds number
-                image_editable = ImageDraw.Draw(wboard)
-                image_editable.text((j, i), str(number), (255, 255, 255), font=small_font)
-
-            if x == 7:
-                file = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][y]
-
-                # gets the image coords
-                i = (68 * x) + 50
-                j = (68 * y) + 57
-
-                # adds file
-                image_editable = ImageDraw.Draw(wboard)
-                image_editable.text((j, i), file, (255, 255, 255), font=small_font)
-
-    # flips the board to make it from black POV
-    reversed_board = deepcopy(board.board)
-    reversed_board.reverse()
-    for row in reversed_board:
-        row.reverse()
-
-    # creates the black board image (bbaord)
-    for x in range(8):
-        for y in range(8):
-
-            if reversed_board[x][y].piece is not None:
-                # gets the piece image
-                ptype = reversed_board[x][y].piece.piecetype
-                color = reversed_board[x][y].piece.color
-                piece = Image.open(asset_path(f'img/{ptype}{color}.png')).convert('RGBA')
-
-                # gets the image coords
-                i = 68 * x
-                j = 68 * y
-
-                # adds the piece to the correct spot
-                bboard.alpha_composite(piece, (j, i))
-
-            if y == 0:
-                number = x + 1
-
-                i = 68 * x
-                j = 68 * y
-
-                # adds number
-                image_editable = ImageDraw.Draw(bboard)
-                image_editable.text((j, i), str(number), (255, 255, 255), font=small_font)
-
-            if x == 7:
-                file = ['h', 'g', 'f', 'e', 'd', 'c', 'b', 'a'][y]
-
-                # gets the image coords
-                i = (68 * x) + 50
-                j = (68 * y) + 57
-
-                # adds file
-                image_editable = ImageDraw.Draw(bboard)
-                image_editable.text((j, i), file, (255, 255, 255), font=small_font)
-
-    # pastes the boards onto the template
-    img.alpha_composite(wboard, (0, 0))
-    img.alpha_composite(bboard, (646, 0))
-
-    # adds player names
-    image_editable = ImageDraw.Draw(img)
-    image_editable.text((0, 544), p1, (255, 255, 255), font=big_font)
-    image_editable.text((646, 544), p2, (255, 255, 255), font=big_font)
-
-    return img
+    return template
