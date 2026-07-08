@@ -1,6 +1,10 @@
 """Integration tests for the FastAPI api-endpoint hitting a real Postgres."""
 
+import pytest
+
 from chesssnake.db import INITIAL_BOARD
+
+pytestmark = pytest.mark.integration
 
 
 def test_health(api_client):
@@ -80,7 +84,9 @@ def test_current_games_and_exists(api_client):
 def test_challenge_lifecycle(api_client):
     first = api_client.post("/challenges", json={"group_id": 10, "challenger": 100, "challenged": 200})
     assert first.json()["accepted"] is False
-    assert api_client.get("/challenges/10/exists", params={"player1": 100, "player2": 200}).json()["challenge"] is not None
+    assert (
+        api_client.get("/challenges/10/exists", params={"player1": 100, "player2": 200}).json()["challenge"] is not None
+    )
 
     accept = api_client.post("/challenges", json={"group_id": 10, "challenger": 200, "challenged": 100})
     assert accept.json()["accepted"] is True
@@ -95,6 +101,6 @@ def test_self_challenge_conflicts(api_client):
 
 def test_invalid_id_returns_422(api_client):
     # Beyond PostgreSQL BIGINT range -> SQLIdError -> 422.
-    resp = api_client.post("/games", json={"group_id": 0, "white_id": 10 ** 19, "black_id": 2})
+    resp = api_client.post("/games", json={"group_id": 0, "white_id": 10**19, "black_id": 2})
     assert resp.status_code == 422
     assert resp.json()["error_type"] == "SQLIdError"

@@ -63,7 +63,8 @@ def _reachable(squares, color):
 def _find(candidate_squares, piecetype, color, file_limit, rank_limit):
     """Squares among ``candidate_squares`` holding ``piecetype``/``color`` matching disambiguation."""
     return [
-        sq for sq in candidate_squares
+        sq
+        for sq in candidate_squares
         if sq is not None
         and sq.piece is not None
         and sq.piece.piecetype == piecetype
@@ -137,8 +138,7 @@ class Piece:
             king_threats2 = board.threats_on(board.find_king(self.color), self.color)
 
         # the threat present in exactly one of the two scans is the one being blocked
-        king_threats = [t for t in king_threats1 + king_threats2
-                        if t not in king_threats1 or t not in king_threats2]
+        king_threats = [t for t in king_threats1 + king_threats2 if t not in king_threats1 or t not in king_threats2]
 
         if len(king_threats) != 1:
             return False
@@ -196,8 +196,7 @@ class Rook(Piece):
     def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
         """Rook squares of ``color`` that could reach ``square`` (never raises)."""
         color = Color(color)
-        return _find(_slide(board, square.i, square.j, ORTHOGONAL),
-                     PieceType.ROOK, color, file_limit, rank_limit)
+        return _find(_slide(board, square.i, square.j, ORTHOGONAL), PieceType.ROOK, color, file_limit, rank_limit)
 
 
 class Knight(Piece):
@@ -222,8 +221,7 @@ class Knight(Piece):
     def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
         """Knight squares of ``color`` that could reach ``square`` (never raises)."""
         color = Color(color)
-        return _find(_step(board, square.i, square.j, KNIGHT_JUMPS),
-                     PieceType.KNIGHT, color, file_limit, rank_limit)
+        return _find(_step(board, square.i, square.j, KNIGHT_JUMPS), PieceType.KNIGHT, color, file_limit, rank_limit)
 
 
 class Bishop(Piece):
@@ -248,8 +246,7 @@ class Bishop(Piece):
     def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
         """Bishop squares of ``color`` that could reach ``square`` (never raises)."""
         color = Color(color)
-        return _find(_slide(board, square.i, square.j, DIAGONAL),
-                     PieceType.BISHOP, color, file_limit, rank_limit)
+        return _find(_slide(board, square.i, square.j, DIAGONAL), PieceType.BISHOP, color, file_limit, rank_limit)
 
 
 class Queen(Piece):
@@ -274,8 +271,7 @@ class Queen(Piece):
     def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
         """Queen squares of ``color`` that could reach ``square`` (never raises)."""
         color = Color(color)
-        return _find(_slide(board, square.i, square.j, ALL_DIRECTIONS),
-                     PieceType.QUEEN, color, file_limit, rank_limit)
+        return _find(_slide(board, square.i, square.j, ALL_DIRECTIONS), PieceType.QUEEN, color, file_limit, rank_limit)
 
 
 class King(Piece):
@@ -313,37 +309,35 @@ class King(Piece):
         x = 7 if self.color == Color.WHITE else 0
 
         # king side castle...
-        if direction == 'K':
-
+        if direction == "K":
             king_rook_square = board[x, 0]
             between_square1, between_square2 = board[x, 5], board[x, 6]
 
             if (
-                    king_rook_square.piece is not None
-                    and king_rook_square.piece.piecetype == PieceType.ROOK
-                    and king_rook_square.piece.color == self.color
-                    and not king_rook_square.piece.moved
-                    and between_square1.piece is None
-                    and len(board.threats_on(between_square1, self.color)) == 0
-                    and between_square2.piece is None
+                king_rook_square.piece is not None
+                and king_rook_square.piece.piecetype == PieceType.ROOK
+                and king_rook_square.piece.color == self.color
+                and not king_rook_square.piece.moved
+                and between_square1.piece is None
+                and len(board.threats_on(between_square1, self.color)) == 0
+                and between_square2.piece is None
             ):
                 return True
 
         # queen side castle...
-        elif direction == 'Q':
-
+        elif direction == "Q":
             queen_rook_square = board[x, 7]
             between_square1, between_square2, between_square3 = board[x, 1], board[x, 2], board[x, 3]
 
             if (
-                    queen_rook_square.piece is not None
-                    and queen_rook_square.piece.piecetype == PieceType.ROOK
-                    and queen_rook_square.piece.color == self.color
-                    and not queen_rook_square.piece.moved
-                    and between_square1.piece is None
-                    and between_square2.piece is None
-                    and len(board.threats_on(between_square2, self.color)) == 0
-                    and between_square3.piece is None
+                queen_rook_square.piece is not None
+                and queen_rook_square.piece.piecetype == PieceType.ROOK
+                and queen_rook_square.piece.color == self.color
+                and not queen_rook_square.piece.moved
+                and between_square1.piece is None
+                and between_square2.piece is None
+                and len(board.threats_on(between_square2, self.color)) == 0
+                and between_square3.piece is None
             ):
                 return True
 
@@ -353,8 +347,7 @@ class King(Piece):
     def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
         """King squares of ``color`` adjacent to ``square`` (never raises)."""
         color = Color(color)
-        return _find(_step(board, square.i, square.j, ALL_DIRECTIONS),
-                     PieceType.KING, color, file_limit, rank_limit)
+        return _find(_step(board, square.i, square.j, ALL_DIRECTIONS), PieceType.KING, color, file_limit, rank_limit)
 
 
 class Pawn(Piece):
@@ -368,8 +361,11 @@ class Pawn(Piece):
     def threatens(self, square, board):
         """The two diagonally-forward squares this pawn attacks (ignoring pins)."""
         forward = -1 if self.color == Color.WHITE else 1
-        squares = (sq for sq in (board[square.i + forward, square.j + 1],
-                                 board[square.i + forward, square.j - 1]) if sq is not None)
+        squares = (
+            sq
+            for sq in (board[square.i + forward, square.j + 1], board[square.i + forward, square.j - 1])
+            if sq is not None
+        )
         return _reachable(squares, self.color)
 
     def can_move(self, square, board):
@@ -379,8 +375,9 @@ class Pawn(Piece):
             king_threats1 = board.threats_on(board.find_king(self.color), self.color)
             with board.lifted(square):
                 king_threats2 = board.threats_on(board.find_king(self.color), self.color)
-            king_threats = [t for t in king_threats1 + king_threats2
-                            if t not in king_threats1 or t not in king_threats2]
+            king_threats = [
+                t for t in king_threats1 + king_threats2 if t not in king_threats1 or t not in king_threats2
+            ]
             return len(king_threats) > 1 and king_threats[0] in self.threatens(square, board)
 
         forward = -1 if self.color == Color.WHITE else 1
@@ -409,8 +406,7 @@ class Pawn(Piece):
         behind = 1 if color == Color.WHITE else -1
 
         if capture:
-            candidates = (board[square.i + behind, square.j + 1],
-                          board[square.i + behind, square.j - 1])
+            candidates = (board[square.i + behind, square.j + 1], board[square.i + behind, square.j - 1])
             return _find(candidates, PieceType.PAWN, color, file_limit, rank_limit)
 
         # forward push: the pawn is one square behind, or two if the square between is empty

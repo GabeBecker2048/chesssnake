@@ -39,6 +39,7 @@ def api_client():
 @pytest.fixture(autouse=True)
 def clean_tables(api_client):
     from chesssnake.db.sql import execute_psql
+
     execute_psql("TRUNCATE Games, Challenges")
     yield
 
@@ -47,4 +48,5 @@ def clean_tables(api_client):
 def remote_client(api_client):
     """An ApiClient wired to drive the in-process app through the TestClient."""
     from chesssnake.remote.client import ApiClient
+
     return ApiClient("", session=api_client)

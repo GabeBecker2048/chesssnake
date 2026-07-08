@@ -32,16 +32,17 @@ class Game:
     :type draw: Color or None
     """
 
-    def __init__(self,
-                 white_id: int = 0,
-                 black_id: int = 1,
-                 group_id: int = 0,
-                 white_name: str = '',
-                 black_name: str = '',
-                 board: "Board | None" = None,
-                 turn: int = 0,
-                 draw: "int | None" = None,
-                 ):
+    def __init__(
+        self,
+        white_id: int = 0,
+        black_id: int = 1,
+        group_id: int = 0,
+        white_name: str = "",
+        black_name: str = "",
+        board: "Board | None" = None,
+        turn: int = 0,
+        draw: "int | None" = None,
+    ):
         """
         Initializes a new chess game.
 
@@ -151,7 +152,9 @@ class Game:
 
         if (self.draw == Color.WHITE and player_id == self.wid) or (self.draw == Color.BLACK and player_id == self.bid):
             raise ChessError.DrawAlreadyOfferedError()
-        elif (self.draw == Color.BLACK and player_id == self.wid) or (self.draw == Color.WHITE and player_id == self.bid):
+        elif (self.draw == Color.BLACK and player_id == self.wid) or (
+            self.draw == Color.WHITE and player_id == self.bid
+        ):
             self.draw_accept(player_id)
         elif not self.is_players_turn(player_id):
             raise ChessError.DrawWrongTurnError()
@@ -172,8 +175,11 @@ class Game:
         if self.board.status != GameStatus.IN_PLAY:
             raise ChessError.GameOverError()
 
-        if (self.draw == Color.WHITE and player_id == self.wid) or (
-                self.draw == Color.BLACK and player_id == self.bid) or self.draw is None:
+        if (
+            (self.draw == Color.WHITE and player_id == self.wid)
+            or (self.draw == Color.BLACK and player_id == self.bid)
+            or self.draw is None
+        ):
             raise ChessError.DrawNotOfferedError()
 
         self.board.status = GameStatus.DRAW  # Set game status to draw
@@ -192,8 +198,11 @@ class Game:
         if self.board.status != GameStatus.IN_PLAY:
             raise ChessError.GameOverError()
 
-        if (self.draw == Color.WHITE and player_id == self.wid) or (
-                self.draw == Color.BLACK and player_id == self.bid) or self.draw is None:
+        if (
+            (self.draw == Color.WHITE and player_id == self.wid)
+            or (self.draw == Color.BLACK and player_id == self.bid)
+            or self.draw is None
+        ):
             raise ChessError.DrawNotOfferedError()
 
         self.draw = None

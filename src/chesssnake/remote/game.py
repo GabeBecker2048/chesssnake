@@ -20,12 +20,10 @@ def _make_client(api_url=None, client=None):
     if client is not None:
         return client
     from .client import ApiClient
+
     url = api_url or os.getenv("CHESSSNAKE_API_URL")
     if not url:
-        raise ValueError(
-            "A remote game requires an api_url argument or the CHESSSNAKE_API_URL "
-            "environment variable."
-        )
+        raise ValueError("A remote game requires an api_url argument or the CHESSSNAKE_API_URL environment variable.")
     return ApiClient(url)
 
 
@@ -39,8 +37,18 @@ class Game(BaseGame):
     :param api_url: Base URL of the api-endpoint. Falls back to ``CHESSSNAKE_API_URL``.
     """
 
-    def __init__(self, white_id=0, black_id=1, group_id=0, white_name='', black_name='',
-                 remote=False, auto_sync=False, api_url=None, _client=None):
+    def __init__(
+        self,
+        white_id=0,
+        black_id=1,
+        group_id=0,
+        white_name="",
+        black_name="",
+        remote=False,
+        auto_sync=False,
+        api_url=None,
+        _client=None,
+    ):
         self.remote = remote or auto_sync
         self.auto_sync = auto_sync
         self._client = None
@@ -49,7 +57,9 @@ class Game(BaseGame):
             self._client = _make_client(api_url, _client)
             state = self._client.get_or_create_game(group_id, white_id, black_id, white_name, black_name)
             super().__init__(
-                white_id, black_id, group_id,
+                white_id,
+                black_id,
+                group_id,
                 white_name=state["wname"] if state["wname"] is not None else white_name,
                 black_name=state["bname"] if state["bname"] is not None else black_name,
                 board=self._board_from_state(state),
@@ -104,14 +114,16 @@ class Game(BaseGame):
     def draw_offer(self, player_id):
         super().draw_offer(player_id)
         if self.auto_sync:
-            self._client.update_draw(self.gid, self.wid, self.bid,
-                                    int(self.draw) if self.draw is not None else None, int(self.board.status))
+            self._client.update_draw(
+                self.gid, self.wid, self.bid, int(self.draw) if self.draw is not None else None, int(self.board.status)
+            )
 
     def draw_accept(self, player_id):
         super().draw_accept(player_id)
         if self.auto_sync:
-            self._client.update_draw(self.gid, self.wid, self.bid,
-                                    int(self.draw) if self.draw is not None else None, int(self.board.status))
+            self._client.update_draw(
+                self.gid, self.wid, self.bid, int(self.draw) if self.draw is not None else None, int(self.board.status)
+            )
 
     def draw_decline(self, player_id):
         super().draw_decline(player_id)
