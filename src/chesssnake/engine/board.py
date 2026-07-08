@@ -375,6 +375,28 @@ class Board:
 
         return len(self.threats_on(king_square, player)) > 0
 
+    def _squares_between(self, a, b):
+        """
+        Squares strictly between two colinear squares ``a`` and ``b`` (exclusive).
+
+        Works for a shared rank, file, or diagonal — the only lines along which a
+        sliding piece can check a king. Returns an empty list when the squares are
+        adjacent (nothing can be interposed).
+
+        :param a: One endpoint square (e.g. the king's square).
+        :type a: Square
+        :param b: The other endpoint square (e.g. the checking piece's square).
+        :type b: Square
+        :return: The list of `Square` objects strictly between ``a`` and ``b``.
+        :rtype: list[Square]
+        """
+        di = b.i - a.i
+        dj = b.j - a.j
+        steps = max(abs(di), abs(dj))
+        step_i = (di > 0) - (di < 0)  # sign of di (-1, 0, or 1)
+        step_j = (dj > 0) - (dj < 0)  # sign of dj (-1, 0, or 1)
+        return [self[a.i + s * step_i, a.j + s * step_j] for s in range(1, steps)]
+
     # returns true if the given player is in checkmate
     # returns false otherwise
     def check_for_mate(self, player):
@@ -431,64 +453,9 @@ class Board:
 
             # blocking
             if threat.piece.piecetype in (PieceType.ROOK, PieceType.BISHOP, PieceType.QUEEN):
-                pbsquares = []
-                # horizontal and vertical
-                if threat.piece.piecetype in (PieceType.ROOK, PieceType.QUEEN):
-
-                    # if they are on the same rank...
-                    if threat.i == king_square.i:
-                        if threat.j > king_square.j:
-                            upper = threat.j
-                            lower = king_square.j
-                        else:
-                            upper = king_square.j
-                            lower = threat.j
-
-                        # loops through all squares between the threatening piece and the king
-                        for x in range(lower + 1, upper):
-                            pbsquares.append(self[threat.i, x])
-
-                    # if they are on the same file...
-                    elif threat.j == king_square.j:
-                        if threat.i > king_square.i:
-                            upper = threat.i
-                            lower = king_square.i
-                        else:
-                            upper = king_square.i
-                            lower = threat.i
-
-                        # loops through all squares between the threatening piece and the king
-                        for x in range(lower + 1, upper):
-                            pbsquares.append(self[x, threat.j])
-
-                # diagonal
-                if threat.piece.piecetype in (PieceType.BISHOP, PieceType.QUEEN):
-
-                    delta_i = threat.i - king_square.j
-                    delta_j = threat.j - king_square.j
-
-                    # this is the number of squares diagonally inbetween the threat and the king
-                    num_between = abs(delta_i) - 1
-
-                    # threat is positive i positive j compared to king
-                    if delta_i > 0 < delta_j:
-                        for x in range(num_between):
-                            pbsquares.append(self[threat.i - x, threat.j - x])
-
-                    # threat is negative i positive j compared to king
-                    elif delta_i < 0 < delta_j:
-                        for x in range(num_between):
-                            pbsquares.append(self[threat.i + x, threat.j - x])
-
-                    # threat is negative i negative j compared to king
-                    elif delta_i < 0 > delta_j:
-                        for x in range(num_between):
-                            pbsquares.append(self[threat.i + x, threat.j + x])
-
-                    # threat is positive i negative j compared to king
-                    elif delta_i > 0 > delta_j:
-                        for x in range(num_between):
-                            pbsquares.append(self[threat.i - x, threat.j + x])
+                # the squares between the (sliding) checker and the king — any of
+                # which a friendly piece could interpose on to block the check
+                pbsquares = self._squares_between(king_square, threat)
 
                 # if any of the possible blocking squares (pbsquares) are blockable, returns false
                 for pbsquare in pbsquares:

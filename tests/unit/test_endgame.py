@@ -54,6 +54,57 @@ def test_pawn_can_block_check_is_not_mate(make_board):
     assert board.check_for_mate(1) is False  # d6-d5 blocks the check
 
 
+def test_diagonal_check_can_be_blocked_is_not_mate(make_board):
+    # Regression: a *diagonal* check that can be answered by interposing a piece
+    # must not be scored as mate. The blocking-square math for diagonals was doubly
+    # broken (it used `king_square.j` where it meant `.i`, and was off by one), so a
+    # blockable diagonal check could be misreported as checkmate.
+    #
+    # Black king h8 is checked by the white bishop a1 along the long diagonal; the
+    # king is boxed (own pawns g8/h7, and g7 lies on the checking diagonal). The one
+    # defense is Rb2, interposing the rook on the diagonal.
+    board = make_board({
+        (0, 7): "K1",                 # black king h8
+        (7, 0): "B0",                 # white bishop a1 (checks along a1-h8)
+        (0, 6): "P1", (1, 7): "P1",   # black pawns g8, h7 (box the king)
+        (0, 1): "R1",                 # black rook b8 -> can interpose with Rb2
+        (7, 4): "K0",                 # white king e1
+    })
+    assert board.check_for_check(1) is True
+    assert board.check_for_mate(1) is False  # Rb2 blocks the diagonal
+
+
+def test_diagonal_checkmate_is_mate(make_board):
+    # Positive counterpart: a genuine long-range diagonal mate must still be scored
+    # as mate (guards against a fix that simply never reports diagonal mates).
+    #
+    # White bishop c3 checks the black king h8 along c3-h8; the white queen f7 covers
+    # every escape (g8, h7, g7). Nothing can interpose on d4/e5/f6/g7 or capture the
+    # bishop -> checkmate.
+    board = make_board({
+        (0, 7): "K1",   # black king h8
+        (5, 2): "B0",   # white bishop c3 (checks along c3-h8)
+        (1, 5): "Q0",   # white queen f7 (covers g8/h7/g7)
+        (7, 4): "K0",   # white king e1
+    })
+    assert board.check_for_check(1) is True
+    assert board.check_for_mate(1) is True
+
+
+def test_diagonal_check_can_be_captured_is_not_mate(make_board):
+    # A diagonal check answered by capturing the checker is not mate.
+    # Black rook h3 shares the 3rd rank with the checking bishop c3 -> Rxc3.
+    board = make_board({
+        (0, 7): "K1",   # black king h8
+        (5, 2): "B0",   # white bishop c3 (checks along c3-h8)
+        (1, 5): "Q0",   # white queen f7 (covers the king's escapes)
+        (5, 7): "R1",   # black rook h3 -> can capture with Rxc3
+        (7, 4): "K0",   # white king e1
+    })
+    assert board.check_for_check(1) is True
+    assert board.check_for_mate(1) is False  # Rxc3 removes the checker
+
+
 def test_ongoing_game_has_no_terminal_status():
     g = Game()
     g.move("e4")
