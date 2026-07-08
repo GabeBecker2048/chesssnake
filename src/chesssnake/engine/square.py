@@ -1,5 +1,7 @@
 """The `Square` value type: one of the 64 board positions."""
 
+from .notation import FILES
+
 
 class Square:
     """
@@ -27,7 +29,7 @@ class Square:
         the square is empty.
     :type piece: Optional[Piece]
     """
-    def __init__(self, i, j, piece=None):
+    def __init__(self, i: int, j: int, piece=None):
         """
         Initializes a square on a chessboard.
 
@@ -53,7 +55,7 @@ class Square:
         self.j = j
 
         # converts from coords to chess notation
-        self.c_notation = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j] + str(8 - i)
+        self.c_notation = FILES[j] + str(8 - i)
 
         # determines color of square
         self.color = j % 2 if (i % 2) == 0 else (j + 1) % 2
@@ -61,7 +63,7 @@ class Square:
         # sets the piece
         self.piece = piece
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         """
         Compares two squares for equality.
 

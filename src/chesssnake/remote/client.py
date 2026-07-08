@@ -8,7 +8,7 @@ app. Non-2xx responses are translated back into the shared ``GameError`` types s
 callers see the same exceptions they would from a local database.
 """
 
-from ..postgres import errors
+from ..db import errors
 
 # Error-type name (sent by the server) -> exception class to raise. Types with
 # custom constructors (SQLIdError, SQLAuthError) fall back to their SQLError base,

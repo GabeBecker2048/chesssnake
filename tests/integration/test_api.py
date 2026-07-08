@@ -1,6 +1,6 @@
 """Integration tests for the FastAPI api-endpoint hitting a real Postgres."""
 
-from chesssnake.postgres.operations import INITIAL_BOARD
+from chesssnake.db import INITIAL_BOARD
 
 
 def test_health(api_client):

@@ -1,3 +1,6 @@
+from .enums import PieceType
+
+
 class ChessError(Exception):
     """
     Represents an exception specific to errors occurring in chess-related
@@ -83,22 +86,7 @@ class PieceNotFoundError(ChessError):
     or informational purposes.
     """
     def __init__(self, square, piecetype):
-
-        if piecetype == 'P':
-            piece = "pawn"
-        elif piecetype == 'R':
-            piece = "rook"
-        elif piecetype == 'N':
-            piece = "knight"
-        elif piecetype == 'B':
-            piece = "bishop"
-        elif piecetype == 'Q':
-            piece = "queen"
-        elif piecetype == 'K':
-            piece = "king"
-        else:
-            piece = "unknown"
-
+        piece = PieceType(piecetype).full_name
         super().__init__(f"No {piece}s can move to {square.c_notation}")
 
 
@@ -112,24 +100,7 @@ class MultiplePiecesFoundError(ChessError):
     provides detailed information about the conflicting pieces and their positions.
     """
     def __init__(self, square, found):
-
-        piecetype = found[0].piece.piecetype
-
-        if piecetype == 'P':
-            piece = "pawn"
-        elif piecetype == 'R':
-            piece = "rook"
-        elif piecetype == 'N':
-            piece = "knight"
-        elif piecetype == 'B':
-            piece = "bishop"
-        elif piecetype == 'Q':
-            piece = "queen"
-        elif piecetype == 'K':
-            piece = "king"
-        else:
-            piece = "unknown"
-
+        piece = PieceType(found[0].piece.piecetype).full_name
         message = f"Multiple {piece}s can move to {square.c_notation}. The {piece}s are:"
         for psquare in found:
             message += f"\n\ton {psquare.c_notation}"

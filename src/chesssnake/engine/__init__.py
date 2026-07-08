@@ -7,8 +7,9 @@ public names are re-exported here so consumers can do
 
 from . import errors, notation
 from .board import Board
+from .enums import Color, GameStatus, PieceType
 from .game import Game
-from .image import img
+from .image import render_board
 from .move import Move
 from .notation import FILES, get_c_notation, get_coords, is_valid_c_notation
 from .pieces import Bishop, King, Knight, Pawn, Piece, Queen, Rook
@@ -21,7 +22,10 @@ __all__ = [
     "Square",
     "Move",
     "Game",
-    "img",
+    "render_board",
+    "Color",
+    "PieceType",
+    "GameStatus",
     "Piece",
     "Rook",
     "Knight",

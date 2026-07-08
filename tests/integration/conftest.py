@@ -24,7 +24,7 @@ def api_client():
         os.environ["CHESSSNAKE_INIT_DB"] = "1"  # let the app init the schema on startup
 
         from chesssnake.api.server import app
-        from chesssnake.postgres import sql
+        from chesssnake.db import sql
 
         # Entering the context runs the FastAPI lifespan (pool + schema init).
         with TestClient(app) as client:
@@ -38,7 +38,7 @@ def api_client():
 
 @pytest.fixture(autouse=True)
 def clean_tables(api_client):
-    from chesssnake.postgres.sql import execute_psql
+    from chesssnake.db.sql import execute_psql
     execute_psql("TRUNCATE Games, Challenges")
     yield
 

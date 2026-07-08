@@ -5,11 +5,35 @@ from the top (i=0 is rank 8, i=7 is rank 1); ``j`` is the file index 0-7 (j=0 is
 file 'a').
 """
 
-# The eight files, 'a' (j=0) through 'h' (j=7).
+# The eight files, 'a' (j=0) through 'h' (j=7), and ranks '1' through '8'.
 FILES = "abcdefgh"
+RANKS = "12345678"
 
 
-def get_coords(c_notation):
+def matches_disambiguation(square, file_limit: "str | None" = None, rank_limit: "str | None" = None) -> bool:
+    """
+    Whether ``square`` satisfies an optional file and/or rank disambiguation.
+
+    Used when resolving algebraic notation like ``Rad1`` (file ``a``) or ``R1a3``
+    (rank ``1``) back to a concrete piece.
+
+    :param square: The candidate square to test.
+    :type square: Square
+    :param file_limit: Required file letter ('a'-'h'), or ``None`` for no constraint.
+    :type file_limit: str or None
+    :param rank_limit: Required rank digit ('1'-'8'), or ``None`` for no constraint.
+    :type rank_limit: str or None
+    :return: ``True`` if the square meets every supplied constraint.
+    :rtype: bool
+    """
+    if file_limit is not None and file_limit != FILES[square.j]:
+        return False
+    if rank_limit is not None and rank_limit != str(8 - square.i):
+        return False
+    return True
+
+
+def get_coords(c_notation: str) -> tuple[int, int]:
     """
     Converts chess notation (e.g., 'e4') into board coordinates `(i, j)`.
 
@@ -31,7 +55,7 @@ def get_coords(c_notation):
     return x, y
 
 
-def get_c_notation(i, j):
+def get_c_notation(i: int, j: int) -> str:
     """
     Converts board coordinates `(i, j)` into chess notation (e.g., 'e4').
 
@@ -46,7 +70,7 @@ def get_c_notation(i, j):
     return FILES[j] + str(8 - i)
 
 
-def is_valid_c_notation(movename):
+def is_valid_c_notation(movename: str) -> bool:
     """
     Validates whether the given chess move adheres to algebraic notation.
     See https://en.wikipedia.org/wiki/Algebraic_notation_(chess) for more information on algebraic notation.
@@ -84,15 +108,15 @@ def is_valid_c_notation(movename):
         return True
 
     # if not a pawn (or using traditional notation with 'P')...
-    if movename[0] in ['R', 'N', 'B', 'Q', 'K', 'P']:
+    if movename[0] in "RNBQKP":
         # temp is everything that isn't square location or piecetype
         temp = movename[1:-2]
 
     # if a pawn...
-    elif movename[0] in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']:
+    elif movename[0] in FILES:
 
         # if there is a promotion, it is removed from the string
-        if movename[-1] in ['R', 'N', 'B', 'Q']:
+        if movename[-1] in "RNBQ":
             movename = movename[:-1]
 
         # if there is a capture sign as the second letter...
@@ -109,8 +133,7 @@ def is_valid_c_notation(movename):
         return False
 
     # makes sure the last 2 characters are a square
-    if movename[-2] not in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] or \
-       movename[-1] not in ['1', '2', '3', '4', '5', '6', '7', '8']:
+    if movename[-2] not in FILES or movename[-1] not in RANKS:
         return False
 
     if len(temp) == 0:
@@ -118,29 +141,25 @@ def is_valid_c_notation(movename):
 
     # if temp is one character and is not a valid character, returns false
     elif len(temp) == 1:
-        if temp not in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', '1', '2', '3', '4', '5', '6', '7', '8', 'x']:
+        if temp not in FILES + RANKS + "x":
             return False
 
     # if temp is two characters...
     elif len(temp) == 2:
 
         # if temp is a capture and the first letter of temp is not valid, returns false
-        if 'x' == temp[1] and temp[0] not in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', '1', '2', '3', '4', '5', '6',
-                                              '7', '8']:
+        if 'x' == temp[1] and temp[0] not in FILES + RANKS:
             return False
 
         # if temp is a specification move and uses invalid characters, returns false
-        if temp[0] not in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] or \
-           temp[1] not in ['1', '2', '3', '4', '5', '6', '7', '8']:
+        if temp[0] not in FILES or temp[1] not in RANKS:
             return False
 
     # if temp is three characters...
     elif len(temp) == 3:
 
         # if temp is a specification and capture move and uses invalid specification, returns false
-        if temp[0] not in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] or \
-           temp[1] not in ['1', '2', '3', '4', '5', '6', '7', '8'] or \
-           temp[2] != 'x':
+        if temp[0] not in FILES or temp[1] not in RANKS or temp[2] != 'x':
             return False
 
     # if temp is more than 3 characters, it is invalid
