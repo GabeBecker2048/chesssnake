@@ -1,0 +1,15 @@
+# uv / virtualenv
+.venv/
+
+# Python build & cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# IDE
+.idea/
+
+# local Postgres data (docker-compose volume)
+postgres-db/

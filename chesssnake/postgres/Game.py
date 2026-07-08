@@ -4,7 +4,6 @@ from ..chesslib.Game import Game as BaseGame
 from ..chesslib import Chess
 
 # TODO
-# - Test new changes
 # - Standardize dtypes in args and returns (either add them EVERYWHERE or NOWHERE!)
 # - Docstrings need double checking, especially for possible errors. Both for Game and Challenges
 
@@ -114,6 +113,7 @@ class Game(BaseGame):
                          white_name = game_data["wname"],
                          black_name = game_data["bname"],
                          board = game_data["board"],
+                         turn = game_data["turn"],
                          draw = game_data["draw"])
         self.sql = sql
         self.auto_sql = auto_sql
@@ -320,9 +320,13 @@ class Game(BaseGame):
             "wname"    : white_name,
             "bname"    : black_name
         }
-        game: execute_psql(query, params=params)[0]
+        game = execute_psql(query, params=params)[0]
 
-        pawnmove = Chess.Square(game["pawnmove"][0], game["pawnmove"][1]) if game["pawnmove"] is not None else None
+        if game["pawnmove"] is not None:
+            i, j = Chess.Board.get_coords(game["pawnmove"])
+            pawnmove = Chess.Square(i, j)
+        else:
+            pawnmove = None
         boardarr = Chess.Board.assemble_board(game["board"], game["moved"])
         board = Chess.Board(board=boardarr, two_moveP=pawnmove)
         board.status = int(game["status"])
@@ -368,7 +372,8 @@ class Game(BaseGame):
             """
         params = (player_id, player_id, gid)
         games = execute_psql(query, params=params)
-        games = [g['OpponentId'] for g in games]
+        # RealDictCursor keys follow PostgreSQL identifier folding (unquoted -> lowercase).
+        games = [g['opponentid'] for g in games]
         return games
 
 
@@ -433,7 +438,7 @@ class Challenge:
             raise GameError.ChallengeError("You can't challenge yourself.")
 
         # Check if they are already in a game
-        if Game.psql_game_exists(gid, challenger, opponent):
+        if Game.psql_game_exists(challenger, opponent, gid):
             raise GameError.ChallengeError(f"There is an unresolved game between {challenger} and {opponent} already!")
 
         # Check if a challenge already exists
@@ -447,8 +452,10 @@ class Challenge:
         elif challenger == challenge["challenger"]:
             raise GameError.ChallengeError(f"You have already challenged {opponent}! Wait for them to accept.")
 
-        # If the challenge exists and is valid, delete it (i.e., accept it)
-        Challenge.delete_challenge(challenger, opponent, gid)
+        # If the challenge exists and is valid, delete it (i.e., accept it).
+        # Delete it as actually stored, since the accepting player's orientation
+        # (challenger/opponent) is the reverse of the pending challenge.
+        Challenge.delete_challenge(challenge["challenger"], challenge["challenged"], gid)
         return True
 
     @staticmethod
@@ -461,10 +468,10 @@ class Challenge:
         :param gid: Group ID. Default is 0.
         :return: A dictionary containing the challenger and challenge details if a challenge exists, otherwise None.
         """
-        Challenge._validate_ids(player1, player2, gid)
+        validate_ids(player1, player2, gid)
 
         query = """
-            SELECT Challenger, Challenged 
+            SELECT Challenger, Challenged
             FROM Challenges 
             WHERE GroupId = %(gid)s AND (
                 (Challenger = %(player1)s AND Challenged = %(player2)s) OR 
@@ -475,7 +482,8 @@ class Challenge:
         challenges = execute_psql(query, params=params)
 
         if len(challenges) > 0:
-            return {"challenger": challenges[0]["Challenger"], "challenged": challenges[0]["Challenged"]}
+            # RealDictCursor keys follow PostgreSQL identifier folding (unquoted -> lowercase).
+            return {"challenger": challenges[0]["challenger"], "challenged": challenges[0]["challenged"]}
         return None
 
     @staticmethod
@@ -488,20 +496,12 @@ class Challenge:
         :param gid: Group ID. Default is 0.
         :raises ValueError: If any ID is invalid.
         """
-        Challenge._validate_ids(challenger, challenged, gid)
+        validate_ids(challenger, challenged, gid)
 
         query = """
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 
-                    FROM Challenges 
-                    WHERE GroupId = %(gid)s AND Challenger = %(challenger)s AND Challenged = %(challenged)s
-                ) THEN
-                    INSERT INTO Challenges (GroupId, Challenger, Challenged)
-                    VALUES (%(gid)s, %(challenger)s, %(challenged)s);
-                END IF;
-            END $$;
+            INSERT INTO Challenges (GroupId, Challenger, Challenged)
+            VALUES (%(gid)s, %(challenger)s, %(challenged)s)
+            ON CONFLICT (GroupId, Challenger, Challenged) DO NOTHING
         """
         params = {"gid": gid, "challenger": challenger, "challenged": challenged}
         execute_psql(query, params=params)
@@ -516,10 +516,10 @@ class Challenge:
         :param gid: Group ID. Default is 0.
         :raises ValueError: If any ID is invalid.
         """
-        Challenge._validate_ids(challenger, challenged, gid)
+        validate_ids(challenger, challenged, gid)
 
         query = """
-            DELETE FROM Challenges 
+            DELETE FROM Challenges
             WHERE GroupId = %(gid)s AND Challenger = %(challenger)s AND Challenged = %(challenged)s
         """
         params = {"gid": gid, "challenger": challenger, "challenged": challenged}
