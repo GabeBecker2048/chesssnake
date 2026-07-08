@@ -98,9 +98,9 @@ def is_valid_c_notation(movename: str) -> bool:
         return False
 
     # cuts off check or checkmate symbol from tail end
-    if '+' == movename[-1]:
+    if "+" == movename[-1]:
         movename = movename[:-1]
-    if '#' == movename[-1]:
+    if "#" == movename[-1]:
         movename = movename[:-1]
 
     # if the move is a castling move, returns true
@@ -114,13 +114,12 @@ def is_valid_c_notation(movename: str) -> bool:
 
     # if a pawn...
     elif movename[0] in FILES:
-
         # if there is a promotion, it is removed from the string
         if movename[-1] in "RNBQ":
             movename = movename[:-1]
 
         # if there is a capture sign as the second letter...
-        if movename[1] == 'x':
+        if movename[1] == "x":
             # temp is everything that isn't square location or piecetype
             temp = movename[1:-2]
 
@@ -146,9 +145,8 @@ def is_valid_c_notation(movename: str) -> bool:
 
     # if temp is two characters...
     elif len(temp) == 2:
-
         # if temp is a capture and the first letter of temp is not valid, returns false
-        if 'x' == temp[1] and temp[0] not in FILES + RANKS:
+        if "x" == temp[1] and temp[0] not in FILES + RANKS:
             return False
 
         # if temp is a specification move and uses invalid characters, returns false
@@ -157,9 +155,8 @@ def is_valid_c_notation(movename: str) -> bool:
 
     # if temp is three characters...
     elif len(temp) == 3:
-
         # if temp is a specification and capture move and uses invalid specification, returns false
-        if temp[0] not in FILES or temp[1] not in RANKS or temp[2] != 'x':
+        if temp[0] not in FILES or temp[1] not in RANKS or temp[2] != "x":
             return False
 
     # if temp is more than 3 characters, it is invalid

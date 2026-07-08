@@ -1,6 +1,5 @@
 """Unit tests for coordinate <-> notation conversion and the Square class."""
 
-
 from chesssnake.engine import Board, Square
 
 

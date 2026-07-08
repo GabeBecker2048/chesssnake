@@ -43,9 +43,7 @@ def _render_side(grid, small_font, flip, highlights):
         for y in range(8):
             piece = grid[x][y].piece
             if piece is not None:
-                board_img.alpha_composite(
-                    _piece_image(piece.piecetype.value, int(piece.color)), (TILE * y, TILE * x)
-                )
+                board_img.alpha_composite(_piece_image(piece.piecetype.value, int(piece.color)), (TILE * y, TILE * x))
 
             # rank number down the left edge
             if y == 0:

@@ -37,6 +37,7 @@ app = FastAPI(title="chesssnake api-endpoint", lifespan=lifespan)
 
 # --- Schemas ---------------------------------------------------------------
 
+
 class GameCreate(BaseModel):
     group_id: int = 0
     white_id: int = 0
@@ -84,6 +85,7 @@ def _state(row):
 # --- Exception handlers ----------------------------------------------------
 # Map domain errors to structured JSON so the client can re-raise the same types.
 
+
 def _error(status_code, exc):
     return JSONResponse(
         status_code=status_code,
@@ -113,6 +115,7 @@ async def _handle_game_error(_request, exc):
 
 # --- Routes ----------------------------------------------------------------
 
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -120,18 +123,24 @@ async def health():
 
 @app.post("/games")
 async def create_game(body: GameCreate):
-    row = ops.game_get_or_create(
-        body.group_id, body.white_id, body.black_id, body.white_name, body.black_name
-    )
+    row = ops.game_get_or_create(body.group_id, body.white_id, body.black_id, body.white_name, body.black_name)
     return _state(row)
 
 
 @app.put("/games/{group_id}/{white_id}/{black_id}")
 async def update_game(group_id: int, white_id: int, black_id: int, state: GameState):
     ops.game_update(
-        group_id, white_id, black_id,
-        state.board, state.turn, state.pawnmove, state.draw,
-        state.moved, state.status, state.wname, state.bname,
+        group_id,
+        white_id,
+        black_id,
+        state.board,
+        state.turn,
+        state.pawnmove,
+        state.draw,
+        state.moved,
+        state.status,
+        state.wname,
+        state.bname,
     )
     return {"status": "ok"}
 

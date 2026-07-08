@@ -63,17 +63,25 @@ class ApiClient:
     # --- games -------------------------------------------------------------
 
     def get_or_create_game(self, group_id, white_id, black_id, white_name="", black_name=""):
-        return self._request("POST", "/games", json={
-            "group_id": group_id, "white_id": white_id, "black_id": black_id,
-            "white_name": white_name, "black_name": black_name,
-        })
+        return self._request(
+            "POST",
+            "/games",
+            json={
+                "group_id": group_id,
+                "white_id": white_id,
+                "black_id": black_id,
+                "white_name": white_name,
+                "black_name": black_name,
+            },
+        )
 
     def update_game(self, group_id, white_id, black_id, state):
         return self._request("PUT", f"/games/{group_id}/{white_id}/{black_id}", json=state)
 
     def update_draw(self, group_id, white_id, black_id, draw, status):
         return self._request(
-            "PATCH", f"/games/{group_id}/{white_id}/{black_id}/draw",
+            "PATCH",
+            f"/games/{group_id}/{white_id}/{black_id}/draw",
             json={"draw": draw, "status": status},
         )
 
@@ -94,9 +102,15 @@ class ApiClient:
     # --- challenges --------------------------------------------------------
 
     def challenge(self, challenger, challenged, group_id=0):
-        data = self._request("POST", "/challenges", json={
-            "group_id": group_id, "challenger": challenger, "challenged": challenged,
-        })
+        data = self._request(
+            "POST",
+            "/challenges",
+            json={
+                "group_id": group_id,
+                "challenger": challenger,
+                "challenged": challenged,
+            },
+        )
         return data["accepted"]
 
     def challenge_exists(self, player1, player2, group_id=0):
@@ -104,6 +118,12 @@ class ApiClient:
         return data["challenge"]
 
     def delete_challenge(self, challenger, challenged, group_id=0):
-        return self._request("DELETE", "/challenges", json={
-            "group_id": group_id, "challenger": challenger, "challenged": challenged,
-        })
+        return self._request(
+            "DELETE",
+            "/challenges",
+            json={
+                "group_id": group_id,
+                "challenger": challenger,
+                "challenged": challenged,
+            },
+        )

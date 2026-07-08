@@ -34,11 +34,11 @@ def test_moved_flag_set_for_rook_that_returned_home():
     # The `moved` string flags a king/rook that is on its home square and has
     # moved (so castling rights are correctly lost even if the rook returns).
     board = Board()
-    board.move("a4", 0)    # open the a-file in front of the a1 rook
-    board.move("Ra3", 0)   # a1 rook steps out
-    board.move("Ra1", 0)   # ...and returns home, now flagged as moved
+    board.move("a4", 0)  # open the a-file in front of the a1 rook
+    board.move("Ra3", 0)  # a1 rook steps out
+    board.move("Ra1", 0)  # ...and returns home, now flagged as moved
 
     _, moved = Board.disassemble_board(board)
-    assert moved[0] == "1"          # white a1 rook has moved
-    assert moved[1] == "0"          # white king has not
-    assert moved[3:] == "000"       # black king/rooks untouched
+    assert moved[0] == "1"  # white a1 rook has moved
+    assert moved[1] == "0"  # white king has not
+    assert moved[3:] == "000"  # black king/rooks untouched
