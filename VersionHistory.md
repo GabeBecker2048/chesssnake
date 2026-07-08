@@ -18,8 +18,9 @@ _Note: Some minor versions are missing (e.g., documentation only updates, minor 
 
 | Version | Planned Release Date | Changes/Notes                                                    | Author      | Status      |
 |---------|----------------------|------------------------------------------------------------------|-------------|-------------|
-| 0.7.0   | 2025-03-31           | Add SQL Lite support                                             | Gabe Becker | In Progress |
-| 0.8.0   | TBD                  | Performance improvements and optimizations, finish documentation | Gabe Becker | Planned     |
-| 0.9.0   | TBD                  | Staging for full release, documentation full release             | Gabe Becker | Planned     |
-| 1.0.0   | TBD                  | First major stable release with full features                    | Gabe Becker | Planned     |
-| 2.0.0   | TBD                  | AI/Stockfish support                                             | Gabe Becker | Planned     |
+| 0.7.0   | TBD                  | Add REST API / api-endpoint (Game client → REST API → database)  | Gabe Becker | In Progress |
+| 0.8.0   | TBD                  | Add SQL Lite support                                            | Gabe Becker | Planned     |
+| 0.9.0   | TBD                  | Performance improvements and optimizations, finish documentation | Gabe Becker | Planned     |
+| 0.10.0  | TBD                  | Staging for full release, documentation full release             | Gabe Becker | Planned     |
+| 1.1.0   | TBD                  | First major stable release with full features                    | Gabe Becker | Planned     |
+| 2.1.0   | TBD                  | AI/Stockfish support                                             | Gabe Becker | Planned     |
