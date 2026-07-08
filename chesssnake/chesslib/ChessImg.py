@@ -1,6 +1,7 @@
-from PIL import Image, ImageFont, ImageDraw
 import importlib.resources
 from copy import deepcopy
+
+from PIL import Image, ImageDraw, ImageFont
 
 from .Chess import Board, Move
 
@@ -40,7 +41,7 @@ def img(board: Board, p1: str, p2: str, move: Move = None):
 
     # gets the blank template
     img = Image.open(str(importlib.resources.files('chesssnake').joinpath('data/img/template.png')))
-    
+
     wboard = Image.open(str(importlib.resources.files('chesssnake').joinpath('data/img/blankboard.png')))
     bboard = Image.open(str(importlib.resources.files('chesssnake').joinpath('data/img/blankboard.png')))
 
