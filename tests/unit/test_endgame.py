@@ -1,6 +1,6 @@
 """Unit tests for terminal game states: checkmate and stalemate detection."""
 
-from chesssnake.chesslib.Game import Game
+from chesssnake.engine import Game
 
 
 def test_fools_mate_is_checkmate():

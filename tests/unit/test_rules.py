@@ -1,8 +1,10 @@
 """Unit tests for move mechanics: pawns, captures, en passant, castling, promotion, errors."""
 
 import pytest
-from chesssnake.chesslib import Chess, ChessError
-from chesssnake.chesslib.Game import Game
+
+from chesssnake import engine as Chess
+from chesssnake.engine import Game
+from chesssnake.engine import errors as ChessError
 
 
 def piece_at(board, c_notation):

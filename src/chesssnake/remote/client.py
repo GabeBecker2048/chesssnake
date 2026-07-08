@@ -8,17 +8,17 @@ app. Non-2xx responses are translated back into the shared ``GameError`` types s
 callers see the same exceptions they would from a local database.
 """
 
-from ..postgres import GameError
+from ..postgres import errors
 
 # Error-type name (sent by the server) -> exception class to raise. Types with
 # custom constructors (SQLIdError, SQLAuthError) fall back to their SQLError base,
 # which still preserves isinstance checks.
 _ERROR_TYPES = {
-    "ChallengeError": GameError.ChallengeError,
-    "SQLError": GameError.SQLError,
-    "SQLIdError": GameError.SQLError,
-    "SQLAuthError": GameError.SQLError,
-    "GameError": GameError.GameError,
+    "ChallengeError": errors.ChallengeError,
+    "SQLError": errors.SQLError,
+    "SQLIdError": errors.SQLError,
+    "SQLAuthError": errors.SQLError,
+    "GameError": errors.GameError,
 }
 
 
@@ -58,7 +58,7 @@ class ApiClient:
             data = {}
         error_type = data.get("error_type", "GameError")
         detail = data.get("detail") or resp.text
-        raise _ERROR_TYPES.get(error_type, GameError.GameError)(detail)
+        raise _ERROR_TYPES.get(error_type, errors.GameError)(detail)
 
     # --- games -------------------------------------------------------------
 

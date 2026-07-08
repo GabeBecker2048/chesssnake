@@ -1,7 +1,8 @@
 """Unit tests for algebraic-notation syntax validation (Move.is_valid_c_notation)."""
 
 import pytest
-from chesssnake.chesslib.Chess import Move
+
+from chesssnake.engine import Move
 
 valid = Move.is_valid_c_notation
 
