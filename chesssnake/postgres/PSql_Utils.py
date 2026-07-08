@@ -1,9 +1,10 @@
-import psycopg2
-from psycopg2 import pool
-from psycopg2 import sql
-from psycopg2.extras import RealDictCursor
 import importlib.resources
 from os import getenv
+
+import psycopg2
+from psycopg2 import pool, sql
+from psycopg2.extras import RealDictCursor
+
 from . import GameError
 
 # Initialize the database connection pool
@@ -161,7 +162,7 @@ def psql_db_schema_init(sql_creds=None):
         # Establish a direct connection using environment-based or provided credentials
         conn = psycopg2.connect(load_psql_conn_str(sql_creds=sql_creds))
         db_init_fp = str(importlib.resources.files('chesssnake').joinpath('data/init.sql'))
-        with open(db_init_fp, 'r') as db_init_file:
+        with open(db_init_fp) as db_init_file:
             init_script = db_init_file.read()
 
         # Execute the schema initialization script
