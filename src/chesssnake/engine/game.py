@@ -1,6 +1,7 @@
 from . import errors as ChessError
 from .board import Board
-from .image import img as render_board
+from .enums import Color, GameStatus
+from .image import render_board
 from .move import Move
 
 
@@ -24,13 +25,11 @@ class Game:
     :type bname: str
     :ivar board: The chess board used in the game, represented as a `Board` object.
     :type board: Board
-    :ivar turn: Keeps track of whose turn it is (0 for white, 1 for black).
-    :type turn: int
-    :ivar draw: Indicates the draw offer state:
-        - 0: White has offered a draw.
-        - 1: Black has offered a draw.
-        - `None`: No draw offer is currently active.
-    :type draw: int or None
+    :ivar turn: Whose turn it is, as a :class:`~chesssnake.engine.enums.Color`.
+    :type turn: Color
+    :ivar draw: Which color has an open draw offer (a
+        :class:`~chesssnake.engine.enums.Color`), or ``None`` if none is active.
+    :type draw: Color or None
     """
 
     def __init__(self,
@@ -39,9 +38,9 @@ class Game:
                  group_id: int = 0,
                  white_name: str = '',
                  black_name: str = '',
-                 board : Board = None,
+                 board: "Board | None" = None,
                  turn: int = 0,
-                 draw: int = None,
+                 draw: "int | None" = None,
                  ):
         """
         Initializes a new chess game.
@@ -66,8 +65,8 @@ class Game:
         self.wname = white_name
         self.bname = black_name
         self.board = Board() if board is None else board
-        self.turn = turn
-        self.draw = draw
+        self.turn = Color(turn)
+        self.draw: Color | None = Color(draw) if draw is not None else None
 
     def __str__(self):
         """
@@ -87,12 +86,12 @@ class Game:
         :return: `True` if it is the player's turn, otherwise `False`.
         :rtype: bool
         """
-        if (self.turn == 0 and player_id == self.wid) or (self.turn == 1 and player_id == self.bid):
+        if (self.turn == Color.WHITE and player_id == self.wid) or (self.turn == Color.BLACK and player_id == self.bid):
             return True
         else:
             return False
 
-    def move(self, move: str, img: bool = False, save: str = None):
+    def move(self, move: str, img: bool = False, save: "str | None" = None):
         """
         Executes a chess move if it is the active player's turn.
 
@@ -121,11 +120,11 @@ class Game:
         if not Move.is_valid_c_notation(move):
             raise ChessError.InvalidNotationError(move)
 
-        if self.board.status != 0:
+        if self.board.status != GameStatus.IN_PLAY:
             raise ChessError.GameOverError()
 
         m = self.board.move(move, self.turn)
-        self.turn = 1 - self.turn  # Changes whose turn it is
+        self.turn = self.turn.opponent  # Changes whose turn it is
 
         if img or save:
             image = render_board(self.board, self.wname, self.bname, m)
@@ -147,17 +146,17 @@ class Game:
         :raises ChessError.DrawAlreadyOfferedError: If the same player has already made a draw offer.
         :raises ChessError.DrawWrongTurnError: If the player offers a draw out of turn.
         """
-        if self.board.status != 0:
+        if self.board.status != GameStatus.IN_PLAY:
             raise ChessError.GameOverError()
 
-        if (self.draw == 0 and player_id == self.wid) or (self.draw == 1 and player_id == self.bid):
+        if (self.draw == Color.WHITE and player_id == self.wid) or (self.draw == Color.BLACK and player_id == self.bid):
             raise ChessError.DrawAlreadyOfferedError()
-        elif (self.draw == 1 and player_id == self.wid) or (self.draw == 0 and player_id == self.bid):
+        elif (self.draw == Color.BLACK and player_id == self.wid) or (self.draw == Color.WHITE and player_id == self.bid):
             self.draw_accept(player_id)
         elif not self.is_players_turn(player_id):
             raise ChessError.DrawWrongTurnError()
 
-        self.draw = 0 if player_id == self.wid else 1
+        self.draw = Color.WHITE if player_id == self.wid else Color.BLACK
 
     def draw_accept(self, player_id: int):
         """
@@ -170,14 +169,14 @@ class Game:
         :raises ChessError.GameOverError: If the game is over (i.e., the game has ended).
         :raises ChessError.DrawNotOfferedError: If no draw offer exists to accept.
         """
-        if self.board.status != 0:
+        if self.board.status != GameStatus.IN_PLAY:
             raise ChessError.GameOverError()
 
-        if (self.draw == 0 and player_id == self.wid) or (
-                self.draw == 1 and player_id == self.bid) or self.draw is None:
+        if (self.draw == Color.WHITE and player_id == self.wid) or (
+                self.draw == Color.BLACK and player_id == self.bid) or self.draw is None:
             raise ChessError.DrawNotOfferedError()
 
-        self.board.status = 2  # Set game status to draw
+        self.board.status = GameStatus.DRAW  # Set game status to draw
 
     def draw_decline(self, player_id: int):
         """
@@ -190,11 +189,11 @@ class Game:
         :raises ChessError.GameOverError: If the game is over (i.e., the game has ended).
         :raises ChessError.DrawNotOfferedError: If no draw offer exists to decline.
         """
-        if self.board.status != 0:
+        if self.board.status != GameStatus.IN_PLAY:
             raise ChessError.GameOverError()
 
-        if (self.draw == 0 and player_id == self.wid) or (
-                self.draw == 1 and player_id == self.bid) or self.draw is None:
+        if (self.draw == Color.WHITE and player_id == self.wid) or (
+                self.draw == Color.BLACK and player_id == self.bid) or self.draw is None:
             raise ChessError.DrawNotOfferedError()
 
         self.draw = None

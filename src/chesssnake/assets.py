@@ -8,7 +8,7 @@ Runtime assets live under ``chesssnake/data`` and are declared in
 import importlib.resources
 
 
-def asset_path(relpath):
+def asset_path(relpath: str) -> str:
     """
     Return the filesystem path to a packaged asset under ``chesssnake/data``.
 

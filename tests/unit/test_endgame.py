@@ -35,6 +35,25 @@ def test_stalemate_detection(make_board):
     assert g.board.status == 2  # stalemate
 
 
+def test_pawn_can_block_check_is_not_mate(make_board):
+    # Regression: a check that can only be answered by a pawn *advancing* to block
+    # must not be scored as checkmate. Earlier versions never detected a blocking
+    # pawn push (they tested `isinstance(pawn, Pawn)` on a value that is a Square),
+    # so they wrongly declared this position mate.
+    #
+    # Black king e5 is boxed by its own pawns; the white rook on a5 checks along
+    # rank 5. The sole legal reply is d6-d5, interposing the pawn.
+    board = make_board({
+        (3, 4): "K1",                              # black king e5
+        (3, 0): "R0",                              # white rook a5 (checks along rank 5)
+        (2, 3): "P1", (2, 4): "P1", (2, 5): "P1",  # black pawns d6 e6 f6
+        (4, 3): "P1", (4, 4): "P1", (4, 5): "P1",  # black pawns d4 e4 f4
+        (7, 4): "K0",                              # white king e1
+    })
+    assert board.check_for_check(1) is True
+    assert board.check_for_mate(1) is False  # d6-d5 blocks the check
+
+
 def test_ongoing_game_has_no_terminal_status():
     g = Game()
     g.move("e4")

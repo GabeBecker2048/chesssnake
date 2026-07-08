@@ -11,6 +11,7 @@ only serialized state crosses the wire, so many clients can share one database.
 import os
 
 from ..engine import Board, Square
+from ..engine.enums import GameStatus
 from ..engine.game import Game as BaseGame
 
 
@@ -71,18 +72,18 @@ class Game(BaseGame):
             board=Board.assemble_board(state["board"], state["moved"]),
             two_moveP=pawnmove,
         )
-        board.status = int(state["status"])
+        board.status = GameStatus(int(state["status"]))
         return board
 
     def _state_payload(self):
         boardstring, moved = Board.disassemble_board(self.board)
         return {
             "board": boardstring,
-            "turn": self.turn,
+            "turn": int(self.turn),
             "pawnmove": self.board.two_moveP.c_notation if self.board.two_moveP else None,
-            "draw": self.draw,
+            "draw": int(self.draw) if self.draw is not None else None,
             "moved": moved,
-            "status": self.board.status,
+            "status": int(self.board.status),
             "wname": self.wname,
             "bname": self.bname,
         }
@@ -103,12 +104,14 @@ class Game(BaseGame):
     def draw_offer(self, player_id):
         super().draw_offer(player_id)
         if self.auto_sync:
-            self._client.update_draw(self.gid, self.wid, self.bid, self.draw, self.board.status)
+            self._client.update_draw(self.gid, self.wid, self.bid,
+                                    int(self.draw) if self.draw is not None else None, int(self.board.status))
 
     def draw_accept(self, player_id):
         super().draw_accept(player_id)
         if self.auto_sync:
-            self._client.update_draw(self.gid, self.wid, self.bid, self.draw, self.board.status)
+            self._client.update_draw(self.gid, self.wid, self.bid,
+                                    int(self.draw) if self.draw is not None else None, int(self.board.status))
 
     def draw_decline(self, player_id):
         super().draw_decline(player_id)
@@ -117,7 +120,7 @@ class Game(BaseGame):
 
     def end(self):
         """If the game is over, delete it from the remote database. Returns True if ended."""
-        if self.board.status != 0:
+        if self.board.status != GameStatus.IN_PLAY:
             if self.remote:
                 self._client.delete_game(self.gid, self.wid, self.bid)
             return True

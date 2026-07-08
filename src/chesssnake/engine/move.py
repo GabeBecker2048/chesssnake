@@ -1,6 +1,8 @@
 """The `Move`: parses one algebraic move against a board into concrete squares."""
 
 from . import errors, notation
+from .enums import PieceType
+from .notation import FILES, RANKS
 from .pieces import Bishop, King, Knight, Pawn, Queen, Rook
 
 
@@ -58,9 +60,9 @@ class Move:
         # regular movement (not castling)
         if move != "0-0" and move != "0-0-0":
 
-            if move[0] in ['R', 'N', 'B', 'Q', 'K', 'P']:
+            if move[0] in "RNBQKP":
 
-                if move[0] == 'P' and move[-1] in ['R', 'N', 'B', 'Q']:
+                if move[0] == 'P' and move[-1] in "RNBQ":
                     promotion = move[-1]
                     coords = notation.get_coords(move[-3:-1])
 
@@ -79,10 +81,10 @@ class Move:
 
                 # checks if there is a file limit, rank limit, or capture
                 for char in (move[1:-3] if (move[0] == 'P' and promotion is not None) else move[1:-2]):
-                    if char in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']:
+                    if char in FILES:
                         file_limit = char
                         continue
-                    elif char in ['1', '2', '3', '4', '5', '6', '7', '8']:
+                    elif char in RANKS:
                         rank_limit = char
                         continue
                     elif char == 'x':
@@ -91,20 +93,20 @@ class Move:
 
                 try:
                     if move[0] == 'R':
-                        square = Rook.find(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
+                        square = Rook.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
                     elif move[0] == 'N':
-                        square = Knight.find(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
+                        square = Knight.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
                     elif move[0] == 'B':
-                        square = Bishop.find(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
+                        square = Bishop.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
                     elif move[0] == 'Q':
-                        square = Queen.find(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
+                        square = Queen.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
                     elif move[0] == 'K':
-                        square = King.find(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
+                        square = King.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
                     elif move[0] == 'P':
                         try:
-                            square = Pawn.find(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
+                            square = Pawn.find_one(board, to, player, capture, file_limit=file_limit, rank_limit=rank_limit)
                         except errors.NothingToCaptureError:
-                            square = Pawn.find(board, to, player, capture, en=True, file_limit=file_limit, rank_limit=rank_limit)
+                            square = Pawn.find_one(board, to, player, capture, en=True, file_limit=file_limit, rank_limit=rank_limit)
                             en = True
 
                 except errors.ChessError as e:
@@ -115,15 +117,15 @@ class Move:
                     prev = square
 
                     # makes sure the player cannot move a pawn to opponent's back rank without promoting
-                    if piece.piecetype == 'P' and i == (0 if player == 0 else 7) and promotion is None:
+                    if piece.piecetype == PieceType.PAWN and i == (0 if player == 0 else 7) and promotion is None:
                         raise errors.PromotionError(need_promotion=True)
 
 
             # pawn exclusive movement
-            elif move[0] in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']:
+            elif move[0] in FILES:
                 file_limit = move[0]
 
-                if move[-1] in ['R', 'N', 'B', 'Q']:
+                if move[-1] in "RNBQ":
                     promotion = move[-1]
                     coords = notation.get_coords(move[-3:-1])
 
@@ -140,9 +142,9 @@ class Move:
                 capture = True if move[1] == 'x' else False
 
                 try:
-                    square = Pawn.find(board, to, player, capture, file_limit=file_limit)
+                    square = Pawn.find_one(board, to, player, capture, file_limit=file_limit)
                 except errors.NothingToCaptureError:
-                    square = Pawn.find(board, to, player, capture, en=True, file_limit=file_limit)
+                    square = Pawn.find_one(board, to, player, capture, en=True, file_limit=file_limit)
                     en = True
 
                 piece = square.piece

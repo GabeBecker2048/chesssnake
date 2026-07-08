@@ -1,5 +1,18 @@
-"""Chess pieces: the `Piece` base class and the six concrete piece types."""
+"""Chess pieces: the `Piece` base class and the six concrete piece types.
 
+Movement is expressed as ``(di, dj)`` direction vectors driven through two shared
+scan helpers (:func:`_slide` for the long-range Rook/Bishop/Queen, :func:`_step`
+for the single-step Knight/King/Pawn). Each piece exposes:
+
+- ``threatens(square, board)`` — squares it attacks from ``square`` (ignores pins).
+- ``can_move(square, board)`` — whether it has at least one legal move (pin-aware).
+- ``find_all(board, square, color, ...)`` — squares holding such a piece that could
+  reach ``square`` (never raises; used for threat detection).
+- ``find_one(board, square, color, capture, ...)`` — resolve algebraic notation to the
+  single piece that made the move, validating the target and raising on 0/ambiguous.
+"""
+
+from .enums import Color, PieceType
 from .errors import (
     CaptureOwnPieceError,
     MultiplePiecesFoundError,
@@ -7,1574 +20,297 @@ from .errors import (
     PieceNotFoundError,
     PieceOnSquareError,
 )
+from .notation import matches_disambiguation
+
+# Direction vectors (di, dj). i grows downward (toward rank 1), j grows toward file 'h'.
+ORTHOGONAL = ((1, 0), (-1, 0), (0, 1), (0, -1))
+DIAGONAL = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+ALL_DIRECTIONS = ORTHOGONAL + DIAGONAL
+KNIGHT_JUMPS = ((2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2))
+
+
+def _slide(board, i, j, directions):
+    """Yield squares outward from ``(i, j)`` along each direction until blocked.
+
+    The first occupied square encountered in a direction is yielded (so callers
+    can inspect the blocker) and then the scan of that direction stops.
+    """
+    for di, dj in directions:
+        step = 1
+        while True:
+            sq = board[i + di * step, j + dj * step]
+            if sq is None:
+                break
+            yield sq
+            if sq.piece is not None:
+                break
+            step += 1
+
+
+def _step(board, i, j, directions):
+    """Yield the single on-board square one step from ``(i, j)`` in each direction."""
+    for di, dj in directions:
+        sq = board[i + di, j + dj]
+        if sq is not None:
+            yield sq
+
+
+def _reachable(squares, color):
+    """Filter ``squares`` to those a piece of ``color`` may move onto (empty or enemy)."""
+    return [sq for sq in squares if sq.piece is None or sq.piece.color != color]
+
+
+def _find(candidate_squares, piecetype, color, file_limit, rank_limit):
+    """Squares among ``candidate_squares`` holding ``piecetype``/``color`` matching disambiguation."""
+    return [
+        sq for sq in candidate_squares
+        if sq is not None
+        and sq.piece is not None
+        and sq.piece.piecetype == piecetype
+        and sq.piece.color == color
+        and matches_disambiguation(sq, file_limit, rank_limit)
+    ]
+
+
+def _validate_target(square, color, capture):
+    """Validate the destination ``square`` for a (non-pawn) move by ``color``.
+
+    :raises NothingToCaptureError: capture indicated but the square is empty.
+    :raises CaptureOwnPieceError: capture indicated but the square holds a friendly piece.
+    :raises PieceOnSquareError: non-capture move onto an occupied square.
+    """
+    if capture:
+        if square.piece is None:
+            raise NothingToCaptureError(square)
+        if square.piece.color == color:
+            raise CaptureOwnPieceError(square)
+    elif square.piece is not None:
+        raise PieceOnSquareError(square, square.piece.color == color)
 
 
 class Piece:
     """
     Base class representing a chess piece.
 
-    This class provides basic functionality and attributes common to all chess pieces,
-    such as type and color. It also contains methods for identifying a piece's full
-    name and determining if it is pinned on the board.
-
-    :ivar piecetype: The type of the chess piece represented by a single character
-                     ('K', 'Q', 'R', 'B', 'P', or 'N').
-    :type piecetype: str
-    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
-    :type color: int
+    :ivar piecetype: The :class:`~chesssnake.engine.enums.PieceType` of the piece.
+    :ivar color: The piece's :class:`~chesssnake.engine.enums.Color`.
     """
+
+    _TYPE: "PieceType | None" = None  # the PieceType of concrete subclasses
+
     def __init__(self, piecetype, color):
         """
-        Initializes a generic chess piece.
-
-        :param piecetype: A single character representing the piece type ('K', 'Q', 'R', 'B', 'P', or 'N').
-        :type piecetype: str
-        :param color: The color of the piece, where 0 represents white and 1 represents black.
-        :type color: int
+        :param piecetype: The piece type (a :class:`PieceType` or its letter code).
+        :param color: The piece color (a :class:`Color`, or 0/1, or '0'/'1').
         """
-
-        self.piecetype = str(piecetype)
-        self.color = int(color)
+        self.piecetype = PieceType(piecetype)
+        self.color = Color(int(color))
 
     def fullname(self):
-        """
-        Returns the full name of the chess piece.
-
-        :return: The name of the piece (e.g., "king", "queen", "pawn").
-        :rtype: str
-        """
-        if self.piecetype == 'P':
-            return "pawn"
-        elif self.piecetype == 'R':
-            return "rook"
-        elif self.piecetype == 'N':
-            return "knight"
-        elif self.piecetype == 'B':
-            return "bishop"
-        elif self.piecetype == 'Q':
-            return "queen"
-        elif self.piecetype == 'K':
-            return "king"
-        else:
-            return "unknown"
+        """The lowercase english name of the piece (e.g. ``"knight"``)."""
+        return self.piecetype.full_name
 
     # dev note:
     # if the king is already in check, then this will *always* return true
     # only use this function if we know the king is not in check already
     def is_pinned(self, square, board):
         """
-        Determines if the piece is pinned to the king.
+        Whether removing this piece from ``square`` would expose its king to check.
 
-        A piece is considered pinned if removing it from its current location exposes
-        the king to a direct attack (check). Kings themselves are never pinned.
-
-        :param square: The square the piece is currently on.
-        :type square: Square
-        :param board: The current state of the board, which tracks all pieces and their positions.
-        :type board: Board
-        :return: True if the piece is pinned, else False.
-        :rtype: bool
+        Kings themselves are never pinned.
         """
-
-        if self.piecetype == 'K':
+        if self.piecetype == PieceType.KING:
             return False
 
-        # removes the piece from the board
-        board[square.i, square.j].piece = None
+        with board.lifted(square):
+            return board.check_for_check(self.color)
 
-        # if the player is in check without the piece there, then the piece is pinned
-        pinned = True if board.check_for_check(self.color) else False
+    def _pinned_move_allowed(self, square, board):
+        """For a pinned sliding piece: whether it can still capture the lone pinner.
 
-        # returns piece to board
-        board[square.i, square.j].piece = self
+        Shared by Rook/Bishop/Queen. The pinning attacker is the threat on the king
+        that appears only once removing this piece is accounted for; the piece may
+        move iff it is that attacker's square and it threatens it.
+        """
+        king_threats1 = board.threats_on(board.find_king(self.color), self.color)
+        with board.lifted(square):
+            king_threats2 = board.threats_on(board.find_king(self.color), self.color)
 
-        return pinned
+        # the threat present in exactly one of the two scans is the one being blocked
+        king_threats = [t for t in king_threats1 + king_threats2
+                        if t not in king_threats1 or t not in king_threats2]
+
+        if len(king_threats) != 1:
+            return False
+        return king_threats[0] in self.threatens(square, board)
+
+    @classmethod
+    def find_one(cls, board, square, color, capture, file_limit=None, rank_limit=None):
+        """
+        Resolve algebraic notation to the single piece of this type that made the move.
+
+        :param capture: Whether the move captures on ``square``.
+        :param file_limit: Optional file disambiguation ('a'-'h').
+        :param rank_limit: Optional rank disambiguation ('1'-'8').
+        :return: The :class:`Square` the moving piece started on.
+        :rtype: Square
+        :raises PieceNotFoundError: If no eligible piece is found.
+        :raises MultiplePiecesFoundError: If more than one matching piece is found.
+        :raises NothingToCaptureError: If a capture has no target piece.
+        :raises CaptureOwnPieceError: If a capture would take a friendly piece.
+        :raises PieceOnSquareError: If a non-capture lands on an occupied square.
+        """
+        color = Color(color)
+        candidates = cls.find_all(board, square, color, file_limit, rank_limit)
+
+        if len(candidates) == 0:
+            raise PieceNotFoundError(square, cls._TYPE)
+        if len(candidates) > 1:
+            raise MultiplePiecesFoundError(square, candidates)
+
+        _validate_target(square, color, capture)
+        return candidates[0]
 
 
 class Rook(Piece):
-    """
-    Represents a Rook chess piece.
+    """A Rook: moves any distance along ranks and files."""
 
-    A subclass of the `Piece` class. The Rook chess piece moves in straight lines along rows or columns and attacks
-    in the same manner. This class implements the movement, threatening behavior, and special movement restrictions
-    of a rook in chess.
+    _TYPE = PieceType.ROOK
 
-    :ivar piecetype: The type of the piece, which is 'R' for Rook.
-    :type piecetype: str
-    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
-    :type color: int
-    :ivar moved: Represents whether the piece has moved. Used for determining if a player can castle
-    :type moved: bool
-    """
     def __init__(self, color, moved=False):
-        """
-        Initializes a Rook chess piece.
-
-        The rook is initialized with a color, and whether it has moved.
-        The `color` is used to identify if the piece belongs to the white
-        or black side, and the `moved` attribute helps determine if this rook can still
-        participate in castling.
-
-        :param color: The color of the rook (0 for white, 1 for black).
-        :type color: int
-        :param moved: Indicates whether the rook has moved. Defaults to `False`.
-        :type moved: bool
-        """
-        super().__init__('R', color)
-
+        """:param moved: Whether the rook has moved (affects castling rights)."""
+        super().__init__(PieceType.ROOK, color)
         self.moved = moved
 
     def threatens(self, square, board):
-        """
-        Determines the squares that this Rook can attack, regardless of pinning.
-
-        This method calculates all reachable squares in any cardinal direction (up,
-        down, left, right). The search includes squares blocked by other pieces, stopping
-        at the first encountered piece. Opponent pieces are included in the threatened
-        squares, but friendly pieces block further checks in that direction.
-
-        :param square: The square where this rook is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: A list of squares that the rook can threaten.
-        :rtype: list[Square]
-        """
-        moves = []
-        i_pos, j_pos, i_neg, j_neg = True, True, True, True
-
-        x = 0
-        while i_pos or i_neg or j_pos or j_neg:
-            x += 1
-
-            # search in positive i direction
-            if i_pos:
-                i_pos_square = board[square.i + x, square.j]
-
-                if i_pos_square is None:
-                    i_pos = False
-
-                elif i_pos_square.piece is not None:
-                    i_pos = False
-
-                    if i_pos_square.piece.color != self.color:
-                        moves.append(i_pos_square)
-
-                else:
-                    moves.append(i_pos_square)
-
-            # search in positive j direction
-            if j_pos:
-                j_pos_square = board[square.i, square.j + x]
-
-                if j_pos_square is None:
-                    j_pos = False
-
-                elif j_pos_square.piece is not None:
-                    j_pos = False
-
-                    if j_pos_square.piece.color != self.color:
-                        moves.append(j_pos_square)
-
-                else:
-                    moves.append(j_pos_square)
-
-            # search in negative i direction
-            if i_neg:
-                i_neg_square = board[square.i - x, square.j]
-
-                if i_neg_square is None:
-                    i_neg = False
-
-                elif i_neg_square.piece is not None:
-                    i_neg = False
-
-                    if i_neg_square.piece.color != self.color:
-                        moves.append(i_neg_square)
-
-                else:
-                    moves.append(i_neg_square)
-
-            # search in negative j direction
-            if j_neg:
-                j_neg_square = board[square.i, square.j - x]
-
-                if j_neg_square is None:
-                    j_neg = False
-
-                elif j_neg_square.piece is not None:
-                    j_neg = False
-
-                    if j_neg_square.piece.color != self.color:
-                        moves.append(j_neg_square)
-
-                else:
-                    moves.append(j_neg_square)
-
-        return moves
+        """Squares this rook attacks from ``square`` (ignoring pins)."""
+        return _reachable(_slide(board, square.i, square.j, ORTHOGONAL), self.color)
 
     def can_move(self, square, board):
-        """
-        Determines if this Rook has at least one valid move.
-
-        A rook is considered able to move if:
-        - It is not pinned to its king (i.e., its move wouldn't expose the king to check).
-        - It threatens an opponent's squares or empty squares.
-
-        If pinned, the rook is further analyzed to determine if it can legally capture
-        threatening pieces.
-
-        :param square: The square where this rook is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: `True` if the rook has at least one legal move, otherwise `False`.
-        :rtype: bool
-        """
-        # if the piece is pinned, we need to check if the piece can capture the other piece that is pinning it
+        """Whether this rook has at least one legal move (pin-aware)."""
         if self.is_pinned(square, board):
+            return self._pinned_move_allowed(square, board)
+        return len(self.threatens(square, board)) > 0
 
-            # gets the list of threats to the king
-            king_threats1 = board.threats_on(board.find_king(self.color), self.color)
-
-            # removes the piece from board
-            board[square.i, square.j].piece = None
-
-            # gets the list of threats to the king again
-            king_threats2 = board.threats_on(board.find_king(self.color), self.color)
-
-            # gets the threats that are not in both lists, ie the threat that the piece should be blocking
-            king_threats = [threat for threat in king_threats1 + king_threats2
-                            if threat not in king_threats1 or threat not in king_threats2]
-
-            # puts the piece back
-            board[square.i, square.j].piece = self
-
-            # if there is more than one threat the king, the piece is pinned and can't move
-            if len(king_threats) != 1:
-                return False
-
-            # if the threat can be taken by the pinned piece, the piece can move
-            if king_threats[0] in self.threatens(square, board):
-                return True
-
-            # the piece is pinned and can't move
-            return False
-
-        # if the piece is not pinned and threatens anything, then it can move
-        if len(self.threatens(square, board)) != 0:
-            return True
-
-        return False
-
-    @staticmethod
-    def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
-        """
-        Finds the Rook that corresponds to a given move.
-
-        Chess moves provide limited information to locate a specific piece, such as its
-        type (Rook), the target square, and optional file or rank constraints. This method
-        performs a targeted search to find valid rooks that match the move's description.
-
-        If the `errors` flag is set to `True`, this method validates the legality of the
-        identified Rook(s) for the move. If a valid Rook cannot be determined, or if
-        multiple matching Rooks are found, it raises appropriate exceptions.
-
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :param square: The square where the rook is attempting to move.
-        :type square: Square
-        :param color: The color of the rook being searched for (0 for white, 1 for black).
-        :type color: int
-        :param capture: Indicates whether the move involves capturing an opponent's piece.
-        :type capture: bool
-        :param file_limit: (Optional) Restricts to find rooks in a specific file (e.g., 'a', 'b', etc.).
-        :type file_limit: str or None
-        :param rank_limit: (Optional) Restricts to find rooks in a specific rank (e.g., '1', '2', etc.).
-        :type rank_limit: str or None
-        :param errors: If `True`, raises exceptions for invalid moves or ambiguities.
-                       If `False`, returns `None` for invalid moves instead.
-        :type errors: bool
-        :return: The rook that can execute the move, or a list if multiples are found, or `None` when `errors=False`.
-        :rtype: Rook or list[Rook] or None
-        :raises PieceNotFoundError: If no eligible rook is found for the move.
-        :raises MultiplePiecesFoundError: If more than one matching rook is found.
-        :raises NothingToCaptureError: If no opposing piece exists on the target square.
-        :raises CaptureOwnPieceError: If a piece of the same color exists on the target square.
-        :raises PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
-        """
-        found = []
-        i_pos, j_pos, i_neg, j_neg = True, True, True, True
-
-        x = 0
-        while i_pos or i_neg or j_pos or j_neg:
-            x += 1
-
-            # search in positive i direction
-            if i_pos:
-                i_pos_square = board[square.i + x, square.j]
-
-                if i_pos_square is None:
-                    i_pos = False
-
-                elif i_pos_square.piece is not None:
-                    i_pos = False
-
-                    if i_pos_square.piece.piecetype == 'R' and i_pos_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i_pos_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - i_pos_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i_pos_square.j]
-                                    and rank_limit == str(8 - i_pos_square.i))
-                        ):
-                            found.append(i_pos_square)
-
-            # search in positive j direction
-            if j_pos:
-                j_pos_square = board[square.i, square.j + x]
-
-                if j_pos_square is None:
-                    j_pos = False
-
-                elif j_pos_square.piece is not None:
-                    j_pos = False
-
-                    if j_pos_square.piece.piecetype == 'R' and j_pos_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j_pos_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - j_pos_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j_pos_square.j]
-                                    and rank_limit == str(8 - j_pos_square.i))
-                        ):
-                            found.append(j_pos_square)
-
-            # search in negative i direction
-            if i_neg:
-                i_neg_square = board[square.i - x, square.j]
-
-                if i_neg_square is None:
-                    i_neg = False
-
-                elif i_neg_square.piece is not None:
-                    i_neg = False
-
-                    if i_neg_square.piece.piecetype == 'R' and i_neg_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i_neg_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - i_neg_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i_neg_square.j]
-                                    and rank_limit == str(8 - i_neg_square.i))
-                        ):
-                            found.append(i_neg_square)
-
-            # search in negative j direction
-            if j_neg:
-                j_neg_square = board[square.i, square.j - x]
-
-                if j_neg_square is None:
-                    j_neg = False
-
-                elif j_neg_square.piece is not None:
-                    j_neg = False
-
-                    if j_neg_square.piece.piecetype == 'R' and j_neg_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j_neg_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - j_neg_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j_neg_square.j]
-                                    and rank_limit == str(8 - j_neg_square.i))
-                        ):
-                            found.append(j_neg_square)
-
-        if len(found) == 0:
-            if errors:
-                raise PieceNotFoundError(square, 'R')
-            else:
-                return None
-
-        elif len(found) == 1:
-
-            if errors:
-                # if the player is capturing, there must be an opponent's piece on the square
-                if capture:
-                    if square.piece is None:
-                        raise NothingToCaptureError(square)
-                    elif square.piece.color == color:
-                        raise CaptureOwnPieceError(square)
-
-                # this makes sure the player cannot move a piece onto a square that already has a piece on it
-                elif square.piece is not None:
-                    if square.piece.color == color:
-                        raise PieceOnSquareError(square, True)
-                    else:
-                        raise PieceOnSquareError(square, False)
-
-            return found[0]
-
-        else:
-            if errors:
-                raise MultiplePiecesFoundError(square, found)
-            else:
-                return found
+    @classmethod
+    def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
+        """Rook squares of ``color`` that could reach ``square`` (never raises)."""
+        color = Color(color)
+        return _find(_slide(board, square.i, square.j, ORTHOGONAL),
+                     PieceType.ROOK, color, file_limit, rank_limit)
 
 
 class Knight(Piece):
-    """
-    Represents a Knight chess piece.
+    """A Knight: jumps in an L-shape, over intervening pieces."""
 
-    A subclass of the `Piece` class. The Knight is a unique chess piece that moves in an "L" shape:
-    two squares in one direction and one square perpendicular to it, or vice versa. Knights are
-    the only pieces that can "jump" over other pieces while moving. This class implements the movement,
-    threatening behavior, and related functionality of a Knight in chess.
+    _TYPE = PieceType.KNIGHT
 
-    :ivar piecetype: The type of the piece, which is 'N' for Knight. 'K' is used by King.
-    :type piecetype: str
-    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
-    :type color: int
-    """
     def __init__(self, color):
-        """
-        Initializes a Knight chess piece.
-
-        The Knight is initialized with attributes for its type ('B') and for its color. The `color` is used
-        to identify if the piece belongs to the white or black side.
-
-        :param color: The color of the knight (0 for white, 1 for black).
-        :type color: int
-        """
-        super().__init__('N', color)
+        super().__init__(PieceType.KNIGHT, color)
 
     def threatens(self, square, board):
-        """
-        Determines the squares that this Knight can attack, regardless of pinning.
-
-        The Knight moves in an "L" shape: two squares in one direction and one square
-        perpendicular to that or vice versa. This method calculates all valid squares
-        the Knight can threaten, considering that it can jump over other pieces. The
-        threatened squares are valid even if they are occupied, as long as they belong
-        to an opposing piece.
-
-        :param square: The square where this knight is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: A list of squares that the Knight can threaten.
-        :rtype: list[Square]
-        """
-        moves = []
-        delta_is = [2, 1, -1, -2, -2, -1, 1, 2]
-        delta_js = [1, 2, 2, 1, -1, -2, -2, -1]
-
-        for index in range(8):
-
-            psquare = board[square.i + delta_is[index], square.j + delta_js[index]]
-
-            # The square must exist
-            # If there is a piece on the square, it must be a different color than the current piece
-            if (
-                    psquare is not None
-                    and ((psquare.piece is not None and psquare.piece.color != self.color)
-                         or psquare.piece is None)
-            ):
-                moves.append(psquare)
-
-        return moves
+        """Squares this knight attacks from ``square`` (ignoring pins)."""
+        return _reachable(_step(board, square.i, square.j, KNIGHT_JUMPS), self.color)
 
     def can_move(self, square, board):
-        """
-        Determines if this Knight has at least one valid move.
-
-        A Knight is considered able to move if:
-        - It is not pinned to its king (i.e., its move wouldn't expose the king to check).
-        - It threatens an opponent's squares or empty squares.
-
-        If pinned, the Knight is restricted and cannot move.
-
-        :param square: The square where this knight is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: `True` if the Knight has at least one legal move, otherwise `False`.
-        :rtype: bool
-        """
-        # if a knight is pinned, it can't move
+        """Whether this knight has a legal move. A pinned knight can never move."""
         if self.is_pinned(square, board):
             return False
+        return len(self.threatens(square, board)) > 0
 
-        # if the piece is not pinned and threatens anything, then it can move
-        if len(self.threatens(square, board)) != 0:
-            return True
-
-        return False
-
-    @staticmethod
-    def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
-        """
-        Finds the Knight that corresponds to a given move.
-
-        Chess moves provide limited information to locate a specific piece, such as its
-        type (Knight), the target square, and optional file or rank constraints. This
-        method performs a targeted search to find valid Knights that match the move's description.
-
-        If the `errors` flag is set to `True`, this method validates the legality of the
-        identified Knight(s) for the move. If a valid Knight cannot be determined, or if
-        multiple matching Knights are found, it raises appropriate exceptions.
-
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :param square: The square where the Knight is attempting to move.
-        :type square: Square
-        :param color: The color of the Knight being searched for (0 for white, 1 for black).
-        :type color: int
-        :param capture: Indicates whether the move involves capturing an opponent's piece.
-        :type capture: bool
-        :param file_limit: (Optional) Restricts to find Knights in a specific file (e.g., 'a', 'b', etc.).
-        :type file_limit: str or None
-        :param rank_limit: (Optional) Restricts to find Knights in a specific rank (e.g., '1', '2', etc.).
-        :type rank_limit: str or None
-        :param errors: If `True`, raises exceptions for invalid moves or ambiguities.
-                       If `False`, returns `None` for invalid moves instead.
-        :type errors: bool
-        :return: The Knight that can execute the move, or a list if multiples are found, or `None` when `errors=False`.
-        :rtype: Knight or list[Knight] or None
-        :raises PieceNotFoundError: If no eligible Knight is found for the move.
-        :raises MultiplePiecesFoundError: If more than one matching Knight is found.
-        :raises NothingToCaptureError: If no opposing piece exists on the target square.
-        :raises CaptureOwnPieceError: If a piece of the same color exists on the target square.
-        :raises PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
-        """
-        found = []
-        delta_is = [2, 1, -1, -2, -2, -1, 1, 2]
-        delta_js = [1, 2, 2, 1, -1, -2, -2, -1]
-
-        for index in range(8):
-
-            psquare = board[square.i + delta_is[index], square.j + delta_js[index]]
-
-            # The square must exist
-            # If there is a piece on the square, it must be the same color as the player
-            if (
-                    psquare is not None
-                    and psquare.piece is not None
-                    and psquare.piece.piecetype == 'N'
-                    and psquare.piece.color == color
-            ):
-                # this checks for rank and file limits
-                if (
-                        (rank_limit is None and file_limit is None)
-                        or (file_limit is not None and rank_limit is None
-                            and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][psquare.j])
-                        or (rank_limit is not None and file_limit is None
-                            and rank_limit == str(8 - psquare.i))
-                        or (rank_limit is not None and file_limit is not None
-                            and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][psquare.j]
-                            and rank_limit == str(8 - psquare.i))
-                ):
-                    found.append(psquare)
-
-        if len(found) == 0:
-            if errors:
-                raise PieceNotFoundError(square, 'N')
-            else:
-                return None
-
-        elif len(found) == 1:
-
-            if errors:
-                # if the player is capturing, there must be an opponent's piece on the square
-                if capture:
-                    if square.piece is None:
-                        raise NothingToCaptureError(square)
-                    elif square.piece.color == color:
-                        raise CaptureOwnPieceError(square)
-
-                # this makes sure the player cannot move a piece onto a square that already has a piece on it
-                elif square.piece is not None:
-                    if square.piece.color == color:
-                        raise PieceOnSquareError(square, True)
-                    else:
-                        raise PieceOnSquareError(square, False)
-
-            return found[0]
-
-        else:
-            if errors:
-                raise MultiplePiecesFoundError(square, found)
-            else:
-                return found
+    @classmethod
+    def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
+        """Knight squares of ``color`` that could reach ``square`` (never raises)."""
+        color = Color(color)
+        return _find(_step(board, square.i, square.j, KNIGHT_JUMPS),
+                     PieceType.KNIGHT, color, file_limit, rank_limit)
 
 
 class Bishop(Piece):
-    """
-    Represents a Bishop chess piece.
+    """A Bishop: moves any distance along diagonals."""
 
-    A subclass of the `Piece` class. The Bishop is a chess piece that moves diagonally across
-    the board any number of squares, as long as there are no obstacles in its path. Bishops are
-    limited to operating on squares of the same color as their starting position (light or dark).
-    This class implements the movement, threatening behavior, and related functionality of a Bishop in chess.
+    _TYPE = PieceType.BISHOP
 
-    :ivar piecetype: The type of the piece, which is 'B' for Bishop.
-    :type piecetype: str
-    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
-    :type color: int
-    """
     def __init__(self, color):
-        """
-        Initializes a Bishop chess piece.
-
-        The Bishop is initialized with attributes for its type ('B') and color. The `color` is used
-        to identify if the piece belongs to the white or black side.
-
-        :param color: The color of the bishop (0 for white, 1 for black).
-        :type color: int
-        """
-        super().__init__('B', color)
+        super().__init__(PieceType.BISHOP, color)
 
     def threatens(self, square, board):
-        """
-        Determines the squares that this Bishop can attack, regardless of pinning.
-
-        The Bishop moves diagonally across the board in any direction. This method calculates
-        all valid squares the Bishop threatens based on unobstructed diagonal paths. If an
-        opponent's piece blocks the path, that square is included as threatened; however,
-        the Bishop cannot threaten squares beyond that piece.
-
-        :param square: The square where this bishop is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: A list of squares that the Bishop can threaten.
-        :rtype: list[Square]
-        """
-        moves = []
-        pos_pos, neg_pos, neg_neg, pos_neg = True, True, True, True
-
-        x = 0
-        while pos_pos or pos_neg or neg_pos or neg_neg:
-            x += 1
-
-            # search in the positive i positive j direction
-            if pos_pos:
-                pp_square = board[square.i + x, square.j + x]
-
-                if pp_square is None:
-                    pos_pos = False
-
-                elif pp_square.piece is not None:
-                    pos_pos = False
-
-                    if pp_square.piece.color != self.color:
-                        moves.append(pp_square)
-
-                else:
-                    moves.append(pp_square)
-
-            # search in the negative i positive j direction
-            if neg_pos:
-                np_square = board[square.i - x, square.j + x]
-
-                if np_square is None:
-                    neg_pos = False
-
-                elif np_square.piece is not None:
-                    neg_pos = False
-
-                    if np_square.piece.color is not self.color:
-                        moves.append(np_square)
-
-                else:
-                    moves.append(np_square)
-
-            # search in the negative i negative j direction
-            if neg_neg:
-                nn_square = board[square.i - x, square.j - x]
-
-                if nn_square is None:
-                    neg_neg = False
-
-                elif nn_square.piece is not None:
-                    neg_neg = False
-
-                    if nn_square.piece.color != self.color:
-                        moves.append(nn_square)
-
-                else:
-                    moves.append(nn_square)
-
-            # search in the positive i negative j direction
-            if pos_neg:
-                pn_square = board[square.i + x, square.j - x]
-
-                if pn_square is None:
-                    pos_neg = False
-
-                elif pn_square.piece is not None:
-                    pos_neg = False
-
-                    if pn_square.piece.color != self.color:
-                        moves.append(pn_square)
-
-                else:
-                    moves.append(pn_square)
-
-        return moves
+        """Squares this bishop attacks from ``square`` (ignoring pins)."""
+        return _reachable(_slide(board, square.i, square.j, DIAGONAL), self.color)
 
     def can_move(self, square, board):
-        """
-        Determines if this Bishop has at least one valid move.
-
-        A Bishop is considered able to move if:
-        - It is not pinned to its king (i.e., its move wouldn't expose the king to check).
-        - It threatens an opponent's squares or empty squares along diagonal paths.
-
-        If pinned, the Bishop is further restricted and cannot move except under special circumstances.
-
-        :param square: The square where this bishop is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: `True` if the Bishop has at least one legal move, otherwise `False`.
-        :rtype: bool
-        """
-        # if the piece is pinned, we need to check if the piece can capture the other piece that is pinning it
+        """Whether this bishop has at least one legal move (pin-aware)."""
         if self.is_pinned(square, board):
+            return self._pinned_move_allowed(square, board)
+        return len(self.threatens(square, board)) > 0
 
-            # gets the list of threats to the king
-            king_threats1 = board.threats_on(board.find_king(self.color), self.color)
-
-            # removes the piece from board
-            board[square.i, square.j].piece = None
-
-            # gets the list of threats to the king again
-            king_threats2 = board.threats_on(board.find_king(self.color), self.color)
-
-            # gets the threats that are not in both lists, ie the threat that the piece should be blocking
-            king_threats = [threat for threat in king_threats1 + king_threats2
-                            if threat not in king_threats1 or threat not in king_threats2]
-
-            # puts the piece back
-            board[square.i, square.j].piece = self
-
-            # if there is more than one threat the king, the piece is pinned and can't move
-            if len(king_threats) != 1:
-                return False
-
-            # if the threat can be taken by the pinned piece, the piece can move
-            if king_threats[0] in self.threatens(square, board):
-                return True
-
-            # the piece is pinned and can't move
-            return False
-
-        # if the piece is not pinned and threatens anything, then it can move
-        if len(self.threatens(square, board)) != 0:
-            return True
-
-        return False
-
-    @staticmethod
-    def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
-        """
-        Finds the Bishop that corresponds to a given move.
-
-        Chess moves provide limited information to locate a specific piece, such as its
-        type (Bishop), the target square, and optional file or rank constraints. This
-        method performs a targeted search to find valid Bishops that match the move's description.
-
-        If the `errors` flag is set to `True`, this method validates the legality of the
-        identified Bishop(s) for the move. If a valid Bishop cannot be determined, or if
-        multiple matching Bishops are found, it raises appropriate exceptions.
-
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :param square: The square where the Bishop is attempting to move.
-        :type square: Square
-        :param color: The color of the Bishop being searched for (0 for white, 1 for black).
-        :type color: int
-        :param capture: Indicates whether the move involves capturing an opponent's piece.
-        :type capture: bool
-        :param file_limit: (Optional) Restricts to find Bishops in a specific file (e.g., 'a', 'b', etc.).
-        :type file_limit: str or None
-        :param rank_limit: (Optional) Restricts to find Bishops in a specific rank (e.g., '1', '2', etc.).
-        :type rank_limit: str or None
-        :param errors: If `True`, raises exceptions for invalid moves or ambiguities.
-                       If `False`, returns `None` for invalid moves instead.
-        :type errors: bool
-        :return: The Bishop that can execute the move, or a list if multiples are found, or `None` when `errors=False`.
-        :rtype: Bishop or list[Bishop] or None
-        :raises PieceNotFoundError: If no eligible Bishop is found for the move.
-        :raises MultiplePiecesFoundError: If more than one matching Bishop is found.
-        :raises NothingToCaptureError: If no opposing piece exists on the target square.
-        :raises CaptureOwnPieceError: If a piece of the same color exists on the target square.
-        :raises PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
-        """
-        found = []
-        pos_pos, neg_pos, neg_neg, pos_neg = True, True, True, True
-
-        x = 0
-        while pos_pos or pos_neg or neg_pos or neg_neg:
-            x += 1
-
-            # search in the positive i positive j direction
-            if pos_pos:
-                pp_square = board[square.i + x, square.j + x]
-
-                if pp_square is None:
-                    pos_pos = False
-
-                elif pp_square.piece is not None:
-                    pos_pos = False
-
-                    if pp_square.piece.piecetype == 'B' and pp_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][pp_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - pp_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][pp_square.j]
-                                    and rank_limit == str(8 - pp_square.i))
-                        ):
-                            found.append(pp_square)
-
-            # search in the negative i positive j direction
-            if neg_pos:
-                np_square = board[square.i - x, square.j + x]
-
-                if np_square is None:
-                    neg_pos = False
-
-                elif np_square.piece is not None:
-                    neg_pos = False
-
-                    if np_square.piece.piecetype == 'B' and np_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][np_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - np_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][np_square.j]
-                                    and rank_limit == str(8 - np_square.i))
-                        ):
-                            found.append(np_square)
-
-            # search in the negative i negative j direction
-            if neg_neg:
-                nn_square = board[square.i - x, square.j - x]
-
-                if nn_square is None:
-                    neg_neg = False
-
-                elif nn_square.piece is not None:
-                    neg_neg = False
-
-                    if nn_square.piece.piecetype == 'B' and nn_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][nn_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - nn_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][nn_square.j]
-                                    and rank_limit == str(8 - nn_square.i))
-                        ):
-                            found.append(nn_square)
-
-            # search in the positive i negative j direction
-            if pos_neg:
-                pn_square = board[square.i + x, square.j - x]
-
-                if pn_square is None:
-                    pos_neg = False
-
-                elif pn_square.piece is not None:
-                    pos_neg = False
-
-                    if pn_square.piece.piecetype == 'B' and pn_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][pn_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - pn_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][pn_square.j]
-                                    and rank_limit == str(8 - pn_square.i))
-                        ):
-                            found.append(pn_square)
-
-        if len(found) == 0:
-            if errors:
-                raise PieceNotFoundError(square, 'B')
-            else:
-                return None
-
-        elif len(found) == 1:
-
-            if errors:
-                # if the player is capturing, there must be an opponent's piece on the square
-                if capture:
-                    if square.piece is None:
-                        raise NothingToCaptureError(square)
-                    elif square.piece.color == color:
-                        raise CaptureOwnPieceError(square)
-
-                # this makes sure the player cannot move a piece onto a square that already has a piece on it
-                elif square.piece is not None:
-                    if square.piece.color == color:
-                        raise PieceOnSquareError(square, True)
-                    else:
-                        raise PieceOnSquareError(square, False)
-
-            return found[0]
-
-        else:
-            if errors:
-                raise MultiplePiecesFoundError(square, found)
-            else:
-                return found
+    @classmethod
+    def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
+        """Bishop squares of ``color`` that could reach ``square`` (never raises)."""
+        color = Color(color)
+        return _find(_slide(board, square.i, square.j, DIAGONAL),
+                     PieceType.BISHOP, color, file_limit, rank_limit)
 
 
 class Queen(Piece):
-    """
-    Represents a Queen chess piece.
+    """A Queen: moves any distance along ranks, files, and diagonals."""
 
-    A subclass of the `Piece` class. The Queen is the most versatile piece in chess,
-    combining the movement patterns of both the Rook (horizontal and vertical) and
-    the Bishop (diagonal). It can move any number of squares along a rank, file, or diagonal
-    but may not leap over other pieces. This class implements the movement, threatening
-    behavior, and related functionality of a Queen in chess.
+    _TYPE = PieceType.QUEEN
 
-    :ivar piecetype: The type of the piece, which is 'Q' for Queen.
-    :type piecetype: str
-    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
-    :type color: int
-    """
     def __init__(self, color):
-        """
-        Initializes a Queen chess piece.
-
-        The Queen is initialized with attributes for its type ('Q') and color. The `color` is used
-        to identify if the piece belongs to the white or black side.
-
-        :param color: The color of the Queen (0 for white, 1 for black).
-        :type color: int
-        """
-        super().__init__('Q', color)
+        super().__init__(PieceType.QUEEN, color)
 
     def threatens(self, square, board):
-        """
-        Determines the squares that this Queen can attack, regardless of pinning.
-
-        The Queen combines the movement capabilities of a Rook and a Bishop. It threatens
-        squares along ranks (horizontal), files (vertical), and diagonals. This method calculates
-        all valid squares the Queen threatens until blocked by another piece. If the blocking piece
-        belongs to the opponent, that square is treated as threatened.
-
-        :param square: The square where this queen is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: A list of squares that the Queen can threaten.
-        :rtype: list[Square]
-        """
-        moves = []
-        i_pos, pos_pos, j_pos, neg_pos, i_neg, neg_neg, j_neg, pos_neg = True, True, True, True, True, True, True, True
-
-        x = 0
-        while i_pos or pos_pos or j_pos or neg_pos or i_neg or neg_neg or j_neg or pos_neg:
-            x += 1
-
-            # search in positive i direction
-            if i_pos:
-                i_pos_square = board[square.i + x, square.j]
-
-                if i_pos_square is None:
-                    i_pos = False
-
-                elif i_pos_square.piece is not None:
-                    i_pos = False
-
-                    if i_pos_square.piece.color != self.color:
-                        moves.append(i_pos_square)
-
-                else:
-                    moves.append(i_pos_square)
-
-            # search in the positive i positive j direction
-            if pos_pos:
-                pp_square = board[square.i + x, square.j + x]
-
-                if pp_square is None:
-                    pos_pos = False
-
-                elif pp_square.piece is not None:
-                    pos_pos = False
-
-                    if pp_square.piece.color != self.color:
-                        moves.append(pp_square)
-
-                else:
-                    moves.append(pp_square)
-
-            # search in positive j direction
-            if j_pos:
-                j_pos_square = board[square.i, square.j + x]
-
-                if j_pos_square is None:
-                    j_pos = False
-
-                elif j_pos_square.piece is not None:
-                    j_pos = False
-
-                    if j_pos_square.piece.color != self.color:
-                        moves.append(j_pos_square)
-
-                else:
-                    moves.append(j_pos_square)
-
-            # search in the negative i positive j direction
-            if neg_pos:
-                np_square = board[square.i - x, square.j + x]
-
-                if np_square is None:
-                    neg_pos = False
-
-                elif np_square.piece is not None:
-                    neg_pos = False
-
-                    if np_square.piece.color is not self.color:
-                        moves.append(np_square)
-
-                else:
-                    moves.append(np_square)
-
-            # search in negative i direction
-            if i_neg:
-                i_neg_square = board[square.i - x, square.j]
-
-                if i_neg_square is None:
-                    i_neg = False
-
-                elif i_neg_square.piece is not None:
-                    i_neg = False
-
-                    if i_neg_square.piece.color != self.color:
-                        moves.append(i_neg_square)
-
-                else:
-                    moves.append(i_neg_square)
-
-            # search in the negative i negative j direction
-            if neg_neg:
-                nn_square = board[square.i - x, square.j - x]
-
-                if nn_square is None:
-                    neg_neg = False
-
-                elif nn_square.piece is not None:
-                    neg_neg = False
-
-                    if nn_square.piece.color != self.color:
-                        moves.append(nn_square)
-
-                else:
-                    moves.append(nn_square)
-
-            # search in negative j direction
-            if j_neg:
-                j_neg_square = board[square.i, square.j - x]
-
-                if j_neg_square is None:
-                    j_neg = False
-
-                elif j_neg_square.piece is not None:
-                    j_neg = False
-
-                    if j_neg_square.piece.color != self.color:
-                        moves.append(j_neg_square)
-
-                else:
-                    moves.append(j_neg_square)
-
-            # search in the positive i negative j direction
-            if pos_neg:
-                pn_square = board[square.i + x, square.j - x]
-
-                if pn_square is None:
-                    pos_neg = False
-
-                elif pn_square.piece is not None:
-                    pos_neg = False
-
-                    if pn_square.piece.color != self.color:
-                        moves.append(pn_square)
-
-                else:
-                    moves.append(pn_square)
-
-        return moves
+        """Squares this queen attacks from ``square`` (ignoring pins)."""
+        return _reachable(_slide(board, square.i, square.j, ALL_DIRECTIONS), self.color)
 
     def can_move(self, square, board):
-        """
-        Determines if this Queen has at least one valid move.
-
-        A Queen is considered able to move if:
-        - It is not pinned to its king (i.e., its move wouldn't expose the king to check).
-        - It threatens squares along lines of movement (ranks, files, diagonals).
-
-        A pinned Queen is further restricted and may have limited moves to respond to the pin.
-
-        :param square: The square where this queen is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: `True` if the Queen has at least one legal move, otherwise `False`.
-        :rtype: bool
-        """
-        # if the piece is pinned, we need to check if the piece can capture the other piece that is pinning it
+        """Whether this queen has at least one legal move (pin-aware)."""
         if self.is_pinned(square, board):
+            return self._pinned_move_allowed(square, board)
+        return len(self.threatens(square, board)) > 0
 
-            # gets the list of threats to the king
-            king_threats1 = board.threats_on(board.find_king(self.color), self.color)
-
-            # removes the piece from board
-            board[square.i, square.j].piece = None
-
-            # gets the list of threats to the king again
-            king_threats2 = board.threats_on(board.find_king(self.color), self.color)
-
-            # gets the threats that are not in both lists, ie the threat that the piece should be blocking
-            king_threats = [threat for threat in king_threats1 + king_threats2
-                            if threat not in king_threats1 or threat not in king_threats2]
-
-            # puts the piece back
-            board[square.i, square.j].piece = self
-
-            # if there is more than one threat the king, the piece is pinned and can't move
-            if len(king_threats) != 1:
-                return False
-
-            # if the threat can be taken by the pinned piece, the piece can move
-            if king_threats[0] in self.threatens(square, board):
-                return True
-
-            # the piece is pinned and can't move
-            return False
-
-        # if the piece is not pinned and threatens anything, then it can move
-        if len(self.threatens(square, board)) != 0:
-            return True
-
-        return False
-
-    @staticmethod
-    def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
-        """
-        Finds the Queen that corresponds to a given move.
-
-        Chess moves provide limited information to locate a specific piece, such as its
-        type (Queen), the target square, and optional file or rank constraints. This
-        method performs a targeted search to find valid Queens that match the move's description.
-
-        If the `errors` flag is set to `True`, this method validates the legality of the
-        identified Queen(s) for the move. If a valid Queen cannot be determined, or if
-        multiple matching Queens are found, it raises appropriate exceptions.
-
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :param square: The square where the Queen is attempting to move.
-        :type square: Square
-        :param color: The color of the Queen being searched for (0 for white, 1 for black).
-        :type color: int
-        :param capture: Indicates whether the move involves capturing an opponent's piece.
-        :type capture: bool
-        :param file_limit: (Optional) Restricts to find Queens in a specific file (e.g., 'a', 'b', etc.).
-        :type file_limit: str or None
-        :param rank_limit: (Optional) Restricts to find Queens in a specific rank (e.g., '1', '2', etc.).
-        :type rank_limit: str or None
-        :param errors: If `True`, raises exceptions for invalid moves or ambiguities.
-                       If `False`, returns `None` for invalid moves instead.
-        :type errors: bool
-        :return: The Queen that can execute the move, or a list if multiples are found, or `None` when `errors=False`.
-        :rtype: Queen or list[Queen] or None
-        :raises PieceNotFoundError: If no eligible Queen is found for the move.
-        :raises MultiplePiecesFoundError: If more than one matching Queen is found.
-        :raises NothingToCaptureError: If no opposing piece exists on the target square.
-        :raises CaptureOwnPieceError: If a piece of the same color exists on the target square.
-        :raises PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
-        """
-        found = []
-        i_pos, pos_pos, j_pos, neg_pos, i_neg, neg_neg, j_neg, pos_neg = True, True, True, True, True, True, True, True
-
-        x = 0
-        while i_pos or pos_pos or j_pos or neg_pos or i_neg or neg_neg or j_neg or pos_neg:
-            x += 1
-
-            # search in positive i direction
-            if i_pos:
-                i_pos_square = board[square.i + x, square.j]
-
-                if i_pos_square is None:
-                    i_pos = False
-
-                elif i_pos_square.piece is not None:
-                    i_pos = False
-
-                    if i_pos_square.piece.piecetype == 'Q' and i_pos_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i_pos_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - i_pos_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i_pos_square.j]
-                                    and rank_limit == str(8 - i_pos_square.i))
-                        ):
-                            found.append(i_pos_square)
-
-            # search in the positive i positive j direction
-            if pos_pos:
-                pp_square = board[square.i + x, square.j + x]
-
-                if pp_square is None:
-                    pos_pos = False
-
-                elif pp_square.piece is not None:
-                    pos_pos = False
-
-                    if pp_square.piece.piecetype == 'Q' and pp_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][pp_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - pp_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][pp_square.j]
-                                    and rank_limit == str(8 - pp_square.i))
-                        ):
-                            found.append(pp_square)
-
-            # search in positive j direction
-            if j_pos:
-                j_pos_square = board[square.i, square.j + x]
-
-                if j_pos_square is None:
-                    j_pos = False
-
-                elif j_pos_square.piece is not None:
-                    j_pos = False
-
-                    if j_pos_square.piece.piecetype == 'Q' and j_pos_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j_pos_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - j_pos_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j_pos_square.j]
-                                    and rank_limit == str(8 - j_pos_square.i))
-                        ):
-                            found.append(j_pos_square)
-
-            # search in the negative i positive j direction
-            if neg_pos:
-                np_square = board[square.i - x, square.j + x]
-
-                if np_square is None:
-                    neg_pos = False
-
-                elif np_square.piece is not None:
-                    neg_pos = False
-
-                    if np_square.piece.piecetype == 'Q' and np_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][np_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - np_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][np_square.j]
-                                    and rank_limit == str(8 - np_square.i))
-                        ):
-                            found.append(np_square)
-
-            # search in negative i direction
-            if i_neg:
-                i_neg_square = board[square.i - x, square.j]
-
-                if i_neg_square is None:
-                    i_neg = False
-
-                elif i_neg_square.piece is not None:
-                    i_neg = False
-
-                    if i_neg_square.piece.piecetype == 'Q' and i_neg_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i_neg_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - i_neg_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][i_neg_square.j]
-                                    and rank_limit == str(8 - i_neg_square.i))
-                        ):
-                            found.append(i_neg_square)
-
-            # search in the negative i negative j direction
-            if neg_neg:
-                nn_square = board[square.i - x, square.j - x]
-
-                if nn_square is None:
-                    neg_neg = False
-
-                elif nn_square.piece is not None:
-                    neg_neg = False
-
-                    if nn_square.piece.piecetype == 'Q' and nn_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][nn_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - nn_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][nn_square.j]
-                                    and rank_limit == str(8 - nn_square.i))
-                        ):
-                            found.append(nn_square)
-
-            # search in negative j direction
-            if j_neg:
-                j_neg_square = board[square.i, square.j - x]
-
-                if j_neg_square is None:
-                    j_neg = False
-
-                elif j_neg_square.piece is not None:
-                    j_neg = False
-
-                    if j_neg_square.piece.piecetype == 'Q' and j_neg_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j_neg_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - j_neg_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][j_neg_square.j]
-                                    and rank_limit == str(8 - j_neg_square.i))
-                        ):
-                            found.append(j_neg_square)
-
-            # search in the positive i negative j direction
-            if pos_neg:
-                pn_square = board[square.i + x, square.j - x]
-
-                if pn_square is None:
-                    pos_neg = False
-
-                elif pn_square.piece is not None:
-                    pos_neg = False
-
-                    if pn_square.piece.piecetype == 'Q' and pn_square.piece.color == color:
-                        # this checks for rank and file limits
-                        if (
-                                (rank_limit is None and file_limit is None)
-                                or (file_limit is not None and rank_limit is None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][pn_square.j])
-                                or (rank_limit is not None and file_limit is None
-                                    and rank_limit == str(8 - pn_square.i))
-                                or (rank_limit is not None and file_limit is not None
-                                    and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][pn_square.j]
-                                    and rank_limit == str(8 - pn_square.i))
-                        ):
-                            found.append(pn_square)
-
-        if len(found) == 0:
-            if errors:
-                raise PieceNotFoundError(square, 'Q')
-            else:
-                return None
-
-        elif len(found) == 1:
-
-            if errors:
-                # if the player is capturing, there must be an opponent's piece on the square
-                if capture:
-                    if square.piece is None:
-                        raise NothingToCaptureError(square)
-                    elif square.piece.color == color:
-                        raise CaptureOwnPieceError(square)
-
-                # this makes sure the player cannot move a piece onto a square that already has a piece on it
-                elif square.piece is not None:
-                    if square.piece.color == color:
-                        raise PieceOnSquareError(square, True)
-                    else:
-                        raise PieceOnSquareError(square, False)
-
-            return found[0]
-
-        else:
-            if errors:
-                raise MultiplePiecesFoundError(square, found)
-            else:
-                return found
+    @classmethod
+    def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
+        """Queen squares of ``color`` that could reach ``square`` (never raises)."""
+        color = Color(color)
+        return _find(_slide(board, square.i, square.j, ALL_DIRECTIONS),
+                     PieceType.QUEEN, color, file_limit, rank_limit)
 
 
 class King(Piece):
-    """
-    Represents the King chess piece.
+    """A King: moves one square in any direction; may castle."""
 
-    A subclass of the `Piece` class. The King is the most crucial piece in chess and has
-    restricted movement. It can move one square in any direction but cannot move into a square
-    under attack. Additionally, the King has special castling rules, which are implemented
-    in this class.
+    _TYPE = PieceType.KING
 
-    :ivar piecetype: The type of the piece, which is 'K' for King.
-    :type piecetype: str
-    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
-    :type color: int
-    :ivar moved: Indicates whether the King has moved. Used to determine if castling is allowed.
-    :type moved: bool
-    """
     def __init__(self, color, moved=False):
-        """
-        Initializes a King chess piece.
-
-        The King is initialized with a color, and whether it has moved.
-        The `color` is used to identify if the piece belongs to the white
-        or black side, and the `moved` attribute helps determine if this King can still
-        participate in castling.
-
-        :param color: The color of the piece (0 for white, 1 for black).
-        :type color: int
-        :param moved: Indicates whether the King has moved. Defaults to `False`.
-        :type moved: bool, optional
-        """
-        super().__init__('K', color)
-
+        """:param moved: Whether the king has moved (affects castling rights)."""
+        super().__init__(PieceType.KING, color)
         self.moved = moved
 
     def threatens(self, square, board):
-        """
-        Determines the squares that this King can threaten.
-
-        The King threatens all adjacent squares in any direction (horizontally, vertically,
-        or diagonally). However, this is independent of whether those squares are under threat
-        themselves or are occupied by an opponent's piece.
-
-        :param square: The square where this King is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: A list of squares that the King can threaten.
-        :rtype: list[Square]
-        """
-        moves = []
-        delta_is = [1, 1, 0, -1, -1, -1, 0, 1]
-        delta_js = [0, 1, 1, 1, 0, -1, -1, -1]
-
-        for x in range(8):
-
-            psquare = board[square.i + delta_is[x], square.j + delta_js[x]]
-
-            # The square must exist
-            # If there is a piece on the square, it must be a different color than the current piece
-            if (
-                    psquare is not None
-                    and ((psquare.piece is not None and psquare.piece.color != self.color)
-                         or psquare.piece is None)
-            ):
-                moves.append(psquare)
-
-        return moves
+        """Adjacent squares this king attacks from ``square`` (ignoring pins)."""
+        return _reachable(_step(board, square.i, square.j, ALL_DIRECTIONS), self.color)
 
     def can_move(self, square, board):
-        """
-        Determines if this King has at least one valid move.
-
-        The King can legally move to a square if:
-        - The square is one step away in any direction (horizontal, vertical, or diagonal).
-        - The square is not under attack by any of the opponent's pieces.
-
-        :param square: The square where this King is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: `True` if the King has at least one legal move, otherwise `False`.
-        :rtype: bool
-        """
-        threatens = self.threatens(square, board)
-        for threat in threatens:
+        """Whether this king can legally step to any unattacked adjacent square."""
+        for threat in self.threatens(square, board):
             if len(board.threats_on(threat, self.color)) == 0:
                 return True
         return False
 
     def can_castle(self, board, direction):
         """
-        Determines if the King can perform a castling move.
+        Whether the king may castle to the given side.
 
-        Castling is a special move involving the King and one of the Rooks, executed under these conditions:
-        - The King and the chosen Rook (either kingside or queenside) have not moved yet.
-        - All squares between the King and the Rook are unoccupied.
-        - None of the squares the King travels through (or lands on) are under attack.
-
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :param direction: Specifies the side for castling:
-                          - `'K'` for kingside castling.
-                          - `'Q'` for queenside castling.
-        :type direction: str
-        :return: `True` if castling is allowed in the specified direction, otherwise `False`.
+        :param direction: ``'K'`` (kingside) or ``'Q'`` (queenside).
         :rtype: bool
         """
         # if the king moved, no castle
         if self.moved:
             return False
 
-        x = 7 if self.color == 0 else 0
+        x = 7 if self.color == Color.WHITE else 0
 
         # king side castle...
         if direction == 'K':
@@ -1584,7 +320,7 @@ class King(Piece):
 
             if (
                     king_rook_square.piece is not None
-                    and king_rook_square.piece.piecetype == 'R'
+                    and king_rook_square.piece.piecetype == PieceType.ROOK
                     and king_rook_square.piece.color == self.color
                     and not king_rook_square.piece.moved
                     and between_square1.piece is None
@@ -1601,7 +337,7 @@ class King(Piece):
 
             if (
                     queen_rook_square.piece is not None
-                    and queen_rook_square.piece.piecetype == 'R'
+                    and queen_rook_square.piece.piecetype == PieceType.ROOK
                     and queen_rook_square.piece.color == self.color
                     and not queen_rook_square.piece.moved
                     and between_square1.piece is None
@@ -1613,408 +349,131 @@ class King(Piece):
 
         return False
 
-    @staticmethod
-    def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True):
-        """
-        Finds the King that corresponds to a given move.
-
-        Since each side has only one King, this method validates whether the move involves the
-        King and checks the constraints provided (e.g., file, rank limits). If the King is under
-        check, additional conditions may apply to validate its moves.
-
-        If the `errors` flag is set to `True`, this method verifies the legality of the move and
-        raises exceptions when invalid. When `errors` is `False`, it will return `None` for invalid
-        moves instead of raising exceptions.
-
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :param square: The square where the King is attempting to move.
-        :type square: Square
-        :param color: The color of the King being searched for (0 for white, 1 for black).
-        :type color: int
-        :param capture: Indicates whether the move involves capturing an opponent's piece.
-        :type capture: bool
-        :param file_limit: (Optional) Restricts to find the King in a specific file (e.g., 'a', 'b', etc.).
-        :type file_limit: str or None
-        :param rank_limit: (Optional) Restricts to find the King in a specific rank (e.g., '1', '2', etc.).
-        :type rank_limit: str or None
-        :param errors: If `True`, raises exceptions for invalid moves or ambiguous cases.
-                       If `False`, returns `None` for invalid moves instead.
-        :type errors: bool
-        :return: The King if it matches the given move, or `None` when `errors=False`.
-        :rtype: King or None
-        :raises PieceNotFoundError: If no King is found on the board matching the criteria.
-        :raises NothingToCaptureError: If opponent's piece exists on the target square.
-        :raises CaptureOwnPieceError: If an allied piece exists on the target square.
-        :raises PieceOnSquareError: If an invalid move is attempted, such as landing
-                                               on an occupied square.
-        """
-        found = []
-        delta_is = [1, 1, 0, -1, -1, -1, 0, 1]
-        delta_js = [0, 1, 1, 1, 0, -1, -1, -1]
-
-        for index in range(8):
-
-            psquare = board[square.i + delta_is[index], square.j + delta_js[index]]
-
-            # The square must exist
-            # If there is a piece on the square, it must be the same color as the player
-            if (
-                    psquare is not None
-                    and psquare.piece is not None
-                    and psquare.piece.piecetype == 'K'
-                    and psquare.piece.color == color
-            ):
-                # this checks for rank and file limits
-                if (
-                        (rank_limit is None and file_limit is None)
-                        or (file_limit is not None and rank_limit is None
-                            and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][psquare.j])
-                        or (rank_limit is not None and file_limit is None
-                            and rank_limit == str(8 - psquare.i))
-                        or (rank_limit is not None and file_limit is not None
-                            and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][psquare.j]
-                            and rank_limit == str(8 - psquare.i))
-                ):
-                    found.append(psquare)
-
-        if len(found) == 0:
-            if errors:
-                raise PieceNotFoundError(square, 'K')
-            else:
-                return found
-
-        elif len(found) == 1:
-
-            if errors:
-                # if the player is capturing, there must be an opponent's piece on the square
-                if capture:
-                    if square.piece is None:
-                        raise NothingToCaptureError(square)
-                    elif square.piece.color == color:
-                        raise CaptureOwnPieceError(square)
-
-                # this makes sure the player cannot move a piece onto a square that already has a piece on it
-                elif square.piece is not None:
-                    if square.piece.color == color:
-                        raise PieceOnSquareError(square, True)
-                    else:
-                        raise PieceOnSquareError(square, False)
-
-            return found[0]
-
-        else:
-            if errors:
-                raise MultiplePiecesFoundError(square, found)
-            else:
-                return found
+    @classmethod
+    def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
+        """King squares of ``color`` adjacent to ``square`` (never raises)."""
+        color = Color(color)
+        return _find(_step(board, square.i, square.j, ALL_DIRECTIONS),
+                     PieceType.KING, color, file_limit, rank_limit)
 
 
 class Pawn(Piece):
-    """
-    Represents a Pawn chess piece.
+    """A Pawn: advances forward, captures diagonally, and may capture en passant."""
 
-    A subclass of the `Piece` class. The Pawn has unique movement and capturing rules:
-    - It moves forward (one square at a time or two squares on its first move).
-    - It captures diagonally.
-    - Special rules include the "en passant" capture and promotion when reaching the opposite end of the board.
+    _TYPE = PieceType.PAWN
 
-    :ivar piecetype: The type of the piece, which is 'P' for Pawn.
-    :type piecetype: str
-    :ivar color: The color of the piece, where 0 represents white and 1 represents black.
-    :type color: int
-    """
     def __init__(self, color):
-        """
-        Initializes a Pawn chess piece.
-
-        The Pawn is set up with its type ('P') and color, which determines its movement direction
-        (white moves upward, black moves downward).
-
-        :param color: The color of the Pawn (0 for white, 1 for black).
-        :type color: int
-        """
-        super().__init__('P', color)
+        super().__init__(PieceType.PAWN, color)
 
     def threatens(self, square, board):
-        """
-        Determines the squares that this Pawn can attack.
-
-        A Pawn threatens diagonally forward squares based on its color:
-        - For a white Pawn, this means threatening squares one step forward-left and forward-right.
-        - For a black Pawn, this means threatening squares one step backward-left and backward-right.
-
-        :param square: The square where this Pawn is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: A list of squares that the Pawn can attack or threaten.
-        :rtype: list[Square]
-        """
-        moves = []
-
-        # the direction the pawn threatens is determined by the player's color
-        x = -1 if self.color == 0 else 1
-
-        for y in [1, -1]:
-            psquare = board[square.i + x, square.j + y]
-
-            if (
-                    # The square must exist
-                    # If there is a piece on the square, it must be a different color than the current piece
-                    psquare is not None
-                    and ((psquare.piece is not None and psquare.piece.color != self.color)
-                         or psquare.piece is None)
-            ):
-                moves.append(psquare)
-
-        return moves
+        """The two diagonally-forward squares this pawn attacks (ignoring pins)."""
+        forward = -1 if self.color == Color.WHITE else 1
+        squares = (sq for sq in (board[square.i + forward, square.j + 1],
+                                 board[square.i + forward, square.j - 1]) if sq is not None)
+        return _reachable(squares, self.color)
 
     def can_move(self, square, board):
-        """
-        Checks if this Pawn has any valid moves.
-
-        The Pawn can move forward one square if unblocked, or two squares if it is its first move
-        and both squares are unblocked. Additionally:
-        - It can capture pieces diagonally forward on adjacent squares.
-        - It can also capture a piece via "en passant" if applicable.
-
-        This method also considers if the Pawn is pinned and adjusts its validity checks accordingly.
-
-        :param square: The square where this Pawn is currently located.
-        :type square: Square
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :return: `True` if the Pawn can make at least one valid move, otherwise `False`.
-        :rtype: bool
-        """
-        # if the piece is pinned, we need to check if the piece can capture the other piece that is pinning it
+        """Whether this pawn has a legal move (forward push, capture, or en passant)."""
+        # if the pawn is pinned, it may only move if it can capture its lone pinner
         if self.is_pinned(square, board):
-
-            # gets the list of threats to the king
             king_threats1 = board.threats_on(board.find_king(self.color), self.color)
+            with board.lifted(square):
+                king_threats2 = board.threats_on(board.find_king(self.color), self.color)
+            king_threats = [t for t in king_threats1 + king_threats2
+                            if t not in king_threats1 or t not in king_threats2]
+            return len(king_threats) > 1 and king_threats[0] in self.threatens(square, board)
 
-            # removes the piece from board
-            board[square.i, square.j].piece = None
+        forward = -1 if self.color == Color.WHITE else 1
 
-            # gets the list of threats to the king again
-            king_threats2 = board.threats_on(board.find_king(self.color), self.color)
-
-            # gets the threats that are not in both lists, ie the threat that the piece should be blocking
-            king_threats = [threat for threat in king_threats1 + king_threats2
-                            if threat not in king_threats1 or threat not in king_threats2]
-
-            # puts the piece back
-            board[square.i, square.j].piece = self
-
-            # if there is more than one threat the king, the piece is pinned and can't move
-            if len(king_threats) > 1 and king_threats[0] in self.threatens(square, board):
-                return True
-
-            # the piece is pinned and can't move
-            return False
-
-        ## the piece is not pinned:
-        # the direction the pawn moves is determined by the player's color
-        x = -1 if self.color == 0 else 1
-
-        # checks if the pawn can move to the square directly in front of it
-        # does not have to check square 2 in front, bc it can only do that if it can move to square 1 in front
-        psquare = board[square.i + x, square.j]
-        if psquare is not None and psquare.piece is None:
+        # can advance one square if the square ahead is empty
+        ahead = board[square.i + forward, square.j]
+        if ahead is not None and ahead.piece is None:
             return True
 
-        threatens = self.threatens(square, board)
-        if len(threatens) != 0:
-            for threat in threatens:
-                if threat.piece is not None and threat.piece.color != self.color:
-                    return True
+        # can capture an adjacent enemy piece
+        for threat in self.threatens(square, board):
+            if threat.piece is not None and threat.piece.color != self.color:
+                return True
 
         return False
 
-    @staticmethod
-    def find(board, square, color, capture, file_limit=None, rank_limit=None, errors=True, en=False):
+    @classmethod
+    def find_all(cls, board, square, color, capture, file_limit=None, rank_limit=None):
         """
-        Finds a Pawn on the board that matches a given move.
+        Pawn squares of ``color`` that could move to ``square`` (never raises, no side effects).
 
-        Pawns have unique behavior compared to other pieces:
-
-        - If not capturing, they are checked for one or two steps behind the target square, depending on
-          whether the move is a single or double square advance.
-        - If capturing, they are checked on diagonally adjacent squares.
-        - If "en passant" capture is involved, a hit on the diagonally adjacent square will be validated by
-          matching the Pawn that made the two-square move.
-
-        If the `errors` flag is set to `True`, exceptions are raised for invalid moves.
-        Otherwise, invalid moves will return `None` or an empty list.
-
-        :param board: The chessboard containing all pieces and their positions.
-        :type board: Board
-        :param square: The target square where the move is being attempted.
-        :type square: Square
-        :param color: The color of the Pawn being searched for (0 for white, 1 for black).
-        :type color: int
-        :param capture: Indicates whether the move involves capturing an opponent's piece.
-        :type capture: bool
-        :param file_limit: (Optional) Restricts to find Pawns in a specific file (e.g., 'a', 'b', etc.).
-        :type file_limit: str or None
-        :param rank_limit: (Optional) Restricts to find Pawns in a specific rank (e.g., '1', '2', etc.).
-        :type rank_limit: str or None
-        :param errors: If `True`, raises exceptions for invalid moves. If `False`, returns `None` for invalid cases.
-        :type errors: bool
-        :param en: Indicates whether the search includes checking for an "en passant" capture.
-        :type en: bool
-        :return: The Pawn that matches the given move, or a list of possible Pawns, or `None` for invalid moves.
-        :rtype: Pawn or list[Pawn] or None
-        :raises PieceNotFoundError: If no Pawn is found on the board matching the criteria.
-        :raises NothingToCaptureError: If no opponent's piece is present to capture on the target square.
-        :raises CaptureOwnPieceError: If an allied piece is found on the target square.
-        :raises MultiplePiecesFoundError: If several Pawns match, making the move ambiguous.
+        :param capture: Whether the move is a diagonal capture (``True``) or a forward push.
         """
-        x = 1 if color == 0 else -1
+        color = Color(color)
+        # a pawn sits "behind" its destination: below it for white (i increases downward)
+        behind = 1 if color == Color.WHITE else -1
+
+        if capture:
+            candidates = (board[square.i + behind, square.j + 1],
+                          board[square.i + behind, square.j - 1])
+            return _find(candidates, PieceType.PAWN, color, file_limit, rank_limit)
+
+        # forward push: the pawn is one square behind, or two if the square between is empty
+        one_back = board[square.i + behind, square.j]
+        if one_back is not None and one_back.piece is not None:
+            return _find([one_back], PieceType.PAWN, color, file_limit, rank_limit)
+
+        two_back = board[square.i + behind * 2, square.j]
+        if one_back is not None and one_back.piece is None and two_back is not None:
+            return _find([two_back], PieceType.PAWN, color, file_limit, rank_limit)
+
+        return []
+
+    @classmethod
+    def find_one(cls, board, square, color, capture, file_limit=None, rank_limit=None, en=False):
+        """
+        Resolve a pawn move to the single pawn that made it.
+
+        A two-square advance records the en-passant target on the board. An ``en``
+        capture onto an empty square is validated against the last double-step.
+
+        :return: The :class:`Square` the pawn started on.
+        :rtype: Square
+        :raises PieceNotFoundError: If no eligible pawn is found.
+        :raises MultiplePiecesFoundError: If the move is ambiguous.
+        :raises NothingToCaptureError: If a capture has no (regular or en-passant) target.
+        :raises CaptureOwnPieceError: If a capture would take a friendly piece.
+        :raises PieceOnSquareError: If a forward push lands on an occupied square.
+        """
+        color = Color(color)
+        candidates = cls.find_all(board, square, color, capture, file_limit, rank_limit)
+
+        if len(candidates) == 0:
+            raise PieceNotFoundError(square, PieceType.PAWN)
+        if len(candidates) > 1:
+            raise MultiplePiecesFoundError(square, candidates)
+
+        pawn_square = candidates[0]
 
         if not capture:
-
-            square1 = board[square.i + x, square.j]
-            square2 = board[square.i + (x * 2), square.j]
-
-            # checks directly behind the square
-            if (
-                    square1 is not None
-                    and square1.piece is not None
-                    and square1.piece.piecetype == 'P'
-                    and square1.piece.color == color
-            ):
-                # this makes sure the player cannot move a piece onto a square that already has a piece on it
-                if square.piece is not None and errors:
-                    if square.piece.color == color:
-                        raise PieceOnSquareError(square, True)
-                    else:
-                        raise PieceOnSquareError(square, False)
-
-                # this checks for rank and file limits
-                if (
-                        (rank_limit is None and file_limit is None)
-                        or (file_limit is not None and rank_limit is None
-                            and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][square1.j])
-                        or (rank_limit is not None and file_limit is None
-                            and rank_limit == str(8 - square1.i))
-                        or (rank_limit is not None and file_limit is not None
-                            and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][square1.j]
-                            and rank_limit == str(8 - square1.i))
-                ):
-                    return square1
-
-                # this will only be raised if rank and file limit conditions are not met
-                if errors:
-                    raise PieceNotFoundError(square, 'P')
-                else:
-                    return None
-
-            # checks two squares behind the pawn
-            elif (
-                    square1 is not None
-                    and square1.piece is None
-                    and square2 is not None
-                    and square2.piece is not None
-                    and square2.piece.piecetype == 'P'
-                    and square2.piece.color == color
-            ):
-                # this makes sure the player cannot move a piece onto a square that already has a piece on it
-                if square.piece is not None and errors:
-                    if square.piece.color == color:
-                        raise PieceOnSquareError(square, True)
-                    else:
-                        raise PieceOnSquareError(square, False)
-
-                # this checks for rank and file limits
-                if (
-                        (rank_limit is None and file_limit is None)
-                        or (file_limit is not None and rank_limit is None
-                            and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][square2.j])
-                        or (rank_limit is not None and file_limit is None
-                            and rank_limit == str(8 - square2.i))
-                        or (rank_limit is not None and file_limit is not None
-                            and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][square2.j]
-                            and rank_limit == str(8 - square2.i))
-                ):
-                    board.two_moveP = square
-                    return square2
-
-                # this will only be raised if rank and file limit conditions are not met
-                if errors:
-                    raise PieceNotFoundError(square, 'P')
-                else:
-                    return None
-
-            elif errors:
-                raise PieceNotFoundError(square, 'P')
-            else:
-                return None
-
-        # if capture
+            if square.piece is not None:
+                raise PieceOnSquareError(square, square.piece.color == color)
+            # a two-square advance leaves an en-passant target on the crossed square
+            if abs(pawn_square.i - square.i) == 2:
+                board.two_moveP = square
         else:
+            if square.piece is None:
+                if not (en and cls._valid_en_passant(board, square, color)):
+                    raise NothingToCaptureError(square)
+            elif square.piece.color == color:
+                raise CaptureOwnPieceError(square)
 
-            # checks the squares that are one backwards and one to the left/right
-            found = []
+        return pawn_square
 
-            for y in [1, -1]:
-                psquare1 = board[square.i + x, square.j + y]
-
-                if (
-                        psquare1 is not None
-                        and psquare1.piece is not None
-                        and psquare1.piece.piecetype == 'P'
-                        and psquare1.piece.color == color
-                ):
-
-                    # this checks for rank and file limits
-                    if (
-                            (rank_limit is None and file_limit is None)
-                            or (file_limit is not None and rank_limit is None
-                                and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][psquare1.j])
-                            or (rank_limit is not None and file_limit is None
-                                and rank_limit == str(8 - psquare1.i))
-                            or (rank_limit is not None and file_limit is not None
-                                and file_limit == ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][psquare1.j]
-                                and rank_limit == str(8 - psquare1.i))
-                    ):
-                        found.append(psquare1)
-
-            if len(found) == 0:
-                if errors:
-                    raise PieceNotFoundError(square, 'P')
-                else:
-                    return found
-
-            elif len(found) == 1:
-
-                # if the player is capturing, there must be an opponent's piece on the square (or pass en passant check)
-                if square.piece is None and errors:
-
-                    # this will check for a valid en passant, if needed
-                    if en:
-                        psquare2 = board[square.i + x, square.j]
-
-                        if not (
-                            psquare2 is not None
-                            and psquare2.piece is not None
-                            and psquare2.piece.piecetype == 'P'
-                            and psquare2.piece.color != color
-                            and board.two_moveP == psquare2
-                        ):
-                            raise NothingToCaptureError(square)
-
-                    else:
-                        raise NothingToCaptureError(square)
-
-                elif square.piece is not None and square.piece.color == color and errors:
-                    raise CaptureOwnPieceError(square)
-
-                return found[0]
-
-            else:
-                if errors:
-                    raise MultiplePiecesFoundError(square, found)
-                else:
-                    return found
+    @staticmethod
+    def _valid_en_passant(board, square, color):
+        """Whether an en-passant capture onto empty ``square`` is legal for ``color``."""
+        behind = 1 if color == Color.WHITE else -1
+        captured = board[square.i + behind, square.j]
+        return (
+            captured is not None
+            and captured.piece is not None
+            and captured.piece.piecetype == PieceType.PAWN
+            and captured.piece.color != color
+            and board.two_moveP == captured
+        )

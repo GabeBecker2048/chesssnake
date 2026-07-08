@@ -38,7 +38,7 @@ where = ["src"]
 include = ["chesssnake*"]
 
 [tool.setuptools.package-data]
-chesssnake = ["data/*.sql", "data/*.ttf", "data/img/*.png"]
+chesssnake = ["data/*.sql", "data/*.ttf", "data/img/*.png", "py.typed"]
 
 [dependency-groups]
 dev = [
@@ -50,6 +50,7 @@ dev = [
     "requests>=2.31",
     "httpx>=0.27",
     "ruff>=0.9",
+    "mypy>=1.8",
 ]
 
 [tool.pytest.ini_options]
@@ -73,3 +74,12 @@ ignore = ["E501"]
 # Tests intentionally compare with `== None` to exercise Square.__eq__ (E711),
 # and use `pytest.importorskip(...)` before importing optional deps (E402).
 "tests/**" = ["E711", "E402"]
+
+[tool.mypy]
+# Lenient starting point (per the refactor plan): type-check the package without
+# requiring every function to be annotated yet. Tighten in later phases.
+files = ["src/chesssnake"]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true

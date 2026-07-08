@@ -17,14 +17,14 @@ def test_pawn_push_moves_piece():
     g.move("e4")
     assert piece_at(g.board, "e2") is None
     p = piece_at(g.board, "e4")
-    assert p is not None and p.piecetype == "P" and p.color == 0
+    assert p is not None and p.piecetype.value == "P" and p.color == 0
 
 
 def test_knight_move():
     g = Game()
     g.move("Nf3")
     p = piece_at(g.board, "f3")
-    assert p is not None and p.piecetype == "N" and p.color == 0
+    assert p is not None and p.piecetype.value == "N" and p.color == 0
     assert piece_at(g.board, "g1") is None
 
 
@@ -34,7 +34,7 @@ def test_pawn_capture():
     g.move("d5")
     g.move("exd5")
     p = piece_at(g.board, "d5")
-    assert p is not None and p.piecetype == "P" and p.color == 0
+    assert p is not None and p.piecetype.value == "P" and p.color == 0
 
 
 def test_en_passant_capture():
@@ -45,7 +45,7 @@ def test_en_passant_capture():
     g.move("d5")        # black double-steps next to the white e5 pawn
     g.move("exd6")      # white captures en passant
     assert piece_at(g.board, "d6") is not None       # capturing pawn advanced
-    assert piece_at(g.board, "d6").piecetype == "P"
+    assert piece_at(g.board, "d6").piecetype.value == "P"
     assert piece_at(g.board, "d5") is None           # captured pawn removed
 
 
@@ -56,8 +56,8 @@ def test_kingside_castle():
     g.move("0-0")
     king = piece_at(g.board, "g1")
     rook = piece_at(g.board, "f1")
-    assert king is not None and king.piecetype == "K"
-    assert rook is not None and rook.piecetype == "R"
+    assert king is not None and king.piecetype.value == "K"
+    assert rook is not None and rook.piecetype.value == "R"
     assert piece_at(g.board, "e1") is None
     assert piece_at(g.board, "h1") is None
 
@@ -68,7 +68,7 @@ def test_promotion_to_queen(make_board):
     g = Game(board=board, turn=0)
     g.move("b8Q")
     promoted = piece_at(g.board, "b8")
-    assert promoted is not None and promoted.piecetype == "Q" and promoted.color == 0
+    assert promoted is not None and promoted.piecetype.value == "Q" and promoted.color == 0
     assert piece_at(g.board, "b7") is None
 
 
