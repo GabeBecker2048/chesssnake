@@ -1,6 +1,10 @@
 """Integration tests for the FastAPI api-endpoint hitting a real Postgres."""
 
+import pytest
+
 from chesssnake.db import INITIAL_BOARD
+
+pytestmark = pytest.mark.integration
 
 
 def test_health(api_client):
