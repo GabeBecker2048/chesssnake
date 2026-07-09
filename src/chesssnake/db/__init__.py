@@ -10,18 +10,17 @@ same interface.
 from . import errors, postgres, sql
 from .postgres import (
     INITIAL_BOARD,
+    apply_game_change,
     challenge,
     challenge_create,
     challenge_delete,
     challenge_exists,
     current_games,
     db_init,
-    game_clear_draw,
     game_delete,
     game_exists,
+    game_get,
     game_get_or_create,
-    game_update,
-    game_update_draw,
 )
 
 __all__ = [
@@ -31,9 +30,8 @@ __all__ = [
     "INITIAL_BOARD",
     "db_init",
     "game_get_or_create",
-    "game_update",
-    "game_update_draw",
-    "game_clear_draw",
+    "game_get",
+    "apply_game_change",
     "game_delete",
     "current_games",
     "game_exists",

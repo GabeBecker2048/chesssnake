@@ -9,7 +9,7 @@ lowercase column name).
 """
 
 from . import errors
-from .sql import execute_psql, initialize_connection_pool, psql_db_init, validate_ids
+from .sql import execute_psql, initialize_connection_pool, psql_db_init, transaction, validate_ids
 
 # The serialized starting position, matching Board.disassemble_board's format.
 INITIAL_BOARD = (
@@ -78,60 +78,64 @@ def game_get_or_create(group_id, white_id, black_id, white_name="", black_name="
     return dict(row)
 
 
-def game_update(group_id, white_id, black_id, board, turn, pawnmove, draw, moved, status, wname, bname):
-    """Persists the full state of a game."""
-    validate_ids(white_id, black_id, group_id)
-
-    query = """
-        UPDATE Games
-        SET Board = %(board)s,
-            Turn = %(turn)s,
-            PawnMove = %(pawnmove)s,
-            Draw = %(draw)s,
-            Moved = %(moved)s,
-            Status = %(status)s,
-            WName = %(wname)s,
-            BName = %(bname)s
-        WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
-    """
-    params = {
-        "board": board,
-        "turn": turn,
-        "pawnmove": pawnmove,
-        "draw": draw,
-        "moved": moved,
-        "status": status,
-        "wname": wname,
-        "bname": bname,
-        "group_id": group_id,
-        "white_id": white_id,
-        "black_id": black_id,
-    }
-    execute_psql(query, params=params)
-
-
-def game_update_draw(group_id, white_id, black_id, draw, status):
-    """Updates only the draw offer and status of a game."""
+def game_get(group_id, white_id, black_id):
+    """Return the raw game row for ``(group_id, white_id, black_id)``, or ``None``."""
     validate_ids(white_id, black_id, group_id)
     query = """
-        UPDATE Games
-        SET Draw = %(draw)s, Status = %(status)s
+        SELECT * FROM Games
         WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
     """
-    params = {"draw": draw, "status": status, "group_id": group_id, "white_id": white_id, "black_id": black_id}
-    execute_psql(query, params=params)
+    rows = execute_psql(query, params={"group_id": group_id, "white_id": white_id, "black_id": black_id})
+    return dict(rows[0]) if rows else None
 
 
-def game_clear_draw(group_id, white_id, black_id):
-    """Clears any pending draw offer on a game."""
+# The columns apply_game_change's mutate callback returns to persist.
+_STATE_COLUMNS = ("board", "turn", "pawnmove", "draw", "moved", "status", "wname", "bname")
+
+
+def apply_game_change(group_id, white_id, black_id, mutate):
+    """
+    Atomically read a game, transform it, and write it back.
+
+    Locks the row with ``SELECT ... FOR UPDATE``, calls ``mutate(row)`` — which
+    runs the engine and returns ``(columns, result)`` — persists ``columns``, and
+    returns ``result``. The whole read-modify-write is one transaction, so
+    concurrent moves on the same game can't clobber each other. This layer stays
+    engine-free; the chess logic lives entirely in the ``mutate`` callback.
+
+    :param mutate: callable ``row_dict -> (columns_dict, result)`` where
+        ``columns_dict`` holds the ``_STATE_COLUMNS`` to store.
+    :return: the ``result`` returned by ``mutate``.
+    :raises errors.GameNotFoundError: if the game does not exist.
+    """
     validate_ids(white_id, black_id, group_id)
-    query = """
-        UPDATE Games
-        SET Draw = NULL
-        WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
-    """
-    params = {"group_id": group_id, "white_id": white_id, "black_id": black_id}
-    execute_psql(query, params=params)
+    ids = {"group_id": group_id, "white_id": white_id, "black_id": black_id}
+
+    with transaction() as cur:
+        cur.execute(
+            """
+            SELECT * FROM Games
+            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
+            FOR UPDATE
+            """,
+            ids,
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
+
+        columns, result = mutate(dict(row))
+
+        cur.execute(
+            """
+            UPDATE Games
+            SET Board = %(board)s, Turn = %(turn)s, PawnMove = %(pawnmove)s, Draw = %(draw)s,
+                Moved = %(moved)s, Status = %(status)s, WName = %(wname)s, BName = %(bname)s
+            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
+            """,
+            {**{c: columns[c] for c in _STATE_COLUMNS}, **ids},
+        )
+    return result
 
 
 def game_delete(group_id, white_id, black_id):
