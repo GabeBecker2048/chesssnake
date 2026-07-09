@@ -6,9 +6,19 @@ be injected (the test-suite passes a Starlette ``TestClient``, which is request
 compatible), so the same client code drives both a real server and an in-process
 app. Non-2xx responses are translated back into the shared ``GameError`` types so
 callers see the same exceptions they would from a local database.
+
+All routes are served under the versioned ``/v1`` prefix. If the server is
+configured with an API key, pass ``api_key=`` and it is sent as ``X-API-Key``.
 """
 
 from ..db import errors
+from ..dto import GameState
+
+# All endpoints live under this version prefix.
+API_PREFIX = "/v1"
+
+# Header carrying the optional API key.
+API_KEY_HEADER = "X-API-Key"
 
 # Error-type name (sent by the server) -> exception class to raise. Types with
 # custom constructors (SQLIdError, SQLAuthError) fall back to their SQLError base,
@@ -25,8 +35,9 @@ _ERROR_TYPES = {
 class ApiClient:
     """Talks to a chesssnake api-endpoint over REST."""
 
-    def __init__(self, base_url, session=None):
+    def __init__(self, base_url, session=None, api_key=None):
         self.base_url = base_url.rstrip("/") if base_url else ""
+        self.api_key = api_key
         if session is None:
             try:
                 import requests
@@ -41,7 +52,10 @@ class ApiClient:
     # --- transport ---------------------------------------------------------
 
     def _request(self, method, path, *, params=None, json=None):
-        resp = self._session.request(method, f"{self.base_url}{path}", params=params, json=json)
+        headers = {API_KEY_HEADER: self.api_key} if self.api_key else None
+        resp = self._session.request(
+            method, f"{self.base_url}{API_PREFIX}{path}", params=params, json=json, headers=headers
+        )
         if resp.status_code >= 400:
             self._raise(resp)
         if resp.content:
@@ -62,8 +76,8 @@ class ApiClient:
 
     # --- games -------------------------------------------------------------
 
-    def get_or_create_game(self, group_id, white_id, black_id, white_name="", black_name=""):
-        return self._request(
+    def get_or_create_game(self, group_id, white_id, black_id, white_name="", black_name="") -> GameState:
+        data = self._request(
             "POST",
             "/games",
             json={
@@ -74,9 +88,10 @@ class ApiClient:
                 "black_name": black_name,
             },
         )
+        return GameState(**data)
 
-    def update_game(self, group_id, white_id, black_id, state):
-        return self._request("PUT", f"/games/{group_id}/{white_id}/{black_id}", json=state)
+    def update_game(self, group_id, white_id, black_id, state: GameState):
+        return self._request("PUT", f"/games/{group_id}/{white_id}/{black_id}", json=state.to_dict())
 
     def update_draw(self, group_id, white_id, black_id, draw, status):
         return self._request(

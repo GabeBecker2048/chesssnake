@@ -2,6 +2,7 @@
 
 import pytest
 
+from chesssnake import Color, GameStatus
 from chesssnake.engine import Game
 from chesssnake.engine import errors as ChessError
 
@@ -11,6 +12,40 @@ def test_new_game_defaults():
     assert g.turn == 0  # white to move
     assert g.draw is None
     assert g.board.status == 0  # in play
+
+
+def test_accessors_ongoing_game():
+    g = Game(white_name="A", black_name="B")
+    assert g.to_move == Color.WHITE
+    assert g.is_over is False
+    assert g.result == GameStatus.IN_PLAY
+    assert g.winner is None
+    assert g.draw_offered_by is None
+    g.move("e4")
+    assert g.to_move == Color.BLACK
+
+
+def test_accessors_report_checkmate_winner():
+    g = Game()
+    for m in ["f3", "e5", "g4", "Qh4"]:  # fool's mate — black (Qh4#) wins
+        g.move(m)
+    assert g.is_over is True
+    assert g.result == GameStatus.CHECKMATE
+    assert g.winner == Color.BLACK
+
+
+def test_move_returns_the_move_played():
+    g = Game()
+    m = g.move("e4")
+    assert m is g.last_move
+    assert m.to.c_notation == "e4"
+
+
+def test_render_returns_an_image():
+    g = Game(white_name="A", black_name="B")
+    g.move("e4")
+    img = g.render()
+    assert img.size == (1190, 644)
 
 
 def test_move_alternates_turn():
@@ -48,8 +83,11 @@ def test_draw_offer_and_accept_ends_in_draw():
     g = Game(white_id=10, black_id=20)
     g.draw_offer(10)  # white (to move) offers
     assert g.draw == 0
+    assert g.draw_offered_by == Color.WHITE
     g.draw_offer(20)  # black offering back accepts the draw
     assert g.board.status == 2  # draw / stalemate status
+    assert g.result == GameStatus.DRAW
+    assert g.winner is None
 
 
 def test_double_draw_offer_raises():

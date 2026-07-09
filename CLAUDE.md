@@ -49,18 +49,20 @@ Package data (`data/*.sql`, `data/*.ttf`, `data/img/*.png`) is declared under `[
 
 ## Three-tier architecture
 
-The single public export is `Game` (`src/chesssnake/__init__.py` → `from .remote.game import Game`). It is an `engine.Game` subclass that is **local by default** and **remote when asked**:
+The public exports are `Game`, the challenge helpers (`challenge`, `challenge_exists`, `delete_challenge`), and the enums (`Color`, `GameStatus`, `PieceType`) — see `src/chesssnake/__init__.py`. `Game` is an `engine.Game` subclass built via **factory methods** (not a flag-laden constructor):
 
-- `Game(white_name=..., black_name=...)` — pure in-memory game. No network, no `requests`/psycopg2 imported. Identical to the raw engine.
-- `Game(white_id, black_id, group_id, remote=True, api_url=...)` — on construct it `POST`s to the api-endpoint to get-or-create the game and rebuilds the board from the returned state. `move`/`draw_*` still run the engine locally; with `auto_sync=True` they push state to the API after each call (or call `game.sync()` yourself). `api_url` falls back to `CHESSSNAKE_API_URL`.
+- `Game.local(white_name=..., black_name=...)` — pure in-memory game. No network, no `requests`/psycopg2 imported. Identical to the raw engine.
+- `Game.remote(white_id, black_id, group_id=..., api_url=..., api_key=..., auto_sync=True)` — `POST`s to the api-endpoint to get-or-create the game and rebuilds the board from the returned state. `move`/`draw_*` still run the engine locally; with `auto_sync=True` (the default) they push state to the API after each call. It's also a context manager that `sync()`s on clean exit. `api_url` falls back to `CHESSSNAKE_API_URL`.
+
+Gameplay state is read through intention-revealing accessors on `Game`: `to_move` (Color), `is_over` (bool), `result` (GameStatus), `winner` (Color|None), `draw_offered_by` (Color|None). `move()` returns the `Move` played (rendering is separate: `render()` / `save(path)`).
 
 The three tiers and where they live:
 
-1. **Client** (`src/chesssnake/remote/`) — `Game`/`Challenge` (`game.py`) run the engine locally; `ApiClient` (`client.py`) is a thin `requests`-style wrapper. `requests` is imported lazily, only on the `remote=True` path, so local games and the engine stay dependency-free.
-2. **Server** (`src/chesssnake/api/server.py`) — a FastAPI `app` exposing a thin persistence API (get-or-create, update, draw patch/clear, delete, current/exists, challenges, `/health`). It **never imports the `engine`** — it only moves serialized strings/ids in and out of Postgres. Domain errors are mapped to JSON `{error_type, detail}` with status codes (id→422, challenge→409, sql→500); the client re-raises the matching `GameError` type.
+1. **Client** (`src/chesssnake/remote/`) — `Game` + the challenge functions (`game.py`) run the engine locally; `ApiClient` (`client.py`) is a thin `requests`-style wrapper (talks to the `/v1` routes, sends an optional `X-API-Key`). `requests` is imported lazily, only on the remote path, so local games and the engine stay dependency-free.
+2. **Server** (`src/chesssnake/api/server.py`) — a FastAPI `app`. `/health` is unversioned/open; all game+challenge routes live on a `/v1` `APIRouter` gated by an optional API-key dependency (`require_api_key`, active only when `CHESSSNAKE_API_KEY` is set). It **never imports the `engine`** — it only moves serialized strings/ids in and out of Postgres. Domain errors are mapped to JSON `{error_type, detail}` with status codes (id→422, challenge→409, sql→500); the client re-raises the matching `GameError` type.
 3. **Database** (`src/chesssnake/db/`) — the SQL, behind a common interface (`db/__init__.py` re-exports the operations so callers depend on `chesssnake.db`, leaving room for a future `db/sqlite.py`). `db/postgres.py` holds the pure query functions the server calls (the PostgreSQL backend); `db/sql.py` the pool + `execute_psql`; `db/errors.py` the `GameError` exception types (now `Exception`-based so FastAPI can catch them); `data/init.sql` the schema.
 
-`src/chesssnake/cli.py` is the `chesssnake` console-script entry point (`api-endpoint`, `init-db` subcommands). `src/chesssnake/assets.py` (`asset_path`) centralizes packaged-data lookups.
+The wire payload is defined once as `src/chesssnake/dto.py`'s `GameState` (a stdlib dataclass, so the client needs no pydantic) and used by both the client and the server. `src/chesssnake/cli.py` is the `chesssnake` console-script entry point (`api-endpoint`, `init-db` subcommands). `src/chesssnake/assets.py` (`asset_path`) centralizes packaged-data lookups.
 
 When changing **gameplay** behavior, edit `engine` — every tier inherits it. When changing **persistence**, edit `db/postgres.py` (SQL) and mirror the endpoint in `api/server.py` + the method in `remote/client.py`.
 
@@ -82,14 +84,14 @@ When changing **gameplay** behavior, edit `engine` — every tier inherits it. W
 
 ### `remote/` — the client (tier 1)
 
-- `game.py` — `Game(BaseGame)` (local-or-remote, described above) plus `Challenge` (pending-challenge matchmaking; static methods that hit the challenge endpoints).
-  - Games are keyed by the composite `(group_id, white_id, black_id)` — all BIGINTs. `POST /games` does an upsert-then-select so a `Game` either loads the existing row or creates a fresh one.
-  - Board (de)serialization lives on the client: `Board.disassemble_board()` → a `;`-delimited string of `<type><color>`/`--` tokens plus a 6-char `moved` castling-rights string, sent to the API; `_board_from_state()` reverses it with `Board.assemble_board()` (+ `get_coords` for the en-passant square). These must stay in sync.
-- `client.py` — `ApiClient(base_url, session=None)`. `session` defaults to a `requests.Session()` but can be **injected** (the tests pass a FastAPI `TestClient`, which is request-compatible — this is how the integration tests drive the app in-process). Non-2xx → re-raises the mapped `GameError` type.
+- `game.py` — `Game(BaseGame)` (built via `Game.local()`/`Game.remote()`, described above) plus module-level challenge functions `challenge`/`challenge_exists`/`delete_challenge` (pending-challenge matchmaking; each takes `api_url=`/`api_key=`/`client=`). The low-level `Game.__init__(*args, client=None, auto_sync=False, **kwargs)` is internal — use the factories.
+  - Games are keyed by the composite `(group_id, white_id, black_id)` — all BIGINTs. `POST /v1/games` does an upsert-then-select so a game either loads the existing row or creates a fresh one.
+  - Board (de)serialization lives on the client, exchanged as a `dto.GameState`: `Board.disassemble_board()` → a `;`-delimited string of `<type><color>`/`--` tokens plus a 6-char `moved` castling-rights string; `_board_from_state()` reverses it with `Board.assemble_board()` (+ `get_coords` for the en-passant square). These must stay in sync.
+- `client.py` — `ApiClient(base_url, session=None, api_key=None)`. Prefixes every request with `/v1` and (if set) an `X-API-Key` header. `session` defaults to a `requests.Session()` but can be **injected** (the tests pass a FastAPI `TestClient`, which is request-compatible — this is how the integration tests drive the app in-process). `get_or_create_game` returns a `dto.GameState`; `update_game` takes one. Non-2xx → re-raises the mapped `GameError` type.
 
 ### `api/` — the server (tier 2)
 
-- `server.py` — the FastAPI `app`. Pydantic models validate bodies; a `lifespan` handler initializes the connection pool from env creds (and runs schema init if `CHESSSNAKE_INIT_DB` is set). Routes delegate to the `db` layer (`from ..db import postgres as ops`).
+- `server.py` — the FastAPI `app`. `/health` is unversioned and open; game+challenge routes live on a `/v1` `APIRouter` with a `require_api_key` dependency (enforced only when `CHESSSNAKE_API_KEY` is set, checked per-request). The game-state body/response is the shared `dto.GameState` dataclass; small request bodies (`GameCreate`/`DrawUpdate`/`ChallengeBody`) stay pydantic. A `lifespan` handler initializes the connection pool from env creds (and runs schema init if `CHESSSNAKE_INIT_DB` is set). Routes delegate to the `db` layer (`from ..db import postgres as ops`).
 
 ### `db/` — the database layer (tier 3)
 
