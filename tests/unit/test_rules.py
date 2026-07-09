@@ -62,6 +62,28 @@ def test_kingside_castle():
     assert piece_at(g.board, "h1") is None
 
 
+def test_kingside_castle_letter_o_notation():
+    # "O-O" (letter O) is accepted as an equivalent of "0-0" (zeros).
+    g = Game()
+    for m in ["e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5"]:
+        g.move(m)
+    g.move("O-O")
+    assert piece_at(g.board, "g1").piecetype.value == "K"
+    assert piece_at(g.board, "f1").piecetype.value == "R"
+
+
+def test_queenside_castle():
+    g = Game()
+    # clear the white queenside squares (b1, c1, d1) and let black shuffle
+    for m in ["d4", "d5", "Nc3", "Nc6", "Bf4", "Bf5", "Qd2", "Qd7"]:
+        g.move(m)
+    g.move("O-O-O")
+    assert piece_at(g.board, "c1").piecetype.value == "K"
+    assert piece_at(g.board, "d1").piecetype.value == "R"
+    assert piece_at(g.board, "e1") is None
+    assert piece_at(g.board, "a1") is None
+
+
 def test_promotion_to_queen(make_board):
     # White pawn on b7, kings on their home squares, white to move.
     board = make_board({(1, 1): "P0", (7, 4): "K0", (0, 4): "K1"})

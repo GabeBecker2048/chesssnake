@@ -20,7 +20,7 @@ from .errors import (
     PieceNotFoundError,
     PieceOnSquareError,
 )
-from .notation import matches_disambiguation
+from .notation import get_c_notation, matches_disambiguation
 
 # Direction vectors (di, dj). i grows downward (toward rank 1), j grows toward file 'h'.
 ORTHOGONAL = ((1, 0), (-1, 0), (0, 1), (0, -1))
@@ -177,10 +177,8 @@ class Rook(Piece):
 
     _TYPE = PieceType.ROOK
 
-    def __init__(self, color, moved=False):
-        """:param moved: Whether the rook has moved (affects castling rights)."""
+    def __init__(self, color):
         super().__init__(PieceType.ROOK, color)
-        self.moved = moved
 
     def threatens(self, square, board):
         """Squares this rook attacks from ``square`` (ignoring pins)."""
@@ -279,10 +277,8 @@ class King(Piece):
 
     _TYPE = PieceType.KING
 
-    def __init__(self, color, moved=False):
-        """:param moved: Whether the king has moved (affects castling rights)."""
+    def __init__(self, color):
         super().__init__(PieceType.KING, color)
-        self.moved = moved
 
     def threatens(self, square, board):
         """Adjacent squares this king attacks from ``square`` (ignoring pins)."""
@@ -299,49 +295,39 @@ class King(Piece):
         """
         Whether the king may castle to the given side.
 
+        Castling availability (king and the relevant rook never having moved, and the
+        rook not having been captured) is read straight from the board's FEN castling
+        rights; this method additionally verifies the squares between are empty and the
+        king's path square is not attacked.
+
         :param direction: ``'K'`` (kingside) or ``'Q'`` (queenside).
         :rtype: bool
         """
-        # if the king moved, no castle
-        if self.moved:
-            return False
-
         x = 7 if self.color == Color.WHITE else 0
 
-        # king side castle...
+        # the FEN right for this side/direction must still be available
+        right = direction if self.color == Color.WHITE else direction.lower()
+        if right not in board.castling:
+            return False
+
+        # king side: rook on the h-file (j=7); king crosses f (j=5) to g (j=6)
         if direction == "K":
-            king_rook_square = board[x, 0]
-            between_square1, between_square2 = board[x, 5], board[x, 6]
+            rook_square = board[x, 7]
+            empties = (board[x, 5], board[x, 6])
+            king_path = board[x, 5]
+        # queen side: rook on the a-file (j=0); king crosses d (j=3) to c (j=2)
+        else:
+            rook_square = board[x, 0]
+            empties = (board[x, 1], board[x, 2], board[x, 3])
+            king_path = board[x, 2]
 
-            if (
-                king_rook_square.piece is not None
-                and king_rook_square.piece.piecetype == PieceType.ROOK
-                and king_rook_square.piece.color == self.color
-                and not king_rook_square.piece.moved
-                and between_square1.piece is None
-                and len(board.threats_on(between_square1, self.color)) == 0
-                and between_square2.piece is None
-            ):
-                return True
-
-        # queen side castle...
-        elif direction == "Q":
-            queen_rook_square = board[x, 7]
-            between_square1, between_square2, between_square3 = board[x, 1], board[x, 2], board[x, 3]
-
-            if (
-                queen_rook_square.piece is not None
-                and queen_rook_square.piece.piecetype == PieceType.ROOK
-                and queen_rook_square.piece.color == self.color
-                and not queen_rook_square.piece.moved
-                and between_square1.piece is None
-                and between_square2.piece is None
-                and len(board.threats_on(between_square2, self.color)) == 0
-                and between_square3.piece is None
-            ):
-                return True
-
-        return False
+        return (
+            rook_square.piece is not None
+            and rook_square.piece.piecetype == PieceType.ROOK
+            and rook_square.piece.color == self.color
+            and all(sq.piece is None for sq in empties)
+            and len(board.threats_on(king_path, self.color)) == 0
+        )
 
     @classmethod
     def find_all(cls, board, square, color, file_limit=None, rank_limit=None):
@@ -450,8 +436,10 @@ class Pawn(Piece):
             if square.piece is not None:
                 raise PieceOnSquareError(square, square.piece.color == color)
             # a two-square advance leaves an en-passant target on the crossed square
+            # (the FEN en-passant field: the square the pawn skipped over)
             if abs(pawn_square.i - square.i) == 2:
-                board.two_moveP = square
+                skipped_i = (pawn_square.i + square.i) // 2
+                board.en_passant = get_c_notation(skipped_i, square.j)
         else:
             if square.piece is None:
                 if not (en and cls._valid_en_passant(board, square, color)):
@@ -464,6 +452,9 @@ class Pawn(Piece):
     @staticmethod
     def _valid_en_passant(board, square, color):
         """Whether an en-passant capture onto empty ``square`` is legal for ``color``."""
+        # the capturing pawn's destination must be the FEN en-passant target square
+        if board.en_passant != square.c_notation:
+            return False
         behind = 1 if color == Color.WHITE else -1
         captured = board[square.i + behind, square.j]
         return (
@@ -471,5 +462,4 @@ class Pawn(Piece):
             and captured.piece is not None
             and captured.piece.piecetype == PieceType.PAWN
             and captured.piece.color != color
-            and board.two_moveP == captured
         )
