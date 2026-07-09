@@ -40,7 +40,7 @@ def api_client():
 def clean_tables(api_client):
     from chesssnake.db.sql import execute_psql
 
-    execute_psql("TRUNCATE Games, Challenges")
+    execute_psql("TRUNCATE Games, Challenges, Moves")
     yield
 
 
