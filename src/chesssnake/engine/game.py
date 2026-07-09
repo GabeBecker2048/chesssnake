@@ -1,8 +1,8 @@
 from . import errors as ChessError
 from .board import Board
 from .enums import Color, GameStatus, Termination
-from .fen import _castling_field, position_key, to_fen
 from .fen import from_fen as parse_fen
+from .fen import position_key, to_fen
 from .image import render_board
 from .move import Move
 
@@ -171,9 +171,13 @@ class Game:
         return self.board.halfmove_clock
 
     @property
-    def castling_rights(self) -> str:
-        """The FEN castling-availability field (e.g. ``"KQkq"``, or ``"-"`` when none)."""
-        return _castling_field(self.board)
+    def castling_rights(self) -> "str | None":
+        """The available castling rights (e.g. ``"KQkq"``/``"Kq"``), or ``None`` when none.
+
+        Mirrors :attr:`en_passant` in using ``None`` for absence. For the raw FEN token
+        (``"-"`` when none), use :attr:`fen`.
+        """
+        return self.board.castling or None
 
     @property
     def en_passant(self) -> "str | None":
