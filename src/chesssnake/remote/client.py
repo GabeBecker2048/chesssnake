@@ -4,15 +4,20 @@ HTTP client for the chesssnake api-endpoint.
 ``ApiClient`` is a thin wrapper over a ``requests``-style session. The session can
 be injected (the test-suite passes a Starlette ``TestClient``, which is request
 compatible), so the same client code drives both a real server and an in-process
-app. Non-2xx responses are translated back into the shared ``GameError`` types so
-callers see the same exceptions they would from a local database.
+app.
+
+The server owns the chess engine: the client sends *moves* and receives new
+state (or a structured error). Non-2xx responses are translated back into the
+matching engine (``ChessError``) or persistence (``GameError``) exception types so
+callers see the same exceptions they would from a local game.
 
 All routes are served under the versioned ``/v1`` prefix. If the server is
 configured with an API key, pass ``api_key=`` and it is sent as ``X-API-Key``.
 """
 
-from ..db import errors
-from ..dto import GameState
+from ..db import errors as db_errors
+from ..dto import GameState, MoveResult
+from ..engine import errors as chess_errors
 
 # All endpoints live under this version prefix.
 API_PREFIX = "/v1"
@@ -20,16 +25,19 @@ API_PREFIX = "/v1"
 # Header carrying the optional API key.
 API_KEY_HEADER = "X-API-Key"
 
-# Error-type name (sent by the server) -> exception class to raise. Types with
-# custom constructors (SQLIdError, SQLAuthError) fall back to their SQLError base,
-# which still preserves isinstance checks.
-_ERROR_TYPES = {
-    "ChallengeError": errors.ChallengeError,
-    "SQLError": errors.SQLError,
-    "SQLIdError": errors.SQLError,
-    "SQLAuthError": errors.SQLError,
-    "GameError": errors.GameError,
-}
+
+def _build_error_registry():
+    """Map exception class name -> class for every engine and persistence error."""
+    registry = {}
+    for module, base in ((chess_errors, chess_errors.ChessError), (db_errors, db_errors.GameError)):
+        for name in dir(module):
+            obj = getattr(module, name)
+            if isinstance(obj, type) and issubclass(obj, base):
+                registry[name] = obj
+    return registry
+
+
+_ERROR_REGISTRY = _build_error_registry()
 
 
 class ApiClient:
@@ -51,10 +59,12 @@ class ApiClient:
 
     # --- transport ---------------------------------------------------------
 
+    def _headers(self):
+        return {API_KEY_HEADER: self.api_key} if self.api_key else None
+
     def _request(self, method, path, *, params=None, json=None):
-        headers = {API_KEY_HEADER: self.api_key} if self.api_key else None
         resp = self._session.request(
-            method, f"{self.base_url}{API_PREFIX}{path}", params=params, json=json, headers=headers
+            method, f"{self.base_url}{API_PREFIX}{path}", params=params, json=json, headers=self._headers()
         )
         if resp.status_code >= 400:
             self._raise(resp)
@@ -72,7 +82,14 @@ class ApiClient:
             data = {}
         error_type = data.get("error_type", "GameError")
         detail = data.get("detail") or resp.text
-        raise _ERROR_TYPES.get(error_type, errors.GameError)(detail)
+        cls = _ERROR_REGISTRY.get(error_type, db_errors.GameError)
+        # Many engine errors have custom constructors (they take a square, a piece
+        # type, etc.), so bypass __init__ and set the message directly — this
+        # preserves the exact type for `except PromotionError` while carrying the
+        # server's detail message.
+        exc = cls.__new__(cls)
+        exc.args = (detail,)
+        raise exc
 
     # --- games -------------------------------------------------------------
 
@@ -90,18 +107,36 @@ class ApiClient:
         )
         return GameState(**data)
 
-    def update_game(self, group_id, white_id, black_id, state: GameState):
-        return self._request("PUT", f"/games/{group_id}/{white_id}/{black_id}", json=state.to_dict())
+    def get_state(self, group_id, white_id, black_id) -> GameState:
+        data = self._request("GET", f"/games/{group_id}/{white_id}/{black_id}")
+        return GameState(**data)
 
-    def update_draw(self, group_id, white_id, black_id, draw, status):
-        return self._request(
-            "PATCH",
-            f"/games/{group_id}/{white_id}/{black_id}/draw",
-            json={"draw": draw, "status": status},
+    def move(self, group_id, white_id, black_id, move) -> MoveResult:
+        data = self._request("POST", f"/games/{group_id}/{white_id}/{black_id}/moves", json={"move": move})
+        return MoveResult.from_dict(data)
+
+    def offer_draw(self, group_id, white_id, black_id, player_id) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "offer")
+
+    def accept_draw(self, group_id, white_id, black_id, player_id) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "accept")
+
+    def decline_draw(self, group_id, white_id, black_id, player_id) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "decline")
+
+    def _draw(self, group_id, white_id, black_id, player_id, action) -> GameState:
+        data = self._request(
+            "POST", f"/games/{group_id}/{white_id}/{black_id}/draw/{action}", json={"player_id": player_id}
         )
+        return GameState(**data)
 
-    def clear_draw(self, group_id, white_id, black_id):
-        return self._request("DELETE", f"/games/{group_id}/{white_id}/{black_id}/draw")
+    def image(self, group_id, white_id, black_id) -> bytes:
+        resp = self._session.request(
+            "GET", f"{self.base_url}{API_PREFIX}/games/{group_id}/{white_id}/{black_id}/image", headers=self._headers()
+        )
+        if resp.status_code >= 400:
+            self._raise(resp)
+        return resp.content
 
     def delete_game(self, group_id, white_id, black_id):
         return self._request("DELETE", f"/games/{group_id}/{white_id}/{black_id}")

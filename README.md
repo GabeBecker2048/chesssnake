@@ -17,11 +17,13 @@ Pronounced "chess - snake", in reference to Python being a type of snake. It is 
 
 ## Architecture
 
-chesssnake is split into three tiers so that many lightweight game clients can share a single database:
+chesssnake is split into three tiers so that many lightweight game clients — in any language — can share a single database through one authoritative server:
 
-1. **Game client** — the `Game` object runs the chess engine locally and syncs game state over REST.
-2. **api-endpoint** — a REST server (`chesssnake api-endpoint`) that exposes a thin persistence API.
+1. **Game client** — sends a move (e.g. `"e4"`) over REST and receives the new state or a structured error. It never needs a chess engine of its own.
+2. **api-endpoint** — a REST server (`chesssnake api-endpoint`) that **runs the chess engine**: it validates and applies every move, is the single source of truth for the rules, and stores the result.
 3. **Database** — the api-endpoint owns the PostgreSQL connection and does all SQL.
+
+Because the server owns the rules, any frontend (web, mobile, a chat bot, …) can use the chesssnake backend by speaking REST — no chess logic required on the client side. (A `Game.local(...)` game still runs the engine in-process, with no server needed.)
 
 ## Installation
 
@@ -128,17 +130,25 @@ game = Game.remote(
   # api_key="...",  # if the server requires one
 )
 
+# The server validates and applies each move, then persists it. move() returns a
+# MoveResult (from/to, check, castle/promotion/en) and raises the matching chess
+# error if the move is illegal.
 game.move('e4')  # Bob's move
-game.move('e5')  # Phil's move — each move is synced automatically (auto_sync defaults to True)
+game.move('e5')  # Phil's move
+
+game.refresh()   # pull the latest state (e.g. after the opponent moved elsewhere)
+game.render().show()  # render the board locally from the mirrored state
 ```
 
-Remote games sync after every move and draw action by default. Pass `auto_sync=False` to batch changes and push them yourself with `game.sync()`. A remote game is also a context manager that syncs on exit, so a forgotten `sync()` can't silently drop moves:
+Because the **server** does the chess computation, an illegal move is rejected by the server and surfaced as the usual exception (e.g. `chesssnake.engine.errors.MoveIntoCheckError`). A frontend in another language would instead read the JSON `{error_type, detail}` and the HTTP status.
 
-```Python3
-with Game.remote(123, 456, group_id=789, api_url="http://localhost:8000", auto_sync=False) as game:
-    game.move('e4')
-    game.move('e5')
-# state is pushed here, on exit
+Any REST client can drive a game without Python or a chess engine, for example:
+
+```
+POST /v1/games/789/123/456/moves   {"move": "e4"}   -> new state (+ move detail)
+POST /v1/games/789/123/456/draw/offer   {"player_id": 123}
+GET  /v1/games/789/123/456              -> current state
+GET  /v1/games/789/123/456/image        -> a PNG of the board
 ```
 
 Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`) are also importable from `chesssnake`.

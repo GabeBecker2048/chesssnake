@@ -1,9 +1,11 @@
 """
 FastAPI application backing ``chesssnake api-endpoint``.
 
-This is a thin persistence layer: it stores and retrieves serialized game state
-in PostgreSQL. The chess engine runs on the client, so this server never imports
-the ``engine`` — it only moves strings and ids in and out of the database.
+The server is authoritative: clients send **moves** (and draw actions), and the
+server runs the chess engine to validate and apply them against the stored game,
+persists the result, and returns the new state (or a structured error). This makes
+the server the single source of truth for the rules and lets any frontend — in any
+language — use the chess backend over REST without implementing chess itself.
 
 Run it with ``chesssnake api-endpoint`` (see ``chesssnake.cli``), or point an ASGI
 server at ``chesssnake.api.server:app``. Database credentials are read from the
@@ -14,16 +16,19 @@ Game/challenge routes are versioned under ``/v1``. Set ``CHESSSNAKE_API_KEY`` to
 require an ``X-API-Key`` header on those routes (``/health`` stays open).
 """
 
+import io
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..db import errors, sql
 from ..db import postgres as ops
-from ..dto import GameState
+from ..dto import GameState, MoveResult
+from ..engine import errors as chess_errors
+from ..serialize import game_from_state, state_from_game
 
 # Header carrying the optional API key.
 API_KEY_HEADER = "X-API-Key"
@@ -57,8 +62,8 @@ async def require_api_key(x_api_key: str | None = Header(default=None, alias=API
 
 
 # --- Schemas ---------------------------------------------------------------
-# The game-state wire shape lives in chesssnake.dto.GameState (shared with the
-# client). The small request bodies below are server-only.
+# Wire game state lives in chesssnake.dto (GameState/MoveResult). The request
+# bodies below are server-only.
 
 
 class GameCreate(BaseModel):
@@ -69,9 +74,12 @@ class GameCreate(BaseModel):
     black_name: str = ""
 
 
-class DrawUpdate(BaseModel):
-    draw: int | None = None
-    status: int = 0
+class MoveBody(BaseModel):
+    move: str
+
+
+class DrawBody(BaseModel):
+    player_id: int
 
 
 class ChallengeBody(BaseModel):
@@ -101,6 +109,11 @@ async def _handle_challenge_error(_request, exc):
     return _error(409, exc)
 
 
+@app.exception_handler(errors.GameNotFoundError)
+async def _handle_not_found(_request, exc):
+    return _error(404, exc)
+
+
 @app.exception_handler(errors.SQLError)
 async def _handle_sql_error(_request, exc):
     return _error(500, exc)
@@ -108,6 +121,12 @@ async def _handle_sql_error(_request, exc):
 
 @app.exception_handler(errors.GameError)
 async def _handle_game_error(_request, exc):
+    return _error(400, exc)
+
+
+@app.exception_handler(chess_errors.ChessError)
+async def _handle_chess_error(_request, exc):
+    # Illegal/invalid move or draw action — the client re-raises the matching type.
     return _error(400, exc)
 
 
@@ -124,40 +143,74 @@ async def health():
 v1 = APIRouter(prefix="/v1", dependencies=[Depends(require_api_key)])
 
 
-@v1.post("/games", response_model=GameState)
+@v1.post("/games")
 async def create_game(body: GameCreate):
     row = ops.game_get_or_create(body.group_id, body.white_id, body.black_id, body.white_name, body.black_name)
-    return GameState.from_row(row)
+    return GameState.from_row(row).to_dict()
 
 
-@v1.put("/games/{group_id}/{white_id}/{black_id}")
-async def update_game(group_id: int, white_id: int, black_id: int, state: GameState):
-    ops.game_update(
-        group_id,
-        white_id,
-        black_id,
-        state.board,
-        state.turn,
-        state.pawnmove,
-        state.draw,
-        state.moved,
-        state.status,
-        state.wname,
-        state.bname,
-    )
-    return {"status": "ok"}
+@v1.get("/games/{group_id}/{white_id}/{black_id}")
+async def get_game(group_id: int, white_id: int, black_id: int):
+    row = ops.game_get(group_id, white_id, black_id)
+    if row is None:
+        raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
+    return GameState.from_row(row).to_dict()
 
 
-@v1.patch("/games/{group_id}/{white_id}/{black_id}/draw")
-async def patch_draw(group_id: int, white_id: int, black_id: int, body: DrawUpdate):
-    ops.game_update_draw(group_id, white_id, black_id, body.draw, body.status)
-    return {"status": "ok"}
+@v1.post("/games/{group_id}/{white_id}/{black_id}/moves")
+async def play_move(group_id: int, white_id: int, black_id: int, body: MoveBody):
+    def mutate(row):
+        game = game_from_state(GameState.from_row(row), group_id, white_id, black_id)
+        m = game.move(body.move)  # runs the engine; raises ChessError on illegal input
+        new_state = state_from_game(game)
+        result = MoveResult(
+            state=new_state,
+            from_square=m.prev.c_notation,
+            to_square=m.to.c_notation,
+            check=game.board.check_for_check(game.turn),
+            castle=m.castle,
+            promotion=m.promotion,
+            en=m.en,
+        )
+        return new_state.to_dict(), result
+
+    return ops.apply_game_change(group_id, white_id, black_id, mutate).to_dict()
 
 
-@v1.delete("/games/{group_id}/{white_id}/{black_id}/draw")
-async def clear_draw(group_id: int, white_id: int, black_id: int):
-    ops.game_clear_draw(group_id, white_id, black_id)
-    return {"status": "ok"}
+def _draw_action(group_id, white_id, black_id, player_id, method):
+    def mutate(row):
+        game = game_from_state(GameState.from_row(row), group_id, white_id, black_id)
+        getattr(game, method)(player_id)  # draw_offer / draw_accept / draw_decline
+        new_state = state_from_game(game)
+        return new_state.to_dict(), new_state
+
+    return ops.apply_game_change(group_id, white_id, black_id, mutate).to_dict()
+
+
+@v1.post("/games/{group_id}/{white_id}/{black_id}/draw/offer")
+async def draw_offer(group_id: int, white_id: int, black_id: int, body: DrawBody):
+    return _draw_action(group_id, white_id, black_id, body.player_id, "draw_offer")
+
+
+@v1.post("/games/{group_id}/{white_id}/{black_id}/draw/accept")
+async def draw_accept(group_id: int, white_id: int, black_id: int, body: DrawBody):
+    return _draw_action(group_id, white_id, black_id, body.player_id, "draw_accept")
+
+
+@v1.post("/games/{group_id}/{white_id}/{black_id}/draw/decline")
+async def draw_decline(group_id: int, white_id: int, black_id: int, body: DrawBody):
+    return _draw_action(group_id, white_id, black_id, body.player_id, "draw_decline")
+
+
+@v1.get("/games/{group_id}/{white_id}/{black_id}/image")
+async def game_image(group_id: int, white_id: int, black_id: int):
+    row = ops.game_get(group_id, white_id, black_id)
+    if row is None:
+        raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
+    game = game_from_state(GameState.from_row(row), group_id, white_id, black_id)
+    buffer = io.BytesIO()
+    game.render().save(buffer, format="PNG")
+    return Response(content=buffer.getvalue(), media_type="image/png")
 
 
 @v1.delete("/games/{group_id}/{white_id}/{black_id}")
