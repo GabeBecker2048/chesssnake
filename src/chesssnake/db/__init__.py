@@ -9,7 +9,6 @@ same interface.
 
 from . import errors, postgres, sql
 from .postgres import (
-    INITIAL_BOARD,
     apply_game_change,
     challenge,
     challenge_create,
@@ -21,16 +20,17 @@ from .postgres import (
     game_exists,
     game_get,
     game_get_or_create,
+    game_history,
 )
 
 __all__ = [
     "errors",
     "postgres",
     "sql",
-    "INITIAL_BOARD",
     "db_init",
     "game_get_or_create",
     "game_get",
+    "game_history",
     "apply_game_change",
     "game_delete",
     "current_games",

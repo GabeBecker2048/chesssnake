@@ -50,3 +50,17 @@ class ChallengeError(GameError):
 class GameNotFoundError(GameError):
     def __init__(self, msg="No such game"):
         super().__init__(msg)
+
+
+class NotYourTurnError(GameError):
+    """The acting player is not allowed to make this move/action right now."""
+
+    def __init__(self, msg="It is not that player's turn / that player is not in this game"):
+        super().__init__(msg)
+
+
+class VersionConflictError(GameError):
+    """The game changed since the client's expected version (optimistic concurrency)."""
+
+    def __init__(self, msg="The game has changed since your last read; refresh and retry"):
+        super().__init__(msg)

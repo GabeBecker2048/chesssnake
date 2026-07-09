@@ -30,7 +30,7 @@ def test_accessors_report_checkmate_winner():
     for m in ["f3", "e5", "g4", "Qh4"]:  # fool's mate — black (Qh4#) wins
         g.move(m)
     assert g.is_over is True
-    assert g.result == GameStatus.CHECKMATE
+    assert g.result == GameStatus.BLACK_WON
     assert g.winner == Color.BLACK
 
 
@@ -85,7 +85,7 @@ def test_draw_offer_and_accept_ends_in_draw():
     assert g.draw == 0
     assert g.draw_offered_by == Color.WHITE
     g.draw_offer(20)  # black offering back accepts the draw
-    assert g.board.status == 2  # draw / stalemate status
+    assert g.board.status == 3  # draw / stalemate status
     assert g.result == GameStatus.DRAW
     assert g.winner is None
 

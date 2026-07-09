@@ -83,12 +83,29 @@ Use the intention-revealing accessors instead of raw internals:
 ```Python3
 game.to_move          # Color.WHITE or Color.BLACK — whose turn it is
 game.is_over          # True once the game has ended
-game.result           # a GameStatus: IN_PLAY, CHECKMATE, or DRAW
-game.winner           # the winning Color on checkmate, else None
+game.result           # a GameStatus: IN_PLAY, WHITE_WON, BLACK_WON, or DRAW
+game.winner           # the winning Color, else None
+game.termination      # why it ended: a Termination (checkmate, resignation, ...) or None
 game.draw_offered_by  # the Color with an open draw offer, else None
 ```
 
-`Color`, `GameStatus`, and `PieceType` are importable from `chesssnake`.
+`Color`, `GameStatus`, `PieceType`, and `Termination` are importable from `chesssnake`.
+
+### More chess features
+
+Every game (local or remote) supports the full rules and standard formats:
+
+```Python3
+game.legal_moves()    # list of legal moves ({from, to, san, promotion})
+game.resign(player_id)  # resign; the opponent wins
+game.move("Qh4")      # draw-by-rule (threefold, fifty-move, insufficient material,
+                      #   stalemate) is detected automatically and ends the game
+game.fen              # the position as standard FEN (interoperable with any chess tool)
+print(game.pgn())     # export the game as PGN
+```
+
+The board is stored and exchanged as standard **FEN**, so any chess library or tool
+can read a chesssnake position.
 
 ### Persisting games through the api-endpoint
 
@@ -142,14 +159,23 @@ game.render().show()  # render the board locally from the mirrored state
 
 Because the **server** does the chess computation, an illegal move is rejected by the server and surfaced as the usual exception (e.g. `chesssnake.engine.errors.MoveIntoCheckError`). A frontend in another language would instead read the JSON `{error_type, detail}` and the HTTP status.
 
+Optionally pass `player_id=` to `Game.remote(...)` so the server validates that this
+client only acts for its own side, and the client sends its last-seen `version` so a
+stale/duplicate action is rejected rather than double-applied.
+
 Any REST client can drive a game without Python or a chess engine, for example:
 
 ```
-POST /v1/games/789/123/456/moves   {"move": "e4"}   -> new state (+ move detail)
+POST /v1/games/789/123/456/moves        {"move": "e4"}      -> new state (+ move detail)
+POST /v1/games/789/123/456/resign       {"player_id": 123}
 POST /v1/games/789/123/456/draw/offer   {"player_id": 123}
-GET  /v1/games/789/123/456              -> current state
+GET  /v1/games/789/123/456/legal-moves  -> the legal moves
+GET  /v1/games/789/123/456/pgn          -> the game as PGN
+GET  /v1/games/789/123/456/fen          -> the position as FEN
 GET  /v1/games/789/123/456/image        -> a PNG of the board
 ```
+
+**The full REST API is documented in [docs/rest-api.md](docs/rest-api.md).**
 
 Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`) are also importable from `chesssnake`.
 

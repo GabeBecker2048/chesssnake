@@ -2,27 +2,34 @@
 
 import pytest
 
-from chesssnake import engine as Chess
+from chesssnake.engine import Board, Square
+from chesssnake.engine.pieces import Bishop, King, Knight, Pawn, Queen, Rook
+
+_PIECE_CLASSES = {"R": Rook, "N": Knight, "B": Bishop, "Q": Queen, "K": King, "P": Pawn}
 
 
-def _make_board(pieces, two_moveP=None, moved="111111"):
+def _make_board(pieces, two_moveP=None, castling=False):
     """
-    Build a ``Chess.Board`` from a sparse piece layout.
+    Build a ``Board`` from a sparse piece layout.
 
-    :param pieces: dict mapping ``(i, j)`` board coordinates to a 2-char token
-        such as ``"K0"`` (white king) or ``"Q1"`` (black queen). ``i`` is the
-        row (0 = rank 8, 7 = rank 1), ``j`` is the file (0 = 'a', 7 = 'h').
+    :param pieces: dict mapping ``(i, j)`` board coordinates to a 2-char token such
+        as ``"K0"`` (white king) or ``"Q1"`` (black queen). ``i`` is the row
+        (0 = rank 8, 7 = rank 1), ``j`` is the file (0 = 'a', 7 = 'h').
     :param two_moveP: optional ``Square`` for a pending en-passant target.
-    :param moved: 6-char castling-rights string passed to ``assemble_board``.
-        Defaults to "111111" so home-square kings/rooks are treated as moved
-        (avoids accidental castling in constructed positions).
+    :param castling: if ``True``, home-square kings/rooks are left un-moved (so
+        castling is possible). Defaults to ``False`` — all kings/rooks are marked
+        moved, which avoids accidental castling in constructed positions.
     """
-    grid = [["--" for _ in range(8)] for _ in range(8)]
+    grid = [[Square(i, j) for j in range(8)] for i in range(8)]
     for (i, j), token in pieces.items():
-        grid[i][j] = token
-    boardstring = ";".join(" ".join(row) for row in grid)
-    arr = Chess.Board.assemble_board(boardstring, moved)
-    return Chess.Board(board=arr, two_moveP=two_moveP)
+        cls = _PIECE_CLASSES[token[0]]
+        color = int(token[1])
+        if cls in (Rook, King):
+            piece = cls(color, moved=not castling)
+        else:
+            piece = cls(color)
+        grid[i][j] = Square(i, j, piece=piece)
+    return Board(board=grid, two_moveP=two_moveP)
 
 
 @pytest.fixture
