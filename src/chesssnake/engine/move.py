@@ -58,6 +58,10 @@ class Move:
         promotion = None
         en = False
 
+        # castling may be written with zeros (0-0) or the letter O (O-O); no other move
+        # token contains the letter 'O', so normalizing it to '0' is safe.
+        move = move.replace("O", "0")
+
         # regular movement (not castling)
         if move != "0-0" and move != "0-0-0":
             if move[0] in "RNBQKP":

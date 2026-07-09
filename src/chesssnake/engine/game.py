@@ -1,8 +1,8 @@
 from . import errors as ChessError
 from .board import Board
 from .enums import Color, GameStatus, Termination
+from .fen import _castling_field, position_key, to_fen
 from .fen import from_fen as parse_fen
-from .fen import position_key, to_fen
 from .image import render_board
 from .move import Move
 
@@ -60,7 +60,9 @@ class Game:
 
     Intention-revealing accessors (prefer these over the raw ints/enums above):
     :attr:`is_over`, :attr:`result`, :attr:`winner`, :attr:`to_move`,
-    :attr:`draw_offered_by`.
+    :attr:`draw_offered_by`. The six FEN components are also exposed directly:
+    :attr:`fen`, :attr:`to_move`, :attr:`castling_rights`, :attr:`en_passant`,
+    :attr:`halfmove_clock`, :attr:`fullmove_number`.
     """
 
     def __init__(
@@ -157,6 +159,26 @@ class Game:
     def fen(self) -> str:
         """The current position as a FEN string."""
         return to_fen(self.board, self.turn)
+
+    @property
+    def fullmove_number(self) -> int:
+        """The FEN full-move number (starts at 1, increments after Black moves)."""
+        return self.board.fullmove_number
+
+    @property
+    def halfmove_clock(self) -> int:
+        """The FEN half-move clock: plies since the last pawn move or capture (fifty-move rule)."""
+        return self.board.halfmove_clock
+
+    @property
+    def castling_rights(self) -> str:
+        """The FEN castling-availability field (e.g. ``"KQkq"``, or ``"-"`` when none)."""
+        return _castling_field(self.board)
+
+    @property
+    def en_passant(self) -> "str | None":
+        """The FEN en-passant target square as an algebraic string (e.g. ``"e3"``), or ``None``."""
+        return self.board.en_passant
 
     @classmethod
     def from_fen(cls, fen: str, white_name: str = "", black_name: str = "", **ids) -> "Game":
