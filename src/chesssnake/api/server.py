@@ -308,6 +308,11 @@ async def game_exists(group_id: int, player1: int, player2: int):
     return {"game": ops.game_exists(player1, player2, group_id)}
 
 
+@v1.get("/games/{group_id}/record")
+async def game_record(group_id: int, player1: int, player2: int):
+    return ops.game_record(player1, player2, group_id)
+
+
 @v1.post("/challenges")
 async def post_challenge(body: ChallengeBody):
     return {"accepted": ops.challenge(body.challenger, body.challenged, body.group_id)}

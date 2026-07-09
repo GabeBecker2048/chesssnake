@@ -195,6 +195,10 @@ class ApiClient:
         data = self._request("GET", f"/games/{group_id}/exists", params={"player1": player1, "player2": player2})
         return data["game"]
 
+    def record(self, player1, player2, group_id=0):
+        """Win/draw/loss record between two players in a group (finished games)."""
+        return self._request("GET", f"/games/{group_id}/record", params={"player1": player1, "player2": player2})
+
     # --- challenges --------------------------------------------------------
 
     def challenge(self, challenger, challenged, group_id=0):

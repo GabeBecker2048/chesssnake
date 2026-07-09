@@ -203,6 +203,46 @@ def test_current_games_and_exists(api_client):
     assert game == {"white_id": 1, "black_id": 2}
 
 
+def test_record(api_client):
+    def create(w, b):
+        api_client.post("/v1/games", json={"group_id": 10, "white_id": w, "black_id": b})
+
+    def base(w, b):
+        return f"/v1/games/10/{w}/{b}"
+
+    # game 1: white=1, black=2, black resigns -> player 1 (white) wins
+    create(1, 2)
+    api_client.post(f"{base(1, 2)}/moves", json={"move": "e4"})
+    api_client.post(f"{base(1, 2)}/resign", json={"player_id": 2})
+    # game 2 (rematch, same triple): white=1 resigns -> player 2 wins
+    create(1, 2)
+    api_client.post(f"{base(1, 2)}/moves", json={"move": "e4"})
+    api_client.post(f"{base(1, 2)}/resign", json={"player_id": 1})
+    # game 3 (swapped colors): white=2, black=1, black (player 1) resigns -> player 2 wins
+    create(2, 1)
+    api_client.post(f"{base(2, 1)}/moves", json={"move": "e4"})
+    api_client.post(f"{base(2, 1)}/resign", json={"player_id": 1})
+    # game 4: draw by agreement (white=1, black=2)
+    create(1, 2)
+    api_client.post(f"{base(1, 2)}/moves", json={"move": "e4"})  # black to move
+    api_client.post(f"{base(1, 2)}/draw/offer", json={"player_id": 2})
+    api_client.post(f"{base(1, 2)}/draw/accept", json={"player_id": 1})
+    # game 5: in play -> must NOT count
+    create(1, 2)
+    api_client.post(f"{base(1, 2)}/moves", json={"move": "e4"})
+
+    rec = api_client.get("/v1/games/10/record", params={"player1": 1, "player2": 2}).json()
+    assert rec == {"player1": 1, "player2": 2, "player1_wins": 1, "player2_wins": 2, "draws": 1}
+    # symmetric: swapping the query players swaps the win tallies
+    rec2 = api_client.get("/v1/games/10/record", params={"player1": 2, "player2": 1}).json()
+    assert rec2 == {"player1": 2, "player2": 1, "player1_wins": 2, "player2_wins": 1, "draws": 1}
+
+
+def test_record_is_zero_when_no_finished_games(api_client):
+    rec = api_client.get("/v1/games/10/record", params={"player1": 7, "player2": 8}).json()
+    assert rec == {"player1": 7, "player2": 8, "player1_wins": 0, "player2_wins": 0, "draws": 0}
+
+
 def test_challenge_lifecycle(api_client):
     first = api_client.post("/v1/challenges", json={"group_id": 10, "challenger": 100, "challenged": 200})
     assert first.json()["accepted"] is False

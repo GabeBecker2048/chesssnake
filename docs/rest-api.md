@@ -32,6 +32,7 @@ response you can get, and how a client is expected to interpret them.
   - [Delete a game](#delete-v1gamesgwb)
   - [List a player's current games](#get-v1games)
   - [Check whether a game exists](#get-v1gamesgexists)
+  - [Head-to-head record](#get-v1gamesgrecord)
   - [Issue or accept a challenge](#post-v1challenges)
   - [Check a pending challenge](#get-v1challengesgexists)
   - [Delete a challenge](#delete-v1challenges)
@@ -534,7 +535,8 @@ chess/rendering code of its own.
 - **Query params:**
   - `perspective` (optional) — `white` or `black` for a **single board** from that
     side's point of view (board only, no names). Omit for the default **wide** image
-    (both orientations side by side with the player names).
+    (both orientations side by side; the player-name strip is included only if the game
+    has at least one name — a nameless game renders just the two boards).
   - `generation` (optional) — render a past game.
 - **Response** `200 OK`, `Content-Type: image/png` — raw PNG bytes.
 - **Errors:** `422` (bad `perspective` → request-validation error, or an out-of-range
@@ -597,6 +599,26 @@ which is what lets a rematch be challenged.
 - **Errors:** `422 SQLIdError`, `401`.
 - **Client behavior:** the returned `white_id`/`black_id` tell you the color
   assignment, which is what you need to address the game's other routes.
+
+---
+
+### `GET /v1/games/{g}/record`
+
+The head-to-head win/draw/loss record between two players in a group, across all
+**finished** games — every generation and **both color arrangements** (games where
+either player had white). In-play games are excluded.
+
+- **Query params:** `player1` (required), `player2` (required). `{g}` is the group.
+- **Response** `200 OK`
+
+  ```json
+  { "player1": 1, "player2": 2, "player1_wins": 3, "player2_wins": 1, "draws": 2 }
+  ```
+
+  `player1_wins` is how many finished games `player1` won (whether as white or black);
+  `player2_wins` likewise; `draws` counts drawn games. All zero if they've never
+  finished a game. Swapping `player1`/`player2` just swaps the two win fields.
+- **Errors:** `422 SQLIdError`, `401`.
 
 ---
 

@@ -10,8 +10,9 @@ from .enums import Color
 from .move import Move
 from .notation import FILES
 
-# The rendered board uses 68x68 pixel tiles.
+# The rendered board uses 68x68 pixel tiles; a full board is 8 tiles square.
 TILE = 68
+BOARD_PX = TILE * 8  # 544 — the height of a board (the wide template adds a name strip below)
 
 
 def _as_color(perspective) -> Color:
@@ -105,7 +106,6 @@ def render_board(
         return _render_side(grid, small_font, flip, highlights)
 
     # wide view: both perspectives + names
-    big_font = ImageFont.truetype(asset_path("Roboto-Black.ttf"), 60)
     template = Image.open(asset_path("img/template.png"))
 
     # the last move's squares, expressed in each board's own (row, col) coordinates
@@ -121,8 +121,13 @@ def render_board(
     template.alpha_composite(_render_side(white_grid, small_font, False, white_highlights), (0, 0))
     template.alpha_composite(_render_side(black_grid, small_font, True, black_highlights), (646, 0))
 
+    # If neither player is named, drop the bottom name strip (no blank row).
+    if not white_name and not black_name:
+        return template.crop((0, 0, template.width, BOARD_PX))
+
+    big_font = ImageFont.truetype(asset_path("Roboto-Black.ttf"), 60)
     draw = ImageDraw.Draw(template)
-    draw.text((0, 544), white_name[:10], (255, 255, 255), font=big_font)
-    draw.text((646, 544), black_name[:10], (255, 255, 255), font=big_font)
+    draw.text((0, BOARD_PX), white_name[:10], (255, 255, 255), font=big_font)
+    draw.text((646, BOARD_PX), black_name[:10], (255, 255, 255), font=big_font)
 
     return template
