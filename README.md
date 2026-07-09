@@ -153,4 +153,8 @@ GET  /v1/games/789/123/456/image        -> a PNG of the board
 
 Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`) are also importable from `chesssnake`.
 
-For more information, see the docs (coming soon)
+## REST API reference
+
+Every endpoint — request/response shapes, all error codes, and how a client should
+interpret each response — is documented in **[docs/rest-api.md](docs/rest-api.md)**.
+Any HTTP client, in any language, can drive a full game with it.
