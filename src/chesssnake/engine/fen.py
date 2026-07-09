@@ -13,44 +13,25 @@ turn it is) into a FEN and back.
 """
 
 from .board import Board
-from .enums import Color, PieceType
-from .notation import get_c_notation, get_coords
+from .enums import Color
 from .pieces import Bishop, King, Knight, Pawn, Queen, Rook
 from .square import Square
 
 # The standard starting position.
 INITIAL_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-# letter -> piece factory (color-only pieces); Rook/King take a `moved` flag too.
-_SIMPLE = {"N": Knight, "B": Bishop, "Q": Queen, "P": Pawn}
+# letter -> piece factory for FEN placement.
+_PIECES = {"R": Rook, "N": Knight, "B": Bishop, "Q": Queen, "K": King, "P": Pawn}
 
 
 def _castling_field(board: Board) -> str:
     """The FEN castling-availability field (e.g. ``"KQkq"`` or ``"-"``)."""
-    rights = ""
-    for color, rank, upper in ((Color.WHITE, 7, True), (Color.BLACK, 0, False)):
-        king = board[rank, 4].piece
-        if king is None or king.piecetype != PieceType.KING or king.color != color or king.moved:
-            continue
-        h_rook = board[rank, 7].piece  # king-side
-        if h_rook is not None and h_rook.piecetype == PieceType.ROOK and h_rook.color == color and not h_rook.moved:
-            rights += "K" if upper else "k"
-        a_rook = board[rank, 0].piece  # queen-side
-        if a_rook is not None and a_rook.piecetype == PieceType.ROOK and a_rook.color == color and not a_rook.moved:
-            rights += "Q" if upper else "q"
-    return rights or "-"
+    return board.castling or "-"
 
 
-def _ep_field(board: Board, turn: Color) -> str:
+def _ep_field(board: Board) -> str:
     """The FEN en-passant target square (the square a pawn *skipped*), or ``"-"``."""
-    tm = board.two_moveP
-    if tm is None:
-        return "-"
-    # two_moveP stores the pawn's landing square; FEN wants the skipped square.
-    # If it's white to move, black just double-moved (skipped = landing - 1 in i);
-    # if black to move, white just moved (skipped = landing + 1 in i).
-    skipped_i = tm.i - 1 if turn == Color.WHITE else tm.i + 1
-    return get_c_notation(skipped_i, tm.j)
+    return board.en_passant or "-"
 
 
 def to_fen(board: Board, turn) -> str:
@@ -76,7 +57,7 @@ def to_fen(board: Board, turn) -> str:
     placement = "/".join(ranks)
     active = "w" if turn == Color.WHITE else "b"
     return (
-        f"{placement} {active} {_castling_field(board)} {_ep_field(board, turn)} "
+        f"{placement} {active} {_castling_field(board)} {_ep_field(board)} "
         f"{board.halfmove_clock} {board.fullmove_number}"
     )
 
@@ -91,23 +72,11 @@ def position_key(board: Board, turn) -> str:
     return " ".join(to_fen(board, turn).split()[:4])
 
 
-def _make_piece(letter: str, color: Color, i: int, j: int, castling: str):
-    """Build a piece for FEN placement, deriving Rook/King ``moved`` from castling rights."""
-    if letter == "R":
-        home = {(7, 0): "Q", (7, 7): "K", (0, 0): "q", (0, 7): "k"}.get((i, j))
-        return Rook(color, moved=not (home is not None and home in castling))
-    if letter == "K":
-        rights = "KQ" if color == Color.WHITE else "kq"
-        on_home = (i, j) == (7, 4) if color == Color.WHITE else (i, j) == (0, 4)
-        return King(color, moved=not (on_home and any(r in castling for r in rights)))
-    return _SIMPLE[letter](color)
-
-
 def from_fen(fen: str):
     """Parse a FEN into ``(board, turn)``.
 
-    :return: a tuple of the reconstructed :class:`Board` (with clocks and en-passant
-        set) and the :class:`Color` to move.
+    :return: a tuple of the reconstructed :class:`Board` (with clocks, castling rights
+        and en-passant set) and the :class:`Color` to move.
     :rtype: tuple[Board, Color]
     """
     placement, active, castling, ep, halfmove, fullmove = fen.split()
@@ -123,19 +92,13 @@ def from_fen(fen: str):
                     j += 1
             else:
                 color = Color.WHITE if ch.isupper() else Color.BLACK
-                squares.append(Square(i, j, piece=_make_piece(ch.upper(), color, i, j, castling)))
+                squares.append(Square(i, j, piece=_PIECES[ch.upper()](color)))
                 j += 1
         grid.append(squares)
 
     turn = Color.WHITE if active == "w" else Color.BLACK
 
-    two_moveP = None
-    if ep != "-":
-        ti, tj = get_coords(ep)  # the skipped square
-        landing_i = ti + 1 if turn == Color.WHITE else ti - 1
-        two_moveP = Square(landing_i, tj)
-
-    board = Board(board=grid, two_moveP=two_moveP)
+    board = Board(board=grid, en_passant=(None if ep == "-" else ep), castling=castling)
     board.halfmove_clock = int(halfmove)
     board.fullmove_number = int(fullmove)
     return board, turn

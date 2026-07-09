@@ -180,7 +180,8 @@ Moves are standard algebraic notation strings, exactly as the engine parses them
   appended, no `=`).
 - Piece moves: `Nf3`, `Bb5`, `Qh4`, `Ke2`, `Ra1`. Captures: `Nxe5`.
 - Disambiguation: `Rad1` (file), `R1a3` (rank), `Nbd2`.
-- Castling: `0-0` (king-side) and `0-0-0` (queen-side) — **zeros, not the letter O**.
+- Castling: `0-0` (king-side) and `0-0-0` (queen-side). The letter-O forms `O-O` / `O-O-O`
+  are accepted as equivalents; the engine emits the zero forms in `san`.
 - A trailing `+` (check) or `#` (checkmate) is accepted but never required.
 
 ### FEN
@@ -484,7 +485,8 @@ validating input before submitting.
   ```
 
   Each `san` is directly postable to [`/moves`](#post-v1gamesgwbmoves). For castling,
-  `to` is `null` and `san` is `"0-0"`/`"0-0-0"`. A finished game returns `[]`.
+  `to` is `null` and `san` is `"0-0"`/`"0-0-0"` (the equivalent letter-O forms
+  `"O-O"`/`"O-O-O"` are also accepted when posting a move). A finished game returns `[]`.
 - **Errors:** `404 GameNotFoundError`, `422`, `401`.
 
 ---

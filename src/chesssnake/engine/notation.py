@@ -88,7 +88,7 @@ def is_valid_c_notation(movename: str) -> bool:
     **Rules for a valid move string**:
     - Must be at least two characters in length. (a pawn move)
     - Can end with '+' (check) or '#' (checkmate) symbols, but this is never required.
-    - Castling must be in the format '0-0' (king-side) or '0-0-0' (queen-side).
+    - Castling must be '0-0'/'O-O' (king-side) or '0-0-0'/'O-O-O' (queen-side).
     - Must contain valid chess piece designations ('R', 'N', 'B', 'Q', 'K', or 'P'), if specified.
     - Must use valid ranks ('1' to '8') and files ('a' to 'h').
     - Captures are marked with 'x', e.g., 'Nxe5'.
@@ -103,8 +103,8 @@ def is_valid_c_notation(movename: str) -> bool:
     if "#" == movename[-1]:
         movename = movename[:-1]
 
-    # if the move is a castling move, returns true
-    if movename == "0-0" or movename == "0-0-0":
+    # if the move is a castling move, returns true (zeros or the letter O)
+    if movename in ("0-0", "0-0-0", "O-O", "O-O-O"):
         return True
 
     # if not a pawn (or using traditional notation with 'P')...

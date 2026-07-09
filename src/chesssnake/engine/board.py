@@ -13,6 +13,17 @@ from .square import Square
 # The four pieces a pawn may promote to.
 _PROMOTIONS = ("Q", "R", "B", "N")
 
+# Castling-rights letters lost when a piece leaves (or is captured on) a key square.
+# Keyed by (i, j): the king home squares (both rights) and the four rook corners.
+_CASTLE_MASK = {
+    (7, 4): "KQ",  # white king home (e1)
+    (0, 4): "kq",  # black king home (e8)
+    (7, 7): "K",  # white king-side rook (h1)
+    (7, 0): "Q",  # white queen-side rook (a1)
+    (0, 7): "k",  # black king-side rook (h8)
+    (0, 0): "q",  # black queen-side rook (a8)
+}
+
 
 class Board:
     """
@@ -26,9 +37,13 @@ class Board:
     :ivar board: An 8x8 grid (list of lists) where each element is a `Square` object that
         represents a square on the chessboard.
     :type board: list[list[Square]]
-    :ivar two_moveP: Records the `Square` where a pawn moved two spaces forward during the
-        most recent move, for "en passant" capture handling.
-    :type two_moveP: Square or None
+    :ivar en_passant: The FEN en-passant target square as an algebraic string (e.g.
+        ``"e3"``) — the square a pawn *skipped* on its last double step, onto which an
+        opposing pawn may capture — or ``None`` when no en-passant capture is available.
+    :type en_passant: str or None
+    :ivar castling: The FEN castling-availability field as a letters string (a subset of
+        ``"KQkq"``, or ``""`` when neither side may castle).
+    :type castling: str
     :ivar status: The :class:`~chesssnake.engine.enums.GameStatus`
         (``IN_PLAY``/``WHITE_WON``/``BLACK_WON``/``DRAW``). Set inside :meth:`move`.
     :type status: GameStatus
@@ -41,7 +56,7 @@ class Board:
     :type fullmove_number: int
     """
 
-    def __init__(self, board=None, two_moveP=None):
+    def __init__(self, board=None, en_passant=None, castling="KQkq"):
         """
         Initializes the chessboard.
 
@@ -51,9 +66,12 @@ class Board:
         :param board: Optional pre-constructed 8x8 grid of `Square` objects. If not
             provided, a new chessboard is constructed in the standard starting layout.
         :type board: list[list[Square]] or None
-        :param two_moveP: Optional `Square` where a pawn moved two spaces forward
-            in the last move, used for handling "en passant" captures. Default is `None`.
-        :type two_moveP: Square or None
+        :param en_passant: Optional FEN en-passant target square (algebraic string,
+            e.g. ``"e3"``), used for handling "en passant" captures. Default is `None`.
+        :type en_passant: str or None
+        :param castling: The FEN castling-availability letters (subset of ``"KQkq"``,
+            or ``""`` for none). Defaults to full rights (the starting position).
+        :type castling: str
         """
         if board is None:
             # creates board
@@ -116,7 +134,10 @@ class Board:
                         board[i].append(Square(i, j))
 
         self.board = board
-        self.two_moveP = two_moveP
+        # FEN en-passant target as an algebraic string (the skipped square), or None.
+        self.en_passant: str | None = en_passant
+        # FEN castling-availability letters (subset of "KQkq"; "" when none).
+        self.castling: str = "" if castling == "-" else castling
         self.status = GameStatus.IN_PLAY
         self.termination: Termination | None = None
         # FEN clocks: halfmove counts plies since the last pawn move or capture
@@ -218,7 +239,7 @@ class Board:
         :raises errors.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
         """
         player = Color(player)
-        prev_two_moveP = self.two_moveP
+        prev_ep = self.en_passant
 
         # makes the move object
         m = Move(move, player, self)
@@ -234,7 +255,7 @@ class Board:
             j1 = 7 if m.castle == "K" else 0
             j2 = 5 if m.castle == "K" else 3
             self[x, j1].piece = None
-            self[x, j2].piece = Rook(player, moved=True)
+            self[x, j2].piece = Rook(player)
 
         # pawn promotions
         new_piece = m.piece
@@ -258,16 +279,20 @@ class Board:
 
         # if the player is moving into check, we undo the move and raise an error
         if self.check_for_check(player):
-            self.undo_move(m, player, prev_two_moveP)
+            self.undo_move(m, player, prev_ep)
             raise errors.MoveIntoCheckError
 
-        # if no pawns where moved two squares, the board remembers
-        if prev_two_moveP is not None and self.two_moveP == prev_two_moveP:
-            self.two_moveP = None
+        # en passant is only available for the single move after a double step: unless
+        # this move set a new target (Move parsing does so on a two-square advance), clear it
+        if prev_ep is not None and self.en_passant == prev_ep:
+            self.en_passant = None
 
-        # if the piece is a rook or a king, sets moved to True
-        if new_piece.piecetype in (PieceType.KING, PieceType.ROOK):
-            new_piece.moved = True
+        # update castling rights: a king/rook leaving — or an enemy capturing on — a key
+        # square drops the associated right(s). Done after the move-into-check undo above,
+        # so undo_move never has to restore rights.
+        for si, sj in ((m.prev.i, m.prev.j), (m.to.i, m.to.j)):
+            for ch in _CASTLE_MASK.get((si, sj), ""):
+                self.castling = self.castling.replace(ch, "")
 
         # FEN clocks
         self.halfmove_clock = 0 if (is_pawn_move or is_capture) else self.halfmove_clock + 1
@@ -320,7 +345,7 @@ class Board:
         # K+B vs K+B (or same-side bishops) all on one square color can't mate
         return minors == len(bishop_square_colors) and len(set(bishop_square_colors)) == 1
 
-    def undo_move(self, move, player, prev_two_moveP):
+    def undo_move(self, move, player, prev_ep):
         """
         Reverses a previously executed move on the chessboard.
 
@@ -332,13 +357,14 @@ class Board:
         :type move: Move
         :param player: The player's color (0 for white, 1 for black).
         :type player: int
-        :param prev_two_moveP: The `Square` that stored the two-move pawn state
-            prior to the move. Used to restore the en passant state.
-        :type prev_two_moveP: Square or None
+        :param prev_ep: The FEN en-passant target string prior to the move, restored
+            here. (Castling rights are updated only after this undo path, so they never
+            need restoring.)
+        :type prev_ep: str or None
         """
-        # changes self.two_moveP back to what it was before
+        # restores the en-passant target to what it was before
         player = Color(player)
-        self.two_moveP = prev_two_moveP
+        self.en_passant = prev_ep
 
         # if en passant, places back the old piece
         if move.en:
@@ -350,7 +376,7 @@ class Board:
             x = 7 if player == Color.WHITE else 0
             j1 = 7 if move.castle == "K" else 0
             j2 = 5 if move.castle == "K" else 3
-            self[x, j1].piece = Rook(player, moved=False)
+            self[x, j1].piece = Rook(player)
             self[x, j2].piece = None
 
         # sets the board correctly
