@@ -31,7 +31,9 @@ valid = Move.is_valid_c_notation
         "b8N",
         "exd8Q",  # promotions (concatenated piece letter)
         "0-0",
-        "0-0-0",  # castling
+        "0-0-0",  # castling (zeros)
+        "O-O",
+        "O-O-O",  # castling (letter O — equivalent to zeros)
         "Nf3+",
         "Qh4#",  # check / checkmate annotations
     ],
@@ -48,7 +50,6 @@ def test_valid_notation_accepted(move):
         "e9",  # rank out of range
         "i4",  # file out of range
         "Xf3",  # bogus piece letter
-        "O-O",  # castling must use zeros, not letter O
         "Zz9",  # nonsense
         "e4e5",  # two squares glued together
         "Nf9",  # invalid rank on a piece move

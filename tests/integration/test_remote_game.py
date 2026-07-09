@@ -47,6 +47,16 @@ def test_move_persists_across_clients(remote_client):
     assert reloaded.to_move == Color.BLACK
 
 
+def test_fen_accessors_mirror_from_wire(remote_client):
+    g = make_game(remote_client, white_id=30, black_id=31, group_id=10)
+    assert g.castling_rights == "KQkq"
+    assert g.en_passant is None
+    assert g.fullmove_number == 1 and g.halfmove_clock == 0
+    g.move("e4")  # double push -> en-passant target mirrored from the server's FEN
+    assert g.en_passant == "e3"
+    assert g.fen.split()[3] == "e3"
+
+
 def test_refresh_picks_up_other_clients_move(remote_client):
     a = make_game(remote_client, white_id=5, black_id=6, group_id=10)
     b = make_game(remote_client, white_id=5, black_id=6, group_id=10)
