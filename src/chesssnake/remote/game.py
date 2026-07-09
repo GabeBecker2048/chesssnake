@@ -4,23 +4,31 @@ Remote-capable ``Game`` and challenge helpers.
 Build games with the factory methods:
 
 - ``Game.local(white_name, black_name)`` — a pure in-memory game (no network, no
-  extra dependencies), identical to the raw engine.
-- ``Game.remote(white_id, black_id, group_id=..., api_url=...)`` — load-or-create
-  and persist the game through a ``chesssnake api-endpoint`` REST server. The chess
-  engine still runs locally; only serialized state crosses the wire, so many
-  clients can share one database.
-
-Remote games default to ``auto_sync=True`` (every move/draw is pushed to the
-server). They are also context managers that sync on exit, so state is never
-silently dropped even with ``auto_sync=False``.
+  extra dependencies), where the engine runs in-process.
+- ``Game.remote(white_id, black_id, group_id=..., api_url=...)`` — a game persisted
+  through a ``chesssnake api-endpoint``. For remote games the **server** runs the
+  engine: ``move`` and the draw actions send a request and the returned state is
+  mirrored locally (for rendering and the read accessors). Illegal moves raise the
+  same ``ChessError`` types you'd get locally.
 """
 
 import os
 
-from ..dto import GameState
+from ..dto import GameState, MoveResult
 from ..engine import Board, Square
-from ..engine.enums import GameStatus
+from ..engine.enums import Color
 from ..engine.game import Game as BaseGame
+from ..serialize import board_from_state, state_from_game
+
+
+class _MoveMarker:
+    """Minimal last-move holder (prev/to squares) for render highlighting."""
+
+    __slots__ = ("prev", "to")
+
+    def __init__(self, prev, to):
+        self.prev = prev
+        self.to = to
 
 
 def _make_client(api_url=None, client=None, api_key=None):
@@ -40,20 +48,20 @@ class Game(BaseGame):
     A chess game that is local by default and remote when built via :meth:`remote`.
 
     Construct with the factory methods rather than calling ``Game(...)`` directly:
-    :meth:`local` for an in-memory game, :meth:`remote` for a persisted one.
+    :meth:`local` for an in-memory game, :meth:`remote` for a persisted one whose
+    moves are computed by the api-endpoint.
     """
 
-    def __init__(self, *args, client=None, auto_sync=False, **kwargs):
+    def __init__(self, *args, client=None, **kwargs):
         # Low-level constructor. Prefer Game.local() / Game.remote().
         self._client = client
-        self.auto_sync = bool(auto_sync and client is not None)
         super().__init__(*args, **kwargs)
 
     # --- factories ---------------------------------------------------------
 
     @classmethod
     def local(cls, white_name: str = "", black_name: str = "") -> "Game":
-        """Create a purely local, in-memory game (no server, no persistence)."""
+        """Create a purely local, in-memory game (engine runs in-process)."""
         return cls(white_name=white_name, black_name=black_name)
 
     @classmethod
@@ -68,10 +76,9 @@ class Game(BaseGame):
         api_url: str | None = None,
         api_key: str | None = None,
         client=None,
-        auto_sync: bool = True,
     ) -> "Game":
         """
-        Load-or-create a persisted game via a chesssnake api-endpoint.
+        Load-or-create a game on a chesssnake api-endpoint (the server runs the engine).
 
         Games are keyed by ``(group_id, white_id, black_id)``. If a matching game
         exists it is loaded; otherwise a new one is created.
@@ -79,19 +86,17 @@ class Game(BaseGame):
         :param api_url: Base URL of the api-endpoint (falls back to ``CHESSSNAKE_API_URL``).
         :param api_key: Optional API key sent with every request.
         :param client: An injected ``ApiClient`` (mainly for testing).
-        :param auto_sync: Push state to the server after every move/draw (default ``True``).
         """
         client = _make_client(api_url, client, api_key)
         state = client.get_or_create_game(group_id, white_id, black_id, white_name, black_name)
         return cls(
             client=client,
-            auto_sync=auto_sync,
             white_id=white_id,
             black_id=black_id,
             group_id=group_id,
             white_name=state.wname if state.wname is not None else white_name,
             black_name=state.bname if state.bname is not None else black_name,
-            board=cls._board_from_state(state),
+            board=board_from_state(state),
             turn=state.turn,
             draw=state.draw,
         )
@@ -101,77 +106,66 @@ class Game(BaseGame):
         """Whether this game is backed by a remote api-endpoint."""
         return self._client is not None
 
-    # --- context manager (syncs on exit) -----------------------------------
+    # --- local mirror of server state --------------------------------------
 
-    def __enter__(self) -> "Game":
-        return self
+    def _apply_state(self, state: GameState):
+        """Refresh the local board/turn/draw mirror from a server ``GameState``."""
+        self.board = board_from_state(state)  # also restores board.status
+        self.turn = Color(state.turn)
+        self.draw = Color(state.draw) if state.draw is not None else None
+        if state.wname is not None:
+            self.wname = state.wname
+        if state.bname is not None:
+            self.bname = state.bname
 
-    def __exit__(self, *exc):
-        # Push the latest state on a clean exit so a forgotten sync() can't drop moves.
-        if exc[0] is None:
-            self.sync()
-        return False
-
-    # --- state (de)serialization ------------------------------------------
-
-    @staticmethod
-    def _board_from_state(state: GameState) -> Board:
-        if state.pawnmove is not None:
-            i, j = Board.get_coords(state.pawnmove)
-            pawnmove = Square(i, j)
-        else:
-            pawnmove = None
-        board = Board(
-            board=Board.assemble_board(state.board, state.moved),
-            two_moveP=pawnmove,
-        )
-        board.status = GameStatus(int(state.status))
-        return board
-
-    def _state_payload(self) -> GameState:
-        boardstring, moved = Board.disassemble_board(self.board)
-        return GameState(
-            board=boardstring,
-            turn=int(self.turn),
-            moved=moved,
-            status=int(self.board.status),
-            pawnmove=self.board.two_moveP.c_notation if self.board.two_moveP else None,
-            draw=int(self.draw) if self.draw is not None else None,
-            wname=self.wname,
-            bname=self.bname,
+    def _move_result(self, engine_move) -> MoveResult:
+        """Wrap an engine ``Move`` (from a local move) into a public ``MoveResult``."""
+        return MoveResult(
+            state=state_from_game(self),
+            from_square=engine_move.prev.c_notation,
+            to_square=engine_move.to.c_notation,
+            check=self.board.check_for_check(self.turn),
+            castle=engine_move.castle,
+            promotion=engine_move.promotion,
+            en=engine_move.en,
         )
 
-    # --- persistence -------------------------------------------------------
+    # --- gameplay (local runs the engine; remote delegates to the server) --
 
-    def sync(self):
-        """Push the current full game state to the api-endpoint (no-op for local games)."""
-        if self.is_remote:
-            self._client.update_game(self.gid, self.wid, self.bid, self._state_payload())
+    # The public Game deliberately returns the richer MoveResult (not the engine's
+    # bare Move); last_move likewise holds a lightweight render marker for remote games.
+    def move(self, move) -> MoveResult:  # type: ignore[override]
+        if not self.is_remote:
+            return self._move_result(super().move(move))
 
-    def move(self, move):
-        result = super().move(move)
-        if self.auto_sync:
-            self.sync()
+        result = self._client.move(self.gid, self.wid, self.bid, move)
+        self._apply_state(result.state)
+        i1, j1 = Board.get_coords(result.from_square)
+        i2, j2 = Board.get_coords(result.to_square)
+        self.last_move = _MoveMarker(Square(i1, j1), Square(i2, j2))  # type: ignore[assignment]
         return result
 
     def draw_offer(self, player_id):
-        super().draw_offer(player_id)
-        if self.auto_sync:
-            self._client.update_draw(
-                self.gid, self.wid, self.bid, int(self.draw) if self.draw is not None else None, int(self.board.status)
-            )
+        if not self.is_remote:
+            return super().draw_offer(player_id)
+        self._apply_state(self._client.offer_draw(self.gid, self.wid, self.bid, player_id))
 
     def draw_accept(self, player_id):
-        super().draw_accept(player_id)
-        if self.auto_sync:
-            self._client.update_draw(
-                self.gid, self.wid, self.bid, int(self.draw) if self.draw is not None else None, int(self.board.status)
-            )
+        if not self.is_remote:
+            return super().draw_accept(player_id)
+        self._apply_state(self._client.accept_draw(self.gid, self.wid, self.bid, player_id))
 
     def draw_decline(self, player_id):
-        super().draw_decline(player_id)
-        if self.auto_sync:
-            self._client.clear_draw(self.gid, self.wid, self.bid)
+        if not self.is_remote:
+            return super().draw_decline(player_id)
+        self._apply_state(self._client.decline_draw(self.gid, self.wid, self.bid, player_id))
+
+    # --- remote lifecycle --------------------------------------------------
+
+    def refresh(self):
+        """Re-fetch the latest state from the server (e.g. after the opponent moved)."""
+        if self.is_remote:
+            self._apply_state(self._client.get_state(self.gid, self.wid, self.bid))
 
     def end(self):
         """If the game is over, delete it from the remote database. Returns True if ended."""

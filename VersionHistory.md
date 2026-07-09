@@ -18,7 +18,7 @@ _Note: Some minor versions are missing (e.g., documentation only updates, minor 
 
 | Version | Planned Release Date | Changes/Notes                                                    | Author      | Status      |
 |---------|----------------------|------------------------------------------------------------------|-------------|-------------|
-| 0.7.0   | TBD                  | Add REST API / api-endpoint (Game client → REST API → database)  | Gabe Becker | In Progress |
+| 0.7.0   | TBD                  | Add REST API / api-endpoint — server-authoritative: the api-endpoint runs the chess engine (validates/applies moves, stores state), clients just send moves over REST (any-language frontends, anti-cheat) | Gabe Becker | In Progress |
 | 0.8.0   | TBD                  | Add SQL Lite support                                            | Gabe Becker | Planned     |
 | 0.9.0   | TBD                  | Performance improvements and optimizations, finish documentation | Gabe Becker | Planned     |
 | 0.10.0  | TBD                  | Staging for full release, documentation full release             | Gabe Becker | Planned     |

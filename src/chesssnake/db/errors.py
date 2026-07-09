@@ -45,3 +45,8 @@ class SQLAuthError(SQLError):
 class ChallengeError(GameError):
     def __init__(self, msg):
         super().__init__(msg)
+
+
+class GameNotFoundError(GameError):
+    def __init__(self, msg="No such game"):
+        super().__init__(msg)

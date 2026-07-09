@@ -1,14 +1,16 @@
 """
 Full-stack integration tests: remote Game client -> REST API -> Postgres.
 
-The client's ApiClient is wired to an in-process TestClient (see conftest's
+The server runs the engine; the client sends moves and mirrors the returned
+state. The client's ApiClient is wired to an in-process TestClient (see conftest's
 ``remote_client``), so these exercise the real FastAPI app and database.
 """
 
 import pytest
 
-from chesssnake import Color
+from chesssnake import Color, MoveResult
 from chesssnake.db import errors as GameError
+from chesssnake.engine import errors as ChessError
 from chesssnake.remote.game import Game, challenge, challenge_exists
 
 pytestmark = pytest.mark.integration
@@ -25,60 +27,63 @@ def piece_at(board, c_notation):
     return board[i, j].piece
 
 
-def test_move_syncs_and_reloads(remote_client):
-    g = make_game(
-        remote_client, white_id=1, black_id=2, group_id=10, white_name="Bob", black_name="Phil", auto_sync=False
-    )
-    g.move("e4")
-    g.move("e5")
-    g.move("Nc3")
-    g.sync()  # explicit sync (auto_sync disabled)
-
-    reloaded = make_game(remote_client, white_id=1, black_id=2, group_id=10)
-    assert str(reloaded) == str(g)
-    assert reloaded.to_move == g.to_move == Color.BLACK
-    assert reloaded.wname == "Bob"
-    assert reloaded.bname == "Phil"
+def test_move_returns_move_result_and_updates_mirror(remote_client):
+    g = make_game(remote_client, white_id=1, black_id=2, group_id=10, white_name="Bob", black_name="Phil")
+    result = g.move("e4")
+    assert isinstance(result, MoveResult)
+    assert (result.from_square, result.to_square) == ("e2", "e4")
+    # local mirror reflects the server-applied move
+    assert g.to_move == Color.BLACK
+    assert piece_at(g.board, "e4") is not None
+    assert g.last_move is not None  # render highlight available
 
 
-def test_auto_sync_persists_each_move(remote_client):
-    g = make_game(remote_client, white_id=3, black_id=4, group_id=10)  # auto_sync defaults True
+def test_move_persists_across_clients(remote_client):
+    g = make_game(remote_client, white_id=3, black_id=4, group_id=10)
     g.move("e4")
 
     reloaded = make_game(remote_client, white_id=3, black_id=4, group_id=10)
-    p = piece_at(reloaded.board, "e4")
-    assert p is not None and p.piecetype.value == "P"
+    assert piece_at(reloaded.board, "e4") is not None
     assert reloaded.to_move == Color.BLACK
 
 
-def test_context_manager_syncs_on_exit(remote_client):
-    with make_game(remote_client, white_id=13, black_id=14, group_id=10, auto_sync=False) as g:
-        g.move("d4")  # not synced yet (auto_sync off)
+def test_refresh_picks_up_other_clients_move(remote_client):
+    a = make_game(remote_client, white_id=5, black_id=6, group_id=10)
+    b = make_game(remote_client, white_id=5, black_id=6, group_id=10)
 
-    # exiting the context should have pushed the state
-    reloaded = make_game(remote_client, white_id=13, black_id=14, group_id=10)
-    assert piece_at(reloaded.board, "d4") is not None
+    a.move("d4")  # client A moves
+    assert b.to_move == Color.WHITE  # B hasn't refreshed yet
+    b.refresh()
+    assert b.to_move == Color.BLACK
+    assert piece_at(b.board, "d4") is not None
 
 
-def test_en_passant_target_round_trips(remote_client):
-    g = make_game(remote_client, white_id=5, black_id=6, group_id=10)
-    g.move("e4")  # double pawn push sets the en-passant target
+def test_illegal_move_raises_chess_error(remote_client):
+    g = make_game(remote_client, white_id=7, black_id=8, group_id=10)
+    with pytest.raises(ChessError.InvalidNotationError):
+        g.move("not-a-move")
+    with pytest.raises(ChessError.PieceNotFoundError):
+        g.move("e5")  # no white pawn can reach e5 in one move
 
-    reloaded = make_game(remote_client, white_id=5, black_id=6, group_id=10)
-    assert reloaded.board.two_moveP is not None
-    assert reloaded.board.two_moveP.c_notation == "e4"
+
+def test_render_works_from_mirror(remote_client):
+    g = make_game(remote_client, white_id=9, black_id=10, group_id=10, white_name="A", black_name="B")
+    g.move("e4")
+    img = g.render()  # uses the local mirror + last-move marker
+    assert img.size == (1190, 644)
 
 
 def test_draw_offer_persists(remote_client):
-    g = make_game(remote_client, white_id=7, black_id=8, group_id=10)
-    g.draw_offer(7)
+    g = make_game(remote_client, white_id=11, black_id=12, group_id=10)
+    g.draw_offer(11)
+    assert g.draw_offered_by == Color.WHITE
 
-    reloaded = make_game(remote_client, white_id=7, black_id=8, group_id=10)
+    reloaded = make_game(remote_client, white_id=11, black_id=12, group_id=10)
     assert reloaded.draw_offered_by == Color.WHITE
 
 
 def test_new_remote_game_starts_fresh(remote_client):
-    g = make_game(remote_client, white_id=11, black_id=12, group_id=10)
+    g = make_game(remote_client, white_id=13, black_id=14, group_id=10)
     assert g.to_move == Color.WHITE
     assert g.draw_offered_by is None
     assert g.is_over is False
