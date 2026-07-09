@@ -22,6 +22,7 @@ from .postgres import (
     game_get,
     game_get_or_create,
     game_history,
+    game_record,
 )
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "game_get",
     "game_archive",
     "game_history",
+    "game_record",
     "apply_game_change",
     "game_delete",
     "current_games",

@@ -74,6 +74,7 @@ print(game)
 game.move('Nc3')
 game.render().show()           # a PIL image (both perspectives + names)
 game.render(perspective="white").show()  # or a single board from one side's POV
+# (a nameless game's wide image omits the bottom name strip)
 game.save('/path/to/img.png')  # or write it straight to disk
 ```
 
@@ -179,11 +180,13 @@ GET  /v1/games/789/123/456/pgn          -> the game as PGN
 GET  /v1/games/789/123/456/fen          -> the position as FEN
 GET  /v1/games/789/123/456/image?perspective=white  -> a PNG from white's POV
 GET  /v1/games/789/123/456/archive      -> past games between these players
+GET  /v1/games/789/record?player1=123&player2=456  -> head-to-head win/draw/loss record
 ```
 
 **The full REST API is documented in [docs/rest-api.md](docs/rest-api.md).**
 
-Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`) are also importable from `chesssnake`.
+Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`) and the
+head-to-head `record` helper are also importable from `chesssnake`.
 
 ## REST API reference
 

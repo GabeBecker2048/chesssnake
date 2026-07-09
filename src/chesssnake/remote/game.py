@@ -244,3 +244,8 @@ def challenge_exists(player1, player2, group_id=0, *, api_url=None, api_key=None
 def delete_challenge(challenger, challenged, group_id=0, *, api_url=None, api_key=None, client=None):
     """Delete a pending challenge."""
     _make_client(api_url, client, api_key).delete_challenge(challenger, challenged, group_id)
+
+
+def record(player1, player2, group_id=0, *, api_url=None, api_key=None, client=None):
+    """Win/draw/loss record between two players across their finished games in a group."""
+    return _make_client(api_url, client, api_key).record(player1, player2, group_id)

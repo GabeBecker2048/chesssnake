@@ -11,7 +11,7 @@ import pytest
 from chesssnake import Color, GameStatus, MoveResult, Termination
 from chesssnake.db import errors as GameError
 from chesssnake.engine import errors as ChessError
-from chesssnake.remote.game import Game, challenge, challenge_exists
+from chesssnake.remote.game import Game, challenge, challenge_exists, record
 
 pytestmark = pytest.mark.integration
 
@@ -146,3 +146,11 @@ def test_challenge_allowed_after_game_finishes(remote_client):
     g = make_game(remote_client, white_id=30, black_id=31, group_id=10)
     _mate(g)
     assert challenge(30, 31, group_id=10, client=remote_client) is False  # created, not blocked
+
+
+def test_record_helper(remote_client):
+    g = make_game(remote_client, white_id=40, black_id=41, group_id=10)
+    g.move("e4")
+    g.resign(41)  # black resigns -> white (40) wins
+    rec = record(40, 41, group_id=10, client=remote_client)
+    assert rec == {"player1": 40, "player2": 41, "player1_wins": 1, "player2_wins": 0, "draws": 0}

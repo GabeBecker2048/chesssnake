@@ -276,6 +276,37 @@ def game_exists(player1, player2, group_id=0):
     return None
 
 
+def game_record(player1, player2, group_id=0):
+    """
+    Win/draw/loss record between two players across all **finished** games (any
+    generation, either color arrangement) in a group.
+
+    Status values: 1 = white won, 2 = black won, 3 = draw (0 = in play, excluded).
+
+    :return: ``{"player1", "player2", "player1_wins", "player2_wins", "draws"}``.
+    :rtype: dict
+    """
+    validate_ids(player1, player2, group_id)
+    query = """
+        SELECT
+            COUNT(*) FILTER (WHERE (WhiteId = %(p1)s AND Status = 1) OR (BlackId = %(p1)s AND Status = 2)) AS p1_wins,
+            COUNT(*) FILTER (WHERE (WhiteId = %(p2)s AND Status = 1) OR (BlackId = %(p2)s AND Status = 2)) AS p2_wins,
+            COUNT(*) FILTER (WHERE Status = 3) AS draws
+        FROM Games
+        WHERE GroupId = %(g)s AND Status <> 0 AND (
+            (WhiteId = %(p1)s AND BlackId = %(p2)s) OR (WhiteId = %(p2)s AND BlackId = %(p1)s)
+        )
+    """
+    row = execute_psql(query, params={"g": group_id, "p1": player1, "p2": player2})[0]
+    return {
+        "player1": player1,
+        "player2": player2,
+        "player1_wins": int(row["p1_wins"]),
+        "player2_wins": int(row["p2_wins"]),
+        "draws": int(row["draws"]),
+    }
+
+
 # --- Challenges ------------------------------------------------------------
 
 
