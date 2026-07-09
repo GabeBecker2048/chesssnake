@@ -1,12 +1,13 @@
-"""The wire payload shared by the client and the api-endpoint.
+"""The wire payloads shared by the client and the api-endpoint.
 
-``GameState`` is the single definition of the serialized game-state shape that
-crosses the network. It is a stdlib dataclass (no third-party dependency), so the
-client can use it without pulling in pydantic; FastAPI accepts it directly as a
-request/response model on the server side.
+``GameState`` is the single definition of the serialized game state that crosses
+the network; ``MoveResult`` is what a move returns. Both are stdlib dataclasses
+(no third-party dependency), so the client needs no pydantic; FastAPI accepts them
+on the server side too.
 
-Values are primitives on the wire: ``turn``/``draw`` are ints (0/1) or ``None``,
-``status`` is an int. The engine-side enum conversions happen in the client.
+The board itself is carried as standard **FEN** inside ``GameState.fen`` (which
+also encodes whose turn it is, castling rights, the en-passant square, and the
+move clocks). Status/draw-offer/termination/version and player names are separate.
 """
 
 from dataclasses import asdict, dataclass
@@ -16,12 +17,11 @@ from dataclasses import asdict, dataclass
 class GameState:
     """Serialized state of a single game, exchanged between client and server."""
 
-    board: str
-    turn: int
-    moved: str
-    status: int
-    pawnmove: str | None = None
-    draw: int | None = None
+    fen: str
+    status: int  # GameStatus: 0 in play, 1 white won, 2 black won, 3 draw
+    version: int
+    draw: int | None = None  # open draw offer: 0 white, 1 black, None none
+    termination: str | None = None  # Termination.value, or None while in play
     wname: str | None = None
     bname: str | None = None
 
@@ -33,13 +33,11 @@ class GameState:
     def from_row(cls, row) -> "GameState":
         """Build a ``GameState`` from a raw ``Games`` database row (dict-like)."""
         return cls(
-            board=row["board"],
-            turn=int(row["turn"]),
-            moved=row["moved"],
+            fen=row["fen"],
             status=int(row["status"]),
-            # the pawnmove column is CHAR(2)-padded; trim it back to notation
-            pawnmove=row["pawnmove"].strip() if row["pawnmove"] is not None else None,
+            version=int(row["version"]),
             draw=int(row["draw"]) if row["draw"] is not None else None,
+            termination=row["termination"],
             wname=row["wname"],
             bname=row["bname"],
         )
@@ -49,17 +47,15 @@ class GameState:
 class MoveResult:
     """The outcome of a played move: the move itself plus the resulting state.
 
-    This is what ``Game.move()`` returns and what the ``POST .../moves`` endpoint
-    responds with — rich enough for any frontend to highlight the move, animate it,
-    or flag check/checkmate without re-deriving anything.
-
-    ``from_square``/``to_square`` are algebraic squares (e.g. ``"e2"``/``"e4"``).
-    On the wire they serialize to the JSON keys ``from``/``to`` via :meth:`to_dict`.
+    ``from_square``/``to_square`` are algebraic squares (e.g. ``"e2"``/``"e4"``);
+    ``san`` is the move string (postable). On the wire they serialize to ``from``/
+    ``to`` via :meth:`to_dict`.
     """
 
     state: GameState
     from_square: str
     to_square: str
+    san: str
     check: bool = False
     castle: str | None = None
     promotion: str | None = None
@@ -71,6 +67,7 @@ class MoveResult:
             "state": self.state.to_dict(),
             "from": self.from_square,
             "to": self.to_square,
+            "san": self.san,
             "check": self.check,
             "castle": self.castle,
             "promotion": self.promotion,
@@ -84,6 +81,7 @@ class MoveResult:
             state=GameState(**data["state"]),
             from_square=data["from"],
             to_square=data["to"],
+            san=data["san"],
             check=data["check"],
             castle=data.get("castle"),
             promotion=data.get("promotion"),

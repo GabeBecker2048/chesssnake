@@ -26,5 +26,5 @@ def test_local_checkmate_reports_winner():
     for mv in ["f3", "e5", "g4", "Qh4"]:  # fool's mate
         g.move(mv)
     assert g.is_over is True
-    assert g.result == GameStatus.CHECKMATE
+    assert g.result == GameStatus.BLACK_WON
     assert g.winner == Color.BLACK

@@ -11,13 +11,6 @@ lowercase column name).
 from . import errors
 from .sql import execute_psql, initialize_connection_pool, psql_db_init, transaction, validate_ids
 
-# The serialized starting position, matching Board.disassemble_board's format.
-INITIAL_BOARD = (
-    "R1 N1 B1 Q1 K1 B1 N1 R1;P1 P1 P1 P1 P1 P1 P1 P1;-- -- -- -- -- -- -- --;"
-    "-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;-- -- -- -- -- -- -- --;"
-    "P0 P0 P0 P0 P0 P0 P0 P0;R0 N0 B0 Q0 K0 B0 N0 R0"
-)
-
 
 def db_init(sql_creds=None, create_database=False):
     """
@@ -42,22 +35,28 @@ def db_init(sql_creds=None, create_database=False):
 # --- Games -----------------------------------------------------------------
 
 
-def game_get_or_create(group_id, white_id, black_id, white_name="", black_name=""):
+def game_get_or_create(group_id, white_id, black_id, initial_fen, initial_key, white_name="", black_name=""):
     """
-    Loads the game for ``(group_id, white_id, black_id)``, creating a fresh one if
-    it does not exist.
+    Loads the game for ``(group_id, white_id, black_id)``, creating a fresh one at
+    ``initial_fen`` (with a Ply-0 ``Moves`` row keyed by ``initial_key``) if it does
+    not exist.
 
-    :return: The raw game row as a plain dict (keys: ``board``, ``turn``,
-        ``pawnmove``, ``draw``, ``moved``, ``status``, ``wname``, ``bname`` and the
-        id columns).
+    The engine-derived ``initial_fen``/``initial_key`` are passed in so this layer
+    stays engine-free.
+
+    :return: The raw game row as a plain dict.
     :rtype: dict
     """
     validate_ids(white_id, black_id, group_id)
 
     query = """
-        INSERT INTO Games (GroupId, WhiteId, BlackId, Board, Turn, PawnMove, Draw, Moved, Status, WName, BName)
-        VALUES (%(group_id)s, %(white_id)s, %(black_id)s, %(board)s, %(turn)s, %(pawnmove)s, %(draw)s, %(moved)s, %(status)s, %(wname)s, %(bname)s)
+        INSERT INTO Games (GroupId, WhiteId, BlackId, Fen, Draw, Status, Termination, Version, WName, BName)
+        VALUES (%(group_id)s, %(white_id)s, %(black_id)s, %(fen)s, NULL, 0, NULL, 1, %(wname)s, %(bname)s)
         ON CONFLICT (GroupId, WhiteId, BlackId) DO NOTHING;
+
+        INSERT INTO Moves (GroupId, WhiteId, BlackId, Ply, San, PositionKey)
+        VALUES (%(group_id)s, %(white_id)s, %(black_id)s, 0, NULL, %(key)s)
+        ON CONFLICT (GroupId, WhiteId, BlackId, Ply) DO NOTHING;
 
         SELECT * FROM Games WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
     """
@@ -65,12 +64,8 @@ def game_get_or_create(group_id, white_id, black_id, white_name="", black_name="
         "group_id": group_id,
         "white_id": white_id,
         "black_id": black_id,
-        "board": INITIAL_BOARD,
-        "turn": 0,
-        "pawnmove": None,
-        "draw": None,
-        "moved": "000000",
-        "status": 0,
+        "fen": initial_fen,
+        "key": initial_key,
         "wname": white_name,
         "bname": black_name,
     }
@@ -89,24 +84,42 @@ def game_get(group_id, white_id, black_id):
     return dict(rows[0]) if rows else None
 
 
-# The columns apply_game_change's mutate callback returns to persist.
-_STATE_COLUMNS = ("board", "turn", "pawnmove", "draw", "moved", "status", "wname", "bname")
-
-
-def apply_game_change(group_id, white_id, black_id, mutate):
+def game_history(group_id, white_id, black_id):
+    """Return the played moves (``[{"ply", "san"}]``, ordered) for a game."""
+    validate_ids(white_id, black_id, group_id)
+    query = """
+        SELECT Ply, San FROM Moves
+        WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s AND San IS NOT NULL
+        ORDER BY Ply
     """
-    Atomically read a game, transform it, and write it back.
+    rows = execute_psql(query, params={"group_id": group_id, "white_id": white_id, "black_id": black_id})
+    return [{"ply": r["ply"], "san": r["san"]} for r in (rows or [])]
 
-    Locks the row with ``SELECT ... FOR UPDATE``, calls ``mutate(row)`` — which
-    runs the engine and returns ``(columns, result)`` — persists ``columns``, and
-    returns ``result``. The whole read-modify-write is one transaction, so
-    concurrent moves on the same game can't clobber each other. This layer stays
-    engine-free; the chess logic lives entirely in the ``mutate`` callback.
 
-    :param mutate: callable ``row_dict -> (columns_dict, result)`` where
-        ``columns_dict`` holds the ``_STATE_COLUMNS`` to store.
+# The Games columns apply_game_change's mutate callback returns to persist.
+_STATE_COLUMNS = ("fen", "draw", "status", "termination")
+
+
+def apply_game_change(group_id, white_id, black_id, mutate, expected_version=None):
+    """
+    Atomically read a game (with its move history), transform it, and write it back.
+
+    Locks the game row with ``SELECT ... FOR UPDATE``, loads the ``Moves`` history,
+    optionally enforces ``expected_version`` (optimistic concurrency), calls
+    ``mutate(row, history)`` — which runs the engine — then persists the new game
+    columns (bumping ``Version``) and appends any new ``Moves`` rows. The whole
+    read-modify-write is one transaction, so concurrent actions on the same game
+    can't clobber each other. This layer stays engine-free; the chess logic lives
+    entirely in the ``mutate`` callback.
+
+    :param mutate: ``(row_dict, history) -> (columns, new_move_rows, result)`` where
+        ``history`` is ``{"position_keys": [...], "move_sans": [...], "max_ply": int}``,
+        ``columns`` holds the :data:`_STATE_COLUMNS`, and ``new_move_rows`` is a list
+        of ``{"ply", "san", "position_key"}`` to insert.
+    :param expected_version: if given and it doesn't match the stored version, raise.
     :return: the ``result`` returned by ``mutate``.
     :raises errors.GameNotFoundError: if the game does not exist.
+    :raises errors.VersionConflictError: if ``expected_version`` is stale.
     """
     validate_ids(white_id, black_id, group_id)
     ids = {"group_id": group_id, "white_id": white_id, "black_id": black_id}
@@ -123,25 +136,55 @@ def apply_game_change(group_id, white_id, black_id, mutate):
         row = cur.fetchone()
         if row is None:
             raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
+        if expected_version is not None and int(row["version"]) != int(expected_version):
+            raise errors.VersionConflictError(
+                f"Expected version {expected_version} but the game is at version {row['version']}"
+            )
 
-        columns, result = mutate(dict(row))
+        cur.execute(
+            """
+            SELECT Ply, San, PositionKey FROM Moves
+            WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
+            ORDER BY Ply
+            """,
+            ids,
+        )
+        move_rows = cur.fetchall()
+        history = {
+            "position_keys": [r["positionkey"] for r in move_rows],
+            "move_sans": [r["san"] for r in move_rows if r["san"] is not None],
+            "max_ply": max((r["ply"] for r in move_rows), default=0),
+        }
+
+        columns, new_move_rows, result = mutate(dict(row), history)
 
         cur.execute(
             """
             UPDATE Games
-            SET Board = %(board)s, Turn = %(turn)s, PawnMove = %(pawnmove)s, Draw = %(draw)s,
-                Moved = %(moved)s, Status = %(status)s, WName = %(wname)s, BName = %(bname)s
+            SET Fen = %(fen)s, Draw = %(draw)s, Status = %(status)s, Termination = %(termination)s,
+                Version = Version + 1
             WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
             """,
             {**{c: columns[c] for c in _STATE_COLUMNS}, **ids},
         )
+        for mv in new_move_rows:
+            cur.execute(
+                """
+                INSERT INTO Moves (GroupId, WhiteId, BlackId, Ply, San, PositionKey)
+                VALUES (%(group_id)s, %(white_id)s, %(black_id)s, %(ply)s, %(san)s, %(key)s)
+                """,
+                {**ids, "ply": mv["ply"], "san": mv["san"], "key": mv["position_key"]},
+            )
     return result
 
 
 def game_delete(group_id, white_id, black_id):
-    """Deletes a game."""
+    """Deletes a game and its move history."""
     validate_ids(white_id, black_id, group_id)
     query = """
+        DELETE FROM Moves
+        WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s;
+
         DELETE FROM Games
         WHERE GroupId = %(group_id)s AND WhiteId = %(white_id)s AND BlackId = %(black_id)s
     """

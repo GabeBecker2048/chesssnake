@@ -1,12 +1,17 @@
 """The `Board`: the 8x8 grid plus move/undo and check/mate detection."""
 
+import copy
 from contextlib import contextmanager
 
 from . import errors, notation
-from .enums import Color, GameStatus, PieceType
+from .enums import Color, GameStatus, PieceType, Termination
 from .move import Move
 from .pieces import Bishop, King, Knight, Pawn, Queen, Rook
+from .san import to_san
 from .square import Square
+
+# The four pieces a pawn may promote to.
+_PROMOTIONS = ("Q", "R", "B", "N")
 
 
 class Board:
@@ -24,11 +29,16 @@ class Board:
     :ivar two_moveP: Records the `Square` where a pawn moved two spaces forward during the
         most recent move, for "en passant" capture handling.
     :type two_moveP: Square or None
-    :ivar status: Tracks the current game state:
-        - 0: Game is in progress.
-        - 1: Checkmate has occurred, and the game is over.
-        - 2: Stalemate has occurred, and the game is over.
-    :type status: int
+    :ivar status: The :class:`~chesssnake.engine.enums.GameStatus`
+        (``IN_PLAY``/``WHITE_WON``/``BLACK_WON``/``DRAW``). Set inside :meth:`move`.
+    :type status: GameStatus
+    :ivar termination: Why a finished game ended
+        (:class:`~chesssnake.engine.enums.Termination`), or ``None`` while in play.
+    :type termination: Termination or None
+    :ivar halfmove_clock: Plies since the last pawn move or capture (fifty-move rule).
+    :type halfmove_clock: int
+    :ivar fullmove_number: The move number (starts at 1, increments after Black).
+    :type fullmove_number: int
     """
 
     def __init__(self, board=None, two_moveP=None):
@@ -108,6 +118,11 @@ class Board:
         self.board = board
         self.two_moveP = two_moveP
         self.status = GameStatus.IN_PLAY
+        self.termination: Termination | None = None
+        # FEN clocks: halfmove counts plies since the last pawn move or capture
+        # (for the fifty-move rule); fullmove starts at 1 and increments after Black.
+        self.halfmove_clock = 0
+        self.fullmove_number = 1
 
     @contextmanager
     def lifted(self, square):
@@ -233,6 +248,10 @@ class Board:
             elif m.promotion == "N":
                 new_piece = Knight(player)
 
+        # detect a capture (for the halfmove clock) before the target is overwritten
+        is_capture = self[m.to.i, m.to.j].piece is not None or m.en
+        is_pawn_move = m.piece.piecetype == PieceType.PAWN
+
         # sets the board correctly
         self[m.prev.i, m.prev.j].piece = None
         self[m.to.i, m.to.j].piece = new_piece
@@ -242,12 +261,6 @@ class Board:
             self.undo_move(m, player, prev_two_moveP)
             raise errors.MoveIntoCheckError
 
-        # changes the game status if a mate or stalemate is detected
-        if self.check_for_mate(player.opponent):
-            self.status = GameStatus.CHECKMATE
-        elif not self.check_for_check(player.opponent) and self.check_for_stalemate(player.opponent):
-            self.status = GameStatus.DRAW
-
         # if no pawns where moved two squares, the board remembers
         if prev_two_moveP is not None and self.two_moveP == prev_two_moveP:
             self.two_moveP = None
@@ -256,7 +269,56 @@ class Board:
         if new_piece.piecetype in (PieceType.KING, PieceType.ROOK):
             new_piece.moved = True
 
+        # FEN clocks
+        self.halfmove_clock = 0 if (is_pawn_move or is_capture) else self.halfmove_clock + 1
+        if player == Color.BLACK:
+            self.fullmove_number += 1
+
+        # update the game outcome from the rules the board can see by itself
+        # (threefold repetition is applied by Game.move, which holds the history)
+        opponent = player.opponent
+        if self.check_for_mate(opponent):
+            self.status = GameStatus.won_by(player)
+            self.termination = Termination.CHECKMATE
+        elif not self.check_for_check(opponent) and self.check_for_stalemate(opponent):
+            self.status = GameStatus.DRAW
+            self.termination = Termination.STALEMATE
+        elif self.insufficient_material():
+            self.status = GameStatus.DRAW
+            self.termination = Termination.INSUFFICIENT_MATERIAL
+        elif self.halfmove_clock >= 100:
+            self.status = GameStatus.DRAW
+            self.termination = Termination.FIFTY_MOVE
+
         return m
+
+    def insufficient_material(self):
+        """
+        Whether neither side has enough material to force checkmate.
+
+        Covers the standard dead positions: K vs K, K vs K + a single minor, and
+        K+B vs K+B with both bishops on same-colored squares. Any pawn, rook, or
+        queen means mate is still possible.
+
+        :rtype: bool
+        """
+        minors = 0
+        bishop_square_colors = []
+        for rank in self:
+            for square in rank:
+                piece = square.piece
+                if piece is None or piece.piecetype == PieceType.KING:
+                    continue
+                if piece.piecetype in (PieceType.PAWN, PieceType.ROOK, PieceType.QUEEN):
+                    return False
+                minors += 1
+                if piece.piecetype == PieceType.BISHOP:
+                    bishop_square_colors.append(square.color)
+
+        if minors <= 1:
+            return True
+        # K+B vs K+B (or same-side bishops) all on one square color can't mate
+        return minors == len(bishop_square_colors) and len(set(bishop_square_colors)) == 1
 
     def undo_move(self, move, player, prev_two_moveP):
         """
@@ -489,156 +551,66 @@ class Board:
 
         return True
 
+    def _pseudo_targets(self, square, piece):
+        """Candidate destination squares for ``piece`` (a superset of legal moves)."""
+        targets = list(piece.threatens(square, self))
+        if piece.piecetype == PieceType.PAWN:
+            # threatens() only covers diagonal attacks; add the forward pushes.
+            forward = -1 if piece.color == Color.WHITE else 1
+            for step in (1, 2):
+                ahead = self[square.i + forward * step, square.j]
+                if ahead is not None:
+                    targets.append(ahead)
+        return targets
+
+    def legal_moves(self, turn):
+        """
+        Enumerate every fully-legal move for ``turn`` in the current position.
+
+        Each entry is ``{"from", "to", "san", "promotion"}`` where ``san`` is a move
+        string that can be handed straight back to :meth:`move` / the moves endpoint.
+        Candidates are generated pseudo-legally and then confirmed by actually
+        applying them to a throwaway copy (so castling, en passant, promotion, and
+        self-check are all validated by the real move logic).
+
+        :param turn: the side to move (0 white / 1 black).
+        :rtype: list[dict]
+        """
+        turn = Color(turn)
+        moves = []
+
+        def _accept(san):
+            trial = copy.deepcopy(self)
+            try:
+                trial.move(san, turn)
+            except errors.ChessError:
+                return False
+            return True
+
+        for rank in self:
+            for square in rank:
+                piece = square.piece
+                if piece is None or piece.color != turn:
+                    continue
+                last_rank = 0 if turn == Color.WHITE else 7
+                for to in self._pseudo_targets(square, piece):
+                    promotions = _PROMOTIONS if (piece.piecetype == PieceType.PAWN and to.i == last_rank) else (None,)
+                    for promo in promotions:
+                        san = to_san(self, square, to, piece, promotion=promo)
+                        if _accept(san):
+                            moves.append(
+                                {"from": square.c_notation, "to": to.c_notation, "san": san, "promotion": promo}
+                            )
+
+        # castling is generated from the king, not from target squares
+        king_square = self.find_king(turn)
+        if king_square is not None:
+            for san in ("0-0", "0-0-0"):
+                if _accept(san):
+                    moves.append({"from": king_square.c_notation, "to": None, "san": san, "promotion": None})
+
+        return moves
+
     # coord<->notation helpers live in notation.py; kept here as facades
     get_coords = staticmethod(notation.get_coords)
     get_c_notation = staticmethod(notation.get_c_notation)
-
-    # takes in a board that is stored in string form and converts it into array form
-    # the opposite of Board.disassemble_board
-    @staticmethod
-    def assemble_board(boardstring, moved):
-        """
-        Converts a board string representation back into a 2D array of `Square` objects.
-
-        Used for reconstructing a board's state from its serialized form.
-
-        `moved` is a 6 character string of zeros and ones that indicates which Rook or Kings have moved.
-        0 means unmoved, 1 means moved.
-        - The first character indicates whether the white Rook starting on A1 has moved
-        - The second character indicates whether the white King has moved
-        - The third character indicates whether the white Rook starting on H1 has moved
-        - The fourth character indicates whether the black Rook starting on A8 has moved
-        - The fifth character indicates whether the black King has moved
-        - The sixth character indicates whether the black Rook starting on H8 has moved
-
-        :param boardstring: Serialized string representation of the board.
-        :type boardstring: str
-        :param moved: String indicating whether certain pieces (e.g., Rooks, Kings)
-            have moved, for rules like castling.
-        :type moved: str
-        :return: A reconstructed board as a 2D list of `Square` objects.
-        :rtype: list[list[Square]]
-        """
-        # splits the string into a 2D array of strings
-        boardstringarray = boardstring.split(";")
-        for i in range(len(boardstringarray)):
-            boardstringarray[i] = boardstringarray[i].split()
-
-        # creates the array
-        board = []
-        for i in range(8):
-            board.append([])
-            for j in range(8):
-                # creates the piece
-                if boardstringarray[i][j][0] == "R":
-                    if (
-                        (i == 7 and j == 0 and moved[0] == "1")
-                        or (i == 7 and j == 7 and moved[2] == "1")
-                        or (i == 0 and j == 0 and moved[0] == "1")
-                        or (i == 0 and j == 7 and moved[2] == "1")
-                    ):
-                        piece = Rook(boardstringarray[i][j][1], True)
-                    else:
-                        piece = Rook(boardstringarray[i][j][1], False)
-                elif boardstringarray[i][j][0] == "N":
-                    piece = Knight(boardstringarray[i][j][1])
-                elif boardstringarray[i][j][0] == "B":
-                    piece = Bishop(boardstringarray[i][j][1])
-                elif boardstringarray[i][j][0] == "Q":
-                    piece = Queen(boardstringarray[i][j][1])
-                elif boardstringarray[i][j][0] == "K":
-                    if (i == 7 and j == 4 and moved[1] == "1") or (i == 0 and j == 4 and moved[1] == "1"):
-                        piece = King(boardstringarray[i][j][1], True)
-                    else:
-                        piece = King(boardstringarray[i][j][1], False)
-                elif boardstringarray[i][j][0] == "P":
-                    piece = Pawn(boardstringarray[i][j][1])
-                else:
-                    piece = None
-
-                # adds the square
-                board[i].append(Square(i, j, piece=piece))
-
-        return board
-
-    # takes in a board that is stored in array form and converts it into string form
-    # the opposite of Board.assemble_board
-    @staticmethod
-    def disassemble_board(board):
-        """
-        Serializes the board into a string representation.
-
-        Used to store the board's state compactly in string form.
-
-        Returns two strings:
-        - The first string is the serialized board state
-        - The second string is a string of zeros and ones that indicates which Rook or Kings have moved
-
-        The `moved` string is a 6 character string of zeros and ones that indicates which Rook or Kings have moved.
-        0 means unmoved, 1 means moved.
-        - The first character indicates whether the white Rook starting on A1 has moved
-        - The second character indicates whether the white King has moved
-        - The third character indicates whether the white Rook starting on H1 has moved
-        - The fourth character indicates whether the black Rook starting on A8 has moved
-        - The fifth character indicates whether the black King has moved
-        - The sixth character indicates whether the black Rook starting on H8 has moved
-
-        :param board: The board object that we are disassembling
-        :type board: Board
-        :return: A tuple containing the serialized board string and a string
-            indicating move states for certain pieces.
-        :rtype: tuple[str, str]
-        """
-        boardstring = ""
-        moved = ["0", "0", "0", "0", "0", "0"]
-        for rank in board:
-            for square in rank:
-                if square.piece is not None:
-                    boardstring += square.piece.piecetype.value + str(int(square.piece.color)) + " "
-
-                    if (
-                        (square.i == 7 and square.j == 0)
-                        and square.piece.piecetype == PieceType.ROOK
-                        and square.piece.moved
-                    ):
-                        moved[0] = "1"
-                    elif (
-                        (square.i == 7 and square.j == 4)
-                        and square.piece.piecetype == PieceType.KING
-                        and square.piece.moved
-                    ):
-                        moved[1] = "1"
-                    elif (
-                        (square.i == 7 and square.j == 7)
-                        and square.piece.piecetype == PieceType.ROOK
-                        and square.piece.moved
-                    ):
-                        moved[2] = "1"
-                    elif (
-                        (square.i == 0 and square.j == 0)
-                        and square.piece.piecetype == PieceType.ROOK
-                        and square.piece.moved
-                    ):
-                        moved[3] = "1"
-                    elif (
-                        (square.i == 0 and square.j == 4)
-                        and square.piece.piecetype == PieceType.KING
-                        and square.piece.moved
-                    ):
-                        moved[4] = "1"
-                    elif (
-                        (square.i == 0 and square.j == 7)
-                        and square.piece.piecetype == PieceType.ROOK
-                        and square.piece.moved
-                    ):
-                        moved[5] = "1"
-
-                else:
-                    boardstring += "-- "
-
-            boardstring = boardstring[:-1]
-            boardstring += ";"
-        boardstring = boardstring[:-1]
-        moved = "".join(moved)
-
-        return boardstring, moved

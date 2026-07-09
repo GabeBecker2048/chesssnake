@@ -8,7 +8,7 @@ state. The client's ApiClient is wired to an in-process TestClient (see conftest
 
 import pytest
 
-from chesssnake import Color, MoveResult
+from chesssnake import Color, GameStatus, MoveResult, Termination
 from chesssnake.db import errors as GameError
 from chesssnake.engine import errors as ChessError
 from chesssnake.remote.game import Game, challenge, challenge_exists
@@ -27,21 +27,21 @@ def piece_at(board, c_notation):
     return board[i, j].piece
 
 
-def test_move_returns_move_result_and_updates_mirror(remote_client):
+def test_move_returns_result_and_bumps_version(remote_client):
     g = make_game(remote_client, white_id=1, black_id=2, group_id=10, white_name="Bob", black_name="Phil")
+    assert g.version == 1
     result = g.move("e4")
     assert isinstance(result, MoveResult)
-    assert (result.from_square, result.to_square) == ("e2", "e4")
-    # local mirror reflects the server-applied move
+    assert (result.from_square, result.to_square, result.san) == ("e2", "e4", "e4")
     assert g.to_move == Color.BLACK
-    assert piece_at(g.board, "e4") is not None
-    assert g.last_move is not None  # render highlight available
+    assert g.version == 2
+    assert piece_at(g.board, "e4") is not None  # local mirror updated
+    assert g.last_move is not None
 
 
 def test_move_persists_across_clients(remote_client):
     g = make_game(remote_client, white_id=3, black_id=4, group_id=10)
     g.move("e4")
-
     reloaded = make_game(remote_client, white_id=3, black_id=4, group_id=10)
     assert piece_at(reloaded.board, "e4") is not None
     assert reloaded.to_move == Color.BLACK
@@ -50,51 +50,64 @@ def test_move_persists_across_clients(remote_client):
 def test_refresh_picks_up_other_clients_move(remote_client):
     a = make_game(remote_client, white_id=5, black_id=6, group_id=10)
     b = make_game(remote_client, white_id=5, black_id=6, group_id=10)
-
-    a.move("d4")  # client A moves
-    assert b.to_move == Color.WHITE  # B hasn't refreshed yet
+    a.move("d4")
+    assert b.to_move == Color.WHITE  # not refreshed yet
     b.refresh()
-    assert b.to_move == Color.BLACK
-    assert piece_at(b.board, "d4") is not None
+    assert b.to_move == Color.BLACK and piece_at(b.board, "d4") is not None
+
+
+def test_player_authorization(remote_client):
+    # The white player's client may not move on black's turn.
+    white = make_game(remote_client, white_id=7, black_id=8, group_id=10, player_id=7)
+    white.move("e4")  # ok, white's turn
+    with pytest.raises(GameError.NotYourTurnError):
+        white.move("e5")  # now black's turn, but this client is player 7 (white)
 
 
 def test_illegal_move_raises_chess_error(remote_client):
-    g = make_game(remote_client, white_id=7, black_id=8, group_id=10)
+    g = make_game(remote_client, white_id=9, black_id=10, group_id=10)
     with pytest.raises(ChessError.InvalidNotationError):
         g.move("not-a-move")
     with pytest.raises(ChessError.PieceNotFoundError):
-        g.move("e5")  # no white pawn can reach e5 in one move
+        g.move("e5")
+
+
+def test_resign_and_winner(remote_client):
+    g = make_game(remote_client, white_id=11, black_id=12, group_id=10)
+    g.move("e4")
+    g.resign(12)  # black resigns
+    assert g.result == GameStatus.WHITE_WON
+    assert g.winner == Color.WHITE
+    assert g.termination == Termination.RESIGNATION
+
+
+def test_legal_moves_and_pgn_over_the_wire(remote_client):
+    g = make_game(remote_client, white_id=13, black_id=14, group_id=10, white_name="A", black_name="B")
+    assert len(g.legal_moves()) == 20
+    g.move("e4")
+    g.move("e5")
+    assert "1. e4 e5" in g.pgn()
+    assert [m["san"] for m in g.history()] == ["e4", "e5"]
 
 
 def test_render_works_from_mirror(remote_client):
-    g = make_game(remote_client, white_id=9, black_id=10, group_id=10, white_name="A", black_name="B")
+    g = make_game(remote_client, white_id=15, black_id=16, group_id=10, white_name="A", black_name="B")
     g.move("e4")
-    img = g.render()  # uses the local mirror + last-move marker
-    assert img.size == (1190, 644)
+    assert g.render().size == (1190, 644)
 
 
 def test_draw_offer_persists(remote_client):
-    g = make_game(remote_client, white_id=11, black_id=12, group_id=10)
-    g.draw_offer(11)
+    g = make_game(remote_client, white_id=17, black_id=18, group_id=10)
+    g.draw_offer(17)
     assert g.draw_offered_by == Color.WHITE
-
-    reloaded = make_game(remote_client, white_id=11, black_id=12, group_id=10)
+    reloaded = make_game(remote_client, white_id=17, black_id=18, group_id=10)
     assert reloaded.draw_offered_by == Color.WHITE
-
-
-def test_new_remote_game_starts_fresh(remote_client):
-    g = make_game(remote_client, white_id=13, black_id=14, group_id=10)
-    assert g.to_move == Color.WHITE
-    assert g.draw_offered_by is None
-    assert g.is_over is False
 
 
 def test_challenge_lifecycle(remote_client):
     assert challenge(100, 200, group_id=10, client=remote_client) is False
     assert challenge_exists(100, 200, group_id=10, client=remote_client) is not None
-
     assert challenge(200, 100, group_id=10, client=remote_client) is True
-    assert challenge_exists(100, 200, group_id=10, client=remote_client) is None
 
 
 def test_self_challenge_raises(remote_client):

@@ -111,32 +111,60 @@ class ApiClient:
         data = self._request("GET", f"/games/{group_id}/{white_id}/{black_id}")
         return GameState(**data)
 
-    def move(self, group_id, white_id, black_id, move) -> MoveResult:
-        data = self._request("POST", f"/games/{group_id}/{white_id}/{black_id}/moves", json={"move": move})
+    def move(self, group_id, white_id, black_id, move, player_id=None, expected_version=None) -> MoveResult:
+        data = self._request(
+            "POST",
+            f"/games/{group_id}/{white_id}/{black_id}/moves",
+            json={"move": move, "player_id": player_id, "expected_version": expected_version},
+        )
         return MoveResult.from_dict(data)
 
-    def offer_draw(self, group_id, white_id, black_id, player_id) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "offer")
-
-    def accept_draw(self, group_id, white_id, black_id, player_id) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "accept")
-
-    def decline_draw(self, group_id, white_id, black_id, player_id) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "decline")
-
-    def _draw(self, group_id, white_id, black_id, player_id, action) -> GameState:
+    def resign(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
         data = self._request(
-            "POST", f"/games/{group_id}/{white_id}/{black_id}/draw/{action}", json={"player_id": player_id}
+            "POST",
+            f"/games/{group_id}/{white_id}/{black_id}/resign",
+            json={"player_id": player_id, "expected_version": expected_version},
         )
         return GameState(**data)
 
-    def image(self, group_id, white_id, black_id) -> bytes:
-        resp = self._session.request(
-            "GET", f"{self.base_url}{API_PREFIX}/games/{group_id}/{white_id}/{black_id}/image", headers=self._headers()
+    def offer_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "offer", expected_version)
+
+    def accept_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "accept", expected_version)
+
+    def decline_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "decline", expected_version)
+
+    def _draw(self, group_id, white_id, black_id, player_id, action, expected_version) -> GameState:
+        data = self._request(
+            "POST",
+            f"/games/{group_id}/{white_id}/{black_id}/draw/{action}",
+            json={"player_id": player_id, "expected_version": expected_version},
         )
+        return GameState(**data)
+
+    def legal_moves(self, group_id, white_id, black_id):
+        return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/legal-moves")["moves"]
+
+    def history(self, group_id, white_id, black_id):
+        return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/history")["moves"]
+
+    def pgn(self, group_id, white_id, black_id) -> str:
+        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/pgn").text
+
+    def fen(self, group_id, white_id, black_id) -> str:
+        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/fen").text
+
+    def image(self, group_id, white_id, black_id) -> bytes:
+        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/image").content
+
+    def _raw(self, method, path):
+        """A request that returns the raw response (for non-JSON bodies: image/pgn/fen)."""
+        resp = self._session.request(method, f"{self.base_url}{API_PREFIX}{path}", headers=self._headers())
         if resp.status_code >= 400:
             self._raise(resp)
-        return resp.content
+        return resp
 
     def delete_game(self, group_id, white_id, black_id):
         return self._request("DELETE", f"/games/{group_id}/{white_id}/{black_id}")

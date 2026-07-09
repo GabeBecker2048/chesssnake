@@ -8,7 +8,7 @@ def test_fools_mate_is_checkmate():
     g = Game()
     for m in ["f3", "e5", "g4", "Qh4"]:
         g.move(m)
-    assert g.board.status == 1  # checkmate
+    assert g.board.status == 2  # black wins (fool's mate)
 
 
 def test_back_rank_checkmate(make_board):
@@ -25,7 +25,7 @@ def test_back_rank_checkmate(make_board):
     )
     g = Game(board=board, turn=0)
     g.move("Ra8")
-    assert g.board.status == 1  # checkmate
+    assert g.board.status == 1  # white wins (back-rank mate)
 
 
 def test_stalemate_detection(make_board):
@@ -39,7 +39,7 @@ def test_stalemate_detection(make_board):
     )
     g = Game(board=board, turn=0)
     g.move("Qg6")
-    assert g.board.status == 2  # stalemate
+    assert g.board.status == 3  # draw (stalemate)
 
 
 def test_pawn_can_block_check_is_not_mate(make_board):

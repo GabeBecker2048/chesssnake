@@ -1,5 +1,5 @@
 from .dto import GameState, MoveResult
-from .engine.enums import Color, GameStatus, PieceType
+from .engine.enums import Color, GameStatus, PieceType, Termination
 from .remote.game import Game, challenge, challenge_exists, delete_challenge
 
 __all__ = [
@@ -12,4 +12,5 @@ __all__ = [
     "Color",
     "GameStatus",
     "PieceType",
+    "Termination",
 ]
