@@ -26,10 +26,19 @@ class Game:
     :ivar board: The chess board used in the game, represented as a `Board` object.
     :type board: Board
     :ivar turn: Whose turn it is, as a :class:`~chesssnake.engine.enums.Color`.
+        Prefer the :attr:`to_move` accessor in user code.
     :type turn: Color
     :ivar draw: Which color has an open draw offer (a
         :class:`~chesssnake.engine.enums.Color`), or ``None`` if none is active.
+        Prefer the :attr:`draw_offered_by` accessor in user code.
     :type draw: Color or None
+    :ivar last_move: The most recent :class:`~chesssnake.engine.move.Move`, or
+        ``None`` before any move. Used to highlight the board on :meth:`render`.
+    :type last_move: Move or None
+
+    Intention-revealing accessors (prefer these over the raw ints/enums above):
+    :attr:`is_over`, :attr:`result`, :attr:`winner`, :attr:`to_move`,
+    :attr:`draw_offered_by`.
     """
 
     def __init__(
@@ -68,6 +77,7 @@ class Game:
         self.board = Board() if board is None else board
         self.turn = Color(turn)
         self.draw: Color | None = Color(draw) if draw is not None else None
+        self.last_move: Move | None = None
 
     def __str__(self):
         """
@@ -77,6 +87,36 @@ class Game:
         :rtype: str
         """
         return str(self.board)
+
+    # --- state accessors ---------------------------------------------------
+
+    @property
+    def to_move(self) -> Color:
+        """The :class:`Color` whose turn it is to move."""
+        return self.turn
+
+    @property
+    def is_over(self) -> bool:
+        """``True`` if the game has ended (by checkmate or draw)."""
+        return self.board.status != GameStatus.IN_PLAY
+
+    @property
+    def result(self) -> GameStatus:
+        """The current :class:`GameStatus` (``IN_PLAY``, ``CHECKMATE``, or ``DRAW``)."""
+        return self.board.status
+
+    @property
+    def winner(self) -> "Color | None":
+        """The winning :class:`Color` on checkmate, or ``None`` if drawn/ongoing."""
+        if self.board.status == GameStatus.CHECKMATE:
+            # the mating side is the one that just moved — the opposite of to_move
+            return self.turn.opponent
+        return None
+
+    @property
+    def draw_offered_by(self) -> "Color | None":
+        """The :class:`Color` with an open draw offer, or ``None`` if there is none."""
+        return self.draw
 
     def is_players_turn(self, player_id: int) -> bool:
         """
@@ -92,21 +132,17 @@ class Game:
         else:
             return False
 
-    def move(self, move: str, img: bool = False, save: "str | None" = None):
+    def move(self, move: str) -> Move:
         """
         Executes a chess move if it is the active player's turn.
 
-        This method validates the move, applies it to the board, and changes the turn to the other player.
-        Optionally, it can generate a visual representation of the board as an image or save it as a PNG file.
+        Validates the move, applies it to the board, and passes the turn to the
+        other player. Rendering is separate — use :meth:`render` or :meth:`save`.
 
         :param move: The move to execute, in standard chess notation (e.g., "e4").
         :type move: str
-        :param img: If `True`, returns a `PIL.Image` object representing the board. Default is `False`.
-        :type img: bool
-        :param save: File path to save the board image as a PNG. If provided, it implies `img=True`.
-        :type save: str
-        :return: None or a `PIL.Image` object if `img=True` or `save` is specified.
-        :rtype: None or PIL.Image
+        :return: The :class:`~chesssnake.engine.move.Move` that was played.
+        :rtype: Move
         :raises ChessError.InvalidNotationError: If the move is not in standard chess notation.
         :raises ChessError.GameOverError: If the game is over (i.e., the game has ended).
         :raises ChessError.MoveIntoCheckError: If the move puts the player in check.
@@ -125,14 +161,18 @@ class Game:
             raise ChessError.GameOverError()
 
         m = self.board.move(move, self.turn)
+        self.last_move = m
         self.turn = self.turn.opponent  # Changes whose turn it is
+        return m
 
-        if img or save:
-            image = render_board(self.board, self.wname, self.bname, m)
-            if save:
-                image.save(save)
-            return image
-        return None
+    def render(self):
+        """
+        Render the current board to an image (both orientations, last move highlighted).
+
+        :return: A `PIL.Image` of the board.
+        :rtype: PIL.Image
+        """
+        return render_board(self.board, self.wname, self.bname, self.last_move)
 
     def draw_offer(self, player_id: int):
         """
@@ -214,4 +254,4 @@ class Game:
         :param image_fp: The file path where the board image will be saved.
         :type image_fp: str
         """
-        render_board(self.board, self.wname, self.bname).save(image_fp)
+        self.render().save(image_fp)
