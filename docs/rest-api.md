@@ -618,6 +618,11 @@ either player had white). In-play games are excluded.
   `player1_wins` is how many finished games `player1` won (whether as white or black);
   `player2_wins` likewise; `draws` counts drawn games. All zero if they've never
   finished a game. Swapping `player1`/`player2` just swaps the two win fields.
+- **What counts:** a game contributes as soon as it has a result (`status != 0`). A win
+  by **checkmate or resignation** counts as a win for that side; **every** kind of draw
+  (agreement, stalemate, threefold repetition, fifty-move, insufficient material) counts
+  as a draw — the `termination` reason doesn't matter. Only games **still in play** are
+  excluded, so a game a player abandons mid-way never appears in the record.
 - **Errors:** `422 SQLIdError`, `401`.
 
 ---
