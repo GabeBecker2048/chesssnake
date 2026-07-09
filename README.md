@@ -110,7 +110,7 @@ All six FEN fields are also exposed directly on the game (local or remote):
 
 ```Python3
 game.to_move          # active color (FEN field 2)
-game.castling_rights  # e.g. "KQkq" or "-"        (FEN field 3)
+game.castling_rights  # e.g. "KQkq", or None if none (FEN field 3)
 game.en_passant       # e.g. "e3" or None          (FEN field 4)
 game.halfmove_clock   # plies since last pawn move/capture (FEN field 5)
 game.fullmove_number  # the move number            (FEN field 6)

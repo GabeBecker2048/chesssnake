@@ -59,6 +59,14 @@ def test_castling_rights_drop_when_rook_is_captured():
     assert g.castling_rights == "Qkq"  # king-side right lost with the rook
 
 
+def test_castling_rights_is_none_when_none_available():
+    # A position with no castling rights ("-") reads back as None (like en_passant).
+    board, turn = from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")
+    g = Game(board=board, turn=turn)
+    assert g.castling_rights is None
+    assert g.fen.split()[2] == "-"  # the raw FEN token is still "-"
+
+
 def test_from_fen_reconstructs_playable_position():
     # A position with only kings and a white pawn about to promote.
     board, turn = from_fen("4k3/1P6/8/8/8/8/8/4K3 w - - 0 1")
