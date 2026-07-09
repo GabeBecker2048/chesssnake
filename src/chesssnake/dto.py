@@ -43,3 +43,49 @@ class GameState:
             wname=row["wname"],
             bname=row["bname"],
         )
+
+
+@dataclass
+class MoveResult:
+    """The outcome of a played move: the move itself plus the resulting state.
+
+    This is what ``Game.move()`` returns and what the ``POST .../moves`` endpoint
+    responds with — rich enough for any frontend to highlight the move, animate it,
+    or flag check/checkmate without re-deriving anything.
+
+    ``from_square``/``to_square`` are algebraic squares (e.g. ``"e2"``/``"e4"``).
+    On the wire they serialize to the JSON keys ``from``/``to`` via :meth:`to_dict`.
+    """
+
+    state: GameState
+    from_square: str
+    to_square: str
+    check: bool = False
+    castle: str | None = None
+    promotion: str | None = None
+    en: bool = False
+
+    def to_dict(self) -> dict:
+        """Return a JSON-serializable dict (uses ``from``/``to`` wire keys)."""
+        return {
+            "state": self.state.to_dict(),
+            "from": self.from_square,
+            "to": self.to_square,
+            "check": self.check,
+            "castle": self.castle,
+            "promotion": self.promotion,
+            "en": self.en,
+        }
+
+    @classmethod
+    def from_dict(cls, data) -> "MoveResult":
+        """Build a ``MoveResult`` from a decoded response dict."""
+        return cls(
+            state=GameState(**data["state"]),
+            from_square=data["from"],
+            to_square=data["to"],
+            check=data["check"],
+            castle=data.get("castle"),
+            promotion=data.get("promotion"),
+            en=data.get("en", False),
+        )

@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from os import getenv
 
 import psycopg2
@@ -228,6 +229,39 @@ def execute_psql(statement, params=None):
         if conn is not None:
             conn.rollback()
         raise errors.SQLError(f"SQL execution error: {e}")
+    finally:
+        if conn is not None:
+            release_connection(conn)
+
+
+@contextmanager
+def transaction():
+    """
+    Run several statements in one transaction on a single pooled connection.
+
+    Yields a ``RealDictCursor``. Commits when the ``with`` block exits cleanly and
+    rolls back on any exception, then returns the connection to the pool. Use this
+    when a read and a dependent write must be atomic (e.g. ``SELECT ... FOR UPDATE``
+    followed by an ``UPDATE`` with an engine computation in between).
+
+    :raises errors.SQLError: on any ``psycopg2`` error (after rolling back).
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            yield cur
+        conn.commit()
+    except psycopg2.Error as e:
+        if conn is not None:
+            conn.rollback()
+        raise errors.SQLError(f"SQL execution error: {e}")
+    except Exception:
+        # Non-SQL error (e.g. a ChessError from the engine mutate): roll back the
+        # transaction but let the original exception propagate unchanged.
+        if conn is not None:
+            conn.rollback()
+        raise
     finally:
         if conn is not None:
             release_connection(conn)
