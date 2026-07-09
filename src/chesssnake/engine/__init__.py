@@ -7,7 +7,8 @@ public names are re-exported here so consumers can do
 
 from . import errors, notation
 from .board import Board
-from .enums import Color, GameStatus, PieceType
+from .enums import Color, GameStatus, PieceType, Termination
+from .fen import INITIAL_FEN, from_fen, position_key, to_fen
 from .game import Game
 from .image import render_board
 from .move import Move
@@ -26,6 +27,11 @@ __all__ = [
     "Color",
     "PieceType",
     "GameStatus",
+    "Termination",
+    "INITIAL_FEN",
+    "to_fen",
+    "from_fen",
+    "position_key",
     "Piece",
     "Rook",
     "Knight",

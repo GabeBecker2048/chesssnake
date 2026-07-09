@@ -51,8 +51,30 @@ _FULL_NAMES = {
 
 
 class GameStatus(IntEnum):
-    """The terminal state of a game, as stored in ``Board.status``."""
+    """The outcome of a game, as stored in ``Board.status``.
+
+    A win (by checkmate or resignation) is recorded as ``WHITE_WON``/``BLACK_WON``;
+    the specific reason a finished game ended is a separate :class:`Termination`.
+    """
 
     IN_PLAY = 0
-    CHECKMATE = 1
-    DRAW = 2
+    WHITE_WON = 1
+    BLACK_WON = 2
+    DRAW = 3
+
+    @classmethod
+    def won_by(cls, color):
+        """The winning status for ``color`` (``WHITE_WON`` or ``BLACK_WON``)."""
+        return cls.WHITE_WON if Color(color) is Color.WHITE else cls.BLACK_WON
+
+
+class Termination(str, Enum):
+    """Why a finished game ended. ``None`` while the game is in play."""
+
+    CHECKMATE = "checkmate"
+    RESIGNATION = "resignation"
+    STALEMATE = "stalemate"
+    THREEFOLD = "threefold_repetition"
+    FIFTY_MOVE = "fifty_move_rule"
+    INSUFFICIENT_MATERIAL = "insufficient_material"
+    AGREEMENT = "agreement"

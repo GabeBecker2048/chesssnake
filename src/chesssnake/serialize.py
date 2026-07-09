@@ -1,52 +1,61 @@
 """Bridge between the wire payload (:mod:`chesssnake.dto`) and the engine.
 
-Both the api-endpoint (which now runs the engine) and the client (which keeps a
-local board mirror for rendering) need to turn a :class:`~chesssnake.dto.GameState`
-into engine objects and back. That conversion lives here, in one place.
+The api-endpoint (which runs the engine) turns a stored :class:`GameState` into an
+engine :class:`Game`, applies an action, and turns the result back into a
+:class:`GameState`. This conversion lives here, in one place, on top of FEN.
 """
 
 from .dto import GameState
-from .engine import Board, Square
-from .engine.enums import GameStatus
+from .engine import from_fen, to_fen
+from .engine.enums import GameStatus, Termination
 from .engine.game import Game as EngineGame
 
 
-def board_from_state(state: GameState) -> Board:
-    """Reconstruct a :class:`Board` (incl. en-passant target and status) from state."""
-    if state.pawnmove is not None:
-        i, j = Board.get_coords(state.pawnmove)
-        two_moveP = Square(i, j)
-    else:
-        two_moveP = None
-    board = Board(board=Board.assemble_board(state.board, state.moved), two_moveP=two_moveP)
-    board.status = GameStatus(int(state.status))
-    return board
+def game_from_state(state: GameState, group_id, white_id, black_id, position_history=None, move_history=None):
+    """Build a full engine :class:`Game` from stored state (what the server drives).
 
-
-def game_from_state(state: GameState, group_id: int, white_id: int, black_id: int) -> EngineGame:
-    """Build a full engine :class:`Game` from stored state (what the server drives)."""
-    return EngineGame(
+    ``position_history`` (the list of past position keys) is loaded so that the
+    reconstructed game detects threefold repetition exactly as an in-memory game
+    would; ``move_history`` (SAN) is loaded so PGN export works server-side.
+    """
+    board, turn = from_fen(state.fen)
+    game = EngineGame(
         white_id=white_id,
         black_id=black_id,
         group_id=group_id,
         white_name=state.wname or "",
         black_name=state.bname or "",
-        board=board_from_state(state),
-        turn=state.turn,
+        board=board,
+        turn=turn,
         draw=state.draw,
+        move_history=move_history,
+        position_history=position_history,
     )
+    game.board.status = GameStatus(int(state.status))
+    game.board.termination = Termination(state.termination) if state.termination is not None else None
+    return game
 
 
-def state_from_game(game: EngineGame) -> GameState:
+def state_from_game(game: EngineGame, version: int, generation: int = 1) -> GameState:
     """Serialize an engine :class:`Game` back into a :class:`GameState` for storage."""
-    boardstring, moved = Board.disassemble_board(game.board)
     return GameState(
-        board=boardstring,
-        turn=int(game.turn),
-        moved=moved,
+        fen=to_fen(game.board, game.turn),
         status=int(game.board.status),
-        pawnmove=game.board.two_moveP.c_notation if game.board.two_moveP else None,
+        version=version,
+        generation=generation,
         draw=int(game.draw) if game.draw is not None else None,
+        termination=game.board.termination.value if game.board.termination is not None else None,
         wname=game.wname,
         bname=game.bname,
     )
+
+
+def board_and_turn(state: GameState):
+    """Reconstruct ``(board, turn)`` from state, with status/termination applied.
+
+    Used by the client to mirror server state locally (for rendering + accessors).
+    """
+    board, turn = from_fen(state.fen)
+    board.status = GameStatus(int(state.status))
+    board.termination = Termination(state.termination) if state.termination is not None else None
+    return board, turn

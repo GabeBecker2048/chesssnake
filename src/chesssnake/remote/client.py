@@ -40,6 +40,11 @@ def _build_error_registry():
 _ERROR_REGISTRY = _build_error_registry()
 
 
+def _gen(generation):
+    """Query params for an optional ``generation`` selector (empty when current)."""
+    return {"generation": generation} if generation is not None else {}
+
+
 class ApiClient:
     """Talks to a chesssnake api-endpoint over REST."""
 
@@ -107,39 +112,80 @@ class ApiClient:
         )
         return GameState(**data)
 
-    def get_state(self, group_id, white_id, black_id) -> GameState:
-        data = self._request("GET", f"/games/{group_id}/{white_id}/{black_id}")
+    def get_state(self, group_id, white_id, black_id, generation=None) -> GameState:
+        data = self._request("GET", f"/games/{group_id}/{white_id}/{black_id}", params=_gen(generation))
         return GameState(**data)
 
-    def move(self, group_id, white_id, black_id, move) -> MoveResult:
-        data = self._request("POST", f"/games/{group_id}/{white_id}/{black_id}/moves", json={"move": move})
+    def archive(self, group_id, white_id, black_id):
+        """List all games (generations) for a triple, oldest first."""
+        return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/archive")["games"]
+
+    def move(self, group_id, white_id, black_id, move, player_id=None, expected_version=None) -> MoveResult:
+        data = self._request(
+            "POST",
+            f"/games/{group_id}/{white_id}/{black_id}/moves",
+            json={"move": move, "player_id": player_id, "expected_version": expected_version},
+        )
         return MoveResult.from_dict(data)
 
-    def offer_draw(self, group_id, white_id, black_id, player_id) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "offer")
-
-    def accept_draw(self, group_id, white_id, black_id, player_id) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "accept")
-
-    def decline_draw(self, group_id, white_id, black_id, player_id) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "decline")
-
-    def _draw(self, group_id, white_id, black_id, player_id, action) -> GameState:
+    def resign(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
         data = self._request(
-            "POST", f"/games/{group_id}/{white_id}/{black_id}/draw/{action}", json={"player_id": player_id}
+            "POST",
+            f"/games/{group_id}/{white_id}/{black_id}/resign",
+            json={"player_id": player_id, "expected_version": expected_version},
         )
         return GameState(**data)
 
-    def image(self, group_id, white_id, black_id) -> bytes:
+    def offer_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "offer", expected_version)
+
+    def accept_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "accept", expected_version)
+
+    def decline_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
+        return self._draw(group_id, white_id, black_id, player_id, "decline", expected_version)
+
+    def _draw(self, group_id, white_id, black_id, player_id, action, expected_version) -> GameState:
+        data = self._request(
+            "POST",
+            f"/games/{group_id}/{white_id}/{black_id}/draw/{action}",
+            json={"player_id": player_id, "expected_version": expected_version},
+        )
+        return GameState(**data)
+
+    def legal_moves(self, group_id, white_id, black_id, generation=None):
+        return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/legal-moves", params=_gen(generation))[
+            "moves"
+        ]
+
+    def history(self, group_id, white_id, black_id, generation=None):
+        return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/history", params=_gen(generation))[
+            "moves"
+        ]
+
+    def pgn(self, group_id, white_id, black_id, generation=None) -> str:
+        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/pgn", params=_gen(generation)).text
+
+    def fen(self, group_id, white_id, black_id, generation=None) -> str:
+        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/fen", params=_gen(generation)).text
+
+    def image(self, group_id, white_id, black_id, perspective=None, generation=None) -> bytes:
+        params = _gen(generation)
+        if perspective is not None:
+            params["perspective"] = perspective
+        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/image", params=params).content
+
+    def _raw(self, method, path, params=None):
+        """A request that returns the raw response (for non-JSON bodies: image/pgn/fen)."""
         resp = self._session.request(
-            "GET", f"{self.base_url}{API_PREFIX}/games/{group_id}/{white_id}/{black_id}/image", headers=self._headers()
+            method, f"{self.base_url}{API_PREFIX}{path}", params=params, headers=self._headers()
         )
         if resp.status_code >= 400:
             self._raise(resp)
-        return resp.content
+        return resp
 
-    def delete_game(self, group_id, white_id, black_id):
-        return self._request("DELETE", f"/games/{group_id}/{white_id}/{black_id}")
+    def delete_game(self, group_id, white_id, black_id, generation=None):
+        return self._request("DELETE", f"/games/{group_id}/{white_id}/{black_id}", params=_gen(generation))
 
     def current_games(self, player_id, group_id=0):
         data = self._request("GET", "/games", params={"player_id": player_id, "group_id": group_id})
@@ -148,6 +194,10 @@ class ApiClient:
     def game_exists(self, player1, player2, group_id=0):
         data = self._request("GET", f"/games/{group_id}/exists", params={"player1": player1, "player2": player2})
         return data["game"]
+
+    def record(self, player1, player2, group_id=0):
+        """Win/draw/loss record between two players in a group (finished games)."""
+        return self._request("GET", f"/games/{group_id}/record", params={"player1": player1, "player2": player2})
 
     # --- challenges --------------------------------------------------------
 

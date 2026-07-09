@@ -1,8 +1,30 @@
 from . import errors as ChessError
 from .board import Board
-from .enums import Color, GameStatus
+from .enums import Color, GameStatus, Termination
+from .fen import from_fen as parse_fen
+from .fen import position_key, to_fen
 from .image import render_board
 from .move import Move
+
+# PGN result tokens per outcome.
+_RESULT_TOKENS = {
+    GameStatus.IN_PLAY: "*",
+    GameStatus.WHITE_WON: "1-0",
+    GameStatus.BLACK_WON: "0-1",
+    GameStatus.DRAW: "1/2-1/2",
+}
+
+
+def _pgn_move(san: str) -> str:
+    """Convert a stored move string to PGN style (``O-O``, ``=Q``, keep ``+``/``#``)."""
+    suffix = ""
+    if san and san[-1] in "+#":
+        suffix, san = san[-1], san[:-1]
+    san = san.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
+    # pawn promotion "e8Q" / "exd8Q" -> "e8=Q" / "exd8=Q"
+    if len(san) >= 2 and san[-1] in "QRBN" and san[-2].isdigit():
+        san = san[:-1] + "=" + san[-1]
+    return san + suffix
 
 
 class Game:
@@ -51,6 +73,8 @@ class Game:
         board: "Board | None" = None,
         turn: int = 0,
         draw: "int | None" = None,
+        move_history: "list[str] | None" = None,
+        position_history: "list[str] | None" = None,
     ):
         """
         Initializes a new chess game.
@@ -78,6 +102,11 @@ class Game:
         self.turn = Color(turn)
         self.draw: Color | None = Color(draw) if draw is not None else None
         self.last_move: Move | None = None
+        # SAN of every move played (for PGN); position keys for threefold detection.
+        self.move_history: list[str] = list(move_history) if move_history is not None else []
+        self.position_history: list[str] = (
+            list(position_history) if position_history is not None else [position_key(self.board, self.turn)]
+        )
 
     def __str__(self):
         """
@@ -102,21 +131,38 @@ class Game:
 
     @property
     def result(self) -> GameStatus:
-        """The current :class:`GameStatus` (``IN_PLAY``, ``CHECKMATE``, or ``DRAW``)."""
+        """The current :class:`GameStatus` (``IN_PLAY``/``WHITE_WON``/``BLACK_WON``/``DRAW``)."""
         return self.board.status
 
     @property
     def winner(self) -> "Color | None":
-        """The winning :class:`Color` on checkmate, or ``None`` if drawn/ongoing."""
-        if self.board.status == GameStatus.CHECKMATE:
-            # the mating side is the one that just moved — the opposite of to_move
-            return self.turn.opponent
+        """The winning :class:`Color`, or ``None`` if drawn or still in play."""
+        if self.board.status == GameStatus.WHITE_WON:
+            return Color.WHITE
+        if self.board.status == GameStatus.BLACK_WON:
+            return Color.BLACK
         return None
+
+    @property
+    def termination(self) -> "Termination | None":
+        """Why the game ended (:class:`Termination`), or ``None`` while in play."""
+        return self.board.termination
 
     @property
     def draw_offered_by(self) -> "Color | None":
         """The :class:`Color` with an open draw offer, or ``None`` if there is none."""
         return self.draw
+
+    @property
+    def fen(self) -> str:
+        """The current position as a FEN string."""
+        return to_fen(self.board, self.turn)
+
+    @classmethod
+    def from_fen(cls, fen: str, white_name: str = "", black_name: str = "", **ids) -> "Game":
+        """Build a game from a FEN position (engine/local use; sets board + turn)."""
+        board, turn = parse_fen(fen)
+        return cls(board=board, turn=turn, white_name=white_name, black_name=black_name, **ids)
 
     def is_players_turn(self, player_id: int) -> bool:
         """
@@ -163,16 +209,76 @@ class Game:
         m = self.board.move(move, self.turn)
         self.last_move = m
         self.turn = self.turn.opponent  # Changes whose turn it is
+
+        # threefold repetition needs the position history, which lives here on Game
+        key = position_key(self.board, self.turn)
+        self.position_history.append(key)
+        if self.board.status == GameStatus.IN_PLAY and self.position_history.count(key) >= 3:
+            self.board.status = GameStatus.DRAW
+            self.board.termination = Termination.THREEFOLD
+
+        self.move_history.append(self._record_san(move))
         return m
 
-    def render(self):
-        """
-        Render the current board to an image (both orientations, last move highlighted).
+    def _record_san(self, move: str) -> str:
+        """Canonicalize the played move for the history, appending a +/# suffix."""
+        san = move.rstrip("+#")
+        if self.board.status in (GameStatus.WHITE_WON, GameStatus.BLACK_WON):
+            san += "#"
+        elif self.board.check_for_check(self.turn):  # self.turn is the side now to move
+            san += "+"
+        return san
 
+    def resign(self, player_id: int):
+        """
+        Resign the game on behalf of ``player_id``; the opponent wins.
+
+        :raises ChessError.GameOverError: if the game has already ended.
+        :raises ValueError: if ``player_id`` is not a player in this game.
+        """
+        if self.board.status != GameStatus.IN_PLAY:
+            raise ChessError.GameOverError()
+        if player_id not in (self.wid, self.bid):
+            raise ValueError(f"{player_id} is not a player in this game")
+        resigner = Color.WHITE if player_id == self.wid else Color.BLACK
+        self.board.status = GameStatus.won_by(resigner.opponent)
+        self.board.termination = Termination.RESIGNATION
+
+    def legal_moves(self) -> list[dict]:
+        """The legal moves for the side to move (see :meth:`Board.legal_moves`)."""
+        return self.board.legal_moves(self.turn)
+
+    def pgn(self) -> str:
+        """Export the game as PGN (headers + movetext + result token)."""
+        result = _RESULT_TOKENS[self.board.status]
+        headers = [
+            f'[White "{self.wname}"]',
+            f'[Black "{self.bname}"]',
+            f'[Result "{result}"]',
+        ]
+        if self.board.termination is not None:
+            headers.append(f'[Termination "{self.board.termination.value}"]')
+
+        movetext = ""
+        for idx, san in enumerate(self.move_history):
+            if idx % 2 == 0:
+                movetext += f"{idx // 2 + 1}. "
+            movetext += _pgn_move(san) + " "
+        movetext += result
+
+        return "\n".join(headers) + "\n\n" + movetext.strip() + "\n"
+
+    def render(self, perspective=None):
+        """
+        Render the current board to an image (last move highlighted).
+
+        :param perspective: ``None`` for the wide both-orientations-with-names image,
+            or ``Color.WHITE``/``Color.BLACK`` (or ``"white"``/``"black"``) for a
+            single board from that side's point of view (board only).
         :return: A `PIL.Image` of the board.
         :rtype: PIL.Image
         """
-        return render_board(self.board, self.wname, self.bname, self.last_move)
+        return render_board(self.board, self.wname, self.bname, self.last_move, perspective=perspective)
 
     def draw_offer(self, player_id: int):
         """
@@ -223,6 +329,7 @@ class Game:
             raise ChessError.DrawNotOfferedError()
 
         self.board.status = GameStatus.DRAW  # Set game status to draw
+        self.board.termination = Termination.AGREEMENT
 
     def draw_decline(self, player_id: int):
         """
@@ -247,11 +354,12 @@ class Game:
 
         self.draw = None
 
-    def save(self, image_fp: str):
+    def save(self, image_fp: str, perspective=None):
         """
         Saves the current state of the chessboard as a PNG image file.
 
         :param image_fp: The file path where the board image will be saved.
-        :type image_fp: str
+        :param perspective: see :meth:`render` — ``None`` for the wide view, or a
+            color for a single-perspective board.
         """
-        self.render().save(image_fp)
+        self.render(perspective).save(image_fp)
