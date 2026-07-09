@@ -6,11 +6,22 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ..assets import asset_path
 from .board import Board
+from .enums import Color
 from .move import Move
 from .notation import FILES
 
 # The rendered board uses 68x68 pixel tiles.
 TILE = 68
+
+
+def _as_color(perspective) -> Color:
+    """Normalize a perspective argument (``Color`` / ``"white"`` / ``"black"`` / 0 / 1)."""
+    if isinstance(perspective, str):
+        key = perspective.lower()
+        if key in ("white", "black"):
+            return Color.WHITE if key == "white" else Color.BLACK
+        raise ValueError(f"perspective must be 'white' or 'black', got {perspective!r}")
+    return Color(perspective)
 
 
 @cache
@@ -58,28 +69,43 @@ def _render_side(grid, small_font, flip, highlights):
     return board_img
 
 
-def render_board(board: Board, white_name: str, black_name: str, move: "Move | None" = None):
+def render_board(
+    board: Board, white_name: str = "", black_name: str = "", move: "Move | None" = None, perspective=None
+):
     """
-    Render the current board from both players' perspectives onto one image.
+    Render the board to a :class:`PIL.Image.Image`.
 
-    Produces the white-oriented and black-oriented boards side by side, overlays
-    the (truncated) player names, and highlights the source and destination of
-    ``move`` in orange when supplied.
+    - ``perspective=None`` (default): the wide image with **both** the white- and
+      black-oriented boards side by side and the player names overlaid.
+    - ``perspective`` = ``Color.WHITE``/``Color.BLACK`` (or ``"white"``/``"black"``):
+      a single board from that side's point of view — **board only**, no names.
+
+    The source and destination of ``move`` are highlighted in orange when supplied.
 
     :param board: The board to render (after the move has been applied).
-    :param white_name: White's name (truncated to 10 characters).
-    :param black_name: Black's name (truncated to 10 characters).
+    :param white_name: White's name (truncated to 10 chars; wide view only).
+    :param black_name: Black's name (truncated to 10 chars; wide view only).
     :param move: The most recent move, whose squares are highlighted, or ``None``.
-    :return: A composited :class:`PIL.Image.Image` of both boards.
+    :param perspective: ``None`` for the wide both-sides view, or a color/``"white"``/
+        ``"black"`` for a single-perspective board.
     :rtype: PIL.Image.Image
     """
-    white_name = white_name[:10]
-    black_name = black_name[:10]
+    small_font = ImageFont.truetype(asset_path("Roboto-Black.ttf"), 15)
 
-    roboto = asset_path("Roboto-Black.ttf")
-    big_font = ImageFont.truetype(roboto, 60)
-    small_font = ImageFont.truetype(roboto, 15)
+    # single-perspective: one board, no names
+    if perspective is not None:
+        color = _as_color(perspective)
+        if color == Color.WHITE:
+            grid, flip = board.board, False
+            highlights = [(sq.i, sq.j) for sq in (move.prev, move.to)] if move is not None else []
+        else:
+            grid = [list(reversed(row)) for row in reversed(board.board)]
+            flip = True
+            highlights = [(7 - sq.i, 7 - sq.j) for sq in (move.prev, move.to)] if move is not None else []
+        return _render_side(grid, small_font, flip, highlights)
 
+    # wide view: both perspectives + names
+    big_font = ImageFont.truetype(asset_path("Roboto-Black.ttf"), 60)
     template = Image.open(asset_path("img/template.png"))
 
     # the last move's squares, expressed in each board's own (row, col) coordinates
@@ -96,7 +122,7 @@ def render_board(board: Board, white_name: str, black_name: str, move: "Move | N
     template.alpha_composite(_render_side(black_grid, small_font, True, black_highlights), (646, 0))
 
     draw = ImageDraw.Draw(template)
-    draw.text((0, 544), white_name, (255, 255, 255), font=big_font)
-    draw.text((646, 544), black_name, (255, 255, 255), font=big_font)
+    draw.text((0, 544), white_name[:10], (255, 255, 255), font=big_font)
+    draw.text((646, 544), black_name[:10], (255, 255, 255), font=big_font)
 
     return template

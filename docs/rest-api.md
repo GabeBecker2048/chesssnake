@@ -15,10 +15,12 @@ response you can get, and how a client is expected to interpret them.
 - [Data models](#data-models)
 - [Error handling](#error-handling)
 - [Player identity and versioning](#player-identity-and-versioning)
+- [Generations and the game archive](#generations-and-the-game-archive)
 - [Endpoints](#endpoints)
   - [Health](#get-health)
   - [Create or load a game](#post-v1games)
   - [Get a game's state](#get-v1gamesgwb)
+  - [List past games (archive)](#get-v1gamesgwbarchive)
   - [Play a move](#post-v1gamesgwbmoves)
   - [Resign](#post-v1gamesgwbresign)
   - [Offer / accept / decline a draw](#post-v1gamesgwbdrawaction)
@@ -98,6 +100,7 @@ and nested inside a `MoveResult`.
 | `fen` | string | The full position as standard [FEN](#fen) — placement, side to move, castling, en passant, and the move clocks. |
 | `status` | integer | Outcome: `0` = in play, `1` = white won, `2` = black won, `3` = draw. |
 | `version` | integer | Monotonic version, bumped on every state change (for [optimistic concurrency](#optimistic-concurrency)). |
+| `generation` | integer | Which game between this triple this is (`1` = first; higher = a later rematch) — see [generations](#generations-and-the-game-archive). |
 | `draw` | integer \| null | Who has an open draw offer: `0` = white, `1` = black, `null` = none. |
 | `termination` | string \| null | Why a finished game ended (see [result model](#result-model)), or `null` while in play. |
 | `wname` | string \| null | White's display name. |
@@ -110,6 +113,7 @@ Example (after `1. e4`):
   "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
   "status": 0,
   "version": 2,
+  "generation": 1,
   "draw": null,
   "termination": null,
   "wname": "Bob",
@@ -282,6 +286,22 @@ other — versioning just lets the *client* detect that it was working from stal
 
 ---
 
+## Generations and the game archive
+
+A triple `(group_id, white_id, black_id)` can own **many** games over time — one per
+**generation**. The *current* game is the one with the highest generation.
+
+- `POST /v1/games` returns the current game if it's still in play, or — once the
+  current game is **finished** — creates a **fresh** game at the next generation
+  (so the same two players can rematch). Finished games are preserved.
+- Mutations (`/moves`, `/resign`, `/draw/*`) always act on the current game.
+- Read routes take an optional `?generation=N` to view a past (finished, read-only)
+  game; the default is the current game. `GET …/archive` lists every generation.
+- `GET /v1/games` (current games) and `GET …/exists` report **only active** games —
+  so a finished game between two players no longer blocks a new challenge.
+
+---
+
 ## Endpoints
 
 Path parameters are written `{g}` = `group_id`, `{w}` = `white_id`, `{b}` =
@@ -305,8 +325,10 @@ Liveness probe. Unversioned and never authenticated.
 
 ### `POST /v1/games`
 
-Load the game for a triple, **creating a fresh one if it doesn't exist** (idempotent
-get-or-create). This is how a client "opens" a game.
+Open the **current** game for a triple: return it if one is in progress, create one
+if none exists, or start a **new generation** if the current game is already
+finished (see [generations](#generations-and-the-game-archive)). This is how a client
+"opens" a game or starts a rematch.
 
 - **Request body**
 
@@ -323,25 +345,49 @@ get-or-create). This is how a client "opens" a game.
   ```
 
 - **Response** `200 OK` — a [`GameState`](#gamestate). A brand-new game has the
-  starting position, `turn: 0`, `status: 0`, `draw: null`.
+  starting position, `status: 0`, `draw: null`, and its `generation` (1 for the first
+  game between the triple, higher for a rematch after a finished game).
 - **Errors:** `422 SQLIdError` if any id is out of BIGINT range; `401` if a key is
   required and missing.
-- **Client behavior:** call this once to obtain the current state, then drive the game
-  with `/moves`. Calling it again always returns the *existing* row if the game already
-  exists — it never resets a game in progress.
+- **Client behavior:** call this to obtain the current state, then drive the game with
+  `/moves`. It never resets a game in progress; once a game **ends**, calling it again
+  starts the next generation (the finished game stays in the [archive](#get-v1gamesgwbarchive)).
 
 ---
 
 ### `GET /v1/games/{g}/{w}/{b}`
 
-Fetch the current state of an existing game without modifying it.
+Fetch a game's state without modifying it.
 
+- **Query params:** `generation` (optional) — a past game to view; default = current.
 - **Response** `200 OK` — a [`GameState`](#gamestate).
-- **Errors:** `404 GameNotFoundError` if there is no such game; `422 SQLIdError`;
-  `401`.
+- **Errors:** `404 GameNotFoundError` if there is no such game (or generation);
+  `422 SQLIdError`; `401`.
 - **Client behavior:** use this to refresh — e.g. poll it to detect that the opponent
   has moved (compare `version`, `fen`, or `status`). Prefer this over re-`POST`ing
-  `/v1/games` when you only want to read (it won't create a game as a side effect).
+  `/v1/games` when you only want to read (it won't create/rematch as a side effect).
+
+The `generation` query param is accepted the same way on `/legal-moves`, `/history`,
+`/pgn`, `/fen`, `/image`, and `DELETE`.
+
+---
+
+### `GET /v1/games/{g}/{w}/{b}/archive`
+
+List every game (generation) between the triple — the current game plus finished
+ones — oldest first.
+
+- **Response** `200 OK`
+
+  ```json
+  { "games": [
+    { "generation": 1, "fen": "…", "status": 2, "termination": "checkmate", "updated_at": "2026-07-08T22:41:03" },
+    { "generation": 2, "fen": "…", "status": 0, "termination": null, "updated_at": "2026-07-08T22:44:10" }
+  ] }
+  ```
+- **Errors:** `422 SQLIdError`, `401`. (An empty `games` list if the triple has no games.)
+- **Client behavior:** build a "past games" screen; fetch a specific one with
+  `?generation=`.
 
 ---
 
@@ -482,35 +528,36 @@ in every JSON response as `state.fen`.
 
 ### `GET /v1/games/{g}/{w}/{b}/image`
 
-Render the current board to a PNG **on the server**. This lets a frontend display the
-board without any chess/rendering code of its own.
+Render the board to a PNG **on the server**, so a frontend can display it without any
+chess/rendering code of its own.
 
-- **Response** `200 OK` with `Content-Type: image/png` — raw PNG bytes (a side-by-side
-  white-oriented and black-oriented board with the player names).
-- **Errors:** `404 GameNotFoundError`, `422 SQLIdError`, `401`. (Error bodies are JSON
-  as usual, even though success is a PNG.)
-- **Client behavior:** display or cache the bytes as an image. The image reflects the
-  latest stored position; request it again after a move to refresh. (It does not
-  highlight the last move — that information is available in `MoveResult` from the moves
-  endpoint if you render highlights yourself.)
+- **Query params:**
+  - `perspective` (optional) — `white` or `black` for a **single board** from that
+    side's point of view (board only, no names). Omit for the default **wide** image
+    (both orientations side by side with the player names).
+  - `generation` (optional) — render a past game.
+- **Response** `200 OK`, `Content-Type: image/png` — raw PNG bytes.
+- **Errors:** `422` (bad `perspective` → request-validation error, or an out-of-range
+  id → `SQLIdError`), `404 GameNotFoundError`, `401`. (Error bodies are JSON.)
+- **Client behavior:** display/cache the bytes. The image reflects the latest stored
+  position; request it again after a move to refresh.
 
 ---
 
 ### `DELETE /v1/games/{g}/{w}/{b}`
 
-Delete a game (typically after it has ended).
+Delete a game and its moves.
 
-- **Response** `200 OK` → `{ "status": "ok" }`. Deleting a non-existent game is a
-  no-op and still returns `200`.
+- **Query params:** `generation` (optional) — a specific game to delete; default = the
+  current game.
+- **Response** `200 OK` → `{ "status": "ok" }` (no-op + `200` if nothing matched).
 - **Errors:** `422 SQLIdError`, `401`.
-- **Client behavior:** after deletion, the triple is free to be re-created fresh by a
-  subsequent `POST /v1/games`.
 
 ---
 
 ### `GET /v1/games`
 
-List the opponents a player currently has active games with, in a group.
+List the opponents a player has an **active** (in-play) game with, in a group.
 
 - **Query params:** `player_id` (required), `group_id` (optional, default `0`).
 - **Response** `200 OK`
@@ -519,18 +566,20 @@ List the opponents a player currently has active games with, in a group.
   { "opponents": [2, 5, 9] }
   ```
 
-  The list is the ids of the other player in each of `player_id`'s games in that group
-  (empty list if none).
+  Only games in progress count (finished games are excluded), so each opponent appears
+  at most once.
 - **Errors:** `422 SQLIdError`, `401`.
-- **Client behavior:** use it to build a "your games" list. To then load a specific
-  game you still need to know which side each player is; pair it with
-  `GET /v1/games/{g}/exists`.
+- **Client behavior:** use it to build an "ongoing games" list. To load a specific game
+  you also need each player's color; pair it with `GET /v1/games/{g}/exists`. For
+  *finished* games, use `GET …/archive`.
 
 ---
 
 ### `GET /v1/games/{g}/exists`
 
-Look up whether a game exists between two players (in either color arrangement).
+Look up whether an **active** game exists between two players (in either color
+arrangement). Finished games don't count — so this returns `null` once a game ends,
+which is what lets a rematch be challenged.
 
 - **Query params:** `player1` (required), `player2` (required). `{g}` is the group.
 - **Response** `200 OK`

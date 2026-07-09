@@ -268,14 +268,17 @@ class Game:
 
         return "\n".join(headers) + "\n\n" + movetext.strip() + "\n"
 
-    def render(self):
+    def render(self, perspective=None):
         """
-        Render the current board to an image (both orientations, last move highlighted).
+        Render the current board to an image (last move highlighted).
 
+        :param perspective: ``None`` for the wide both-orientations-with-names image,
+            or ``Color.WHITE``/``Color.BLACK`` (or ``"white"``/``"black"``) for a
+            single board from that side's point of view (board only).
         :return: A `PIL.Image` of the board.
         :rtype: PIL.Image
         """
-        return render_board(self.board, self.wname, self.bname, self.last_move)
+        return render_board(self.board, self.wname, self.bname, self.last_move, perspective=perspective)
 
     def draw_offer(self, player_id: int):
         """
@@ -351,11 +354,12 @@ class Game:
 
         self.draw = None
 
-    def save(self, image_fp: str):
+    def save(self, image_fp: str, perspective=None):
         """
         Saves the current state of the chessboard as a PNG image file.
 
         :param image_fp: The file path where the board image will be saved.
-        :type image_fp: str
+        :param perspective: see :meth:`render` — ``None`` for the wide view, or a
+            color for a single-perspective board.
         """
-        self.render().save(image_fp)
+        self.render(perspective).save(image_fp)

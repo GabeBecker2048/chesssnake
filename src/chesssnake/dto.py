@@ -20,6 +20,7 @@ class GameState:
     fen: str
     status: int  # GameStatus: 0 in play, 1 white won, 2 black won, 3 draw
     version: int
+    generation: int = 1  # which game between the triple (1 = first; higher = later rematch)
     draw: int | None = None  # open draw offer: 0 white, 1 black, None none
     termination: str | None = None  # Termination.value, or None while in play
     wname: str | None = None
@@ -36,6 +37,7 @@ class GameState:
             fen=row["fen"],
             status=int(row["status"]),
             version=int(row["version"]),
+            generation=int(row["generation"]),
             draw=int(row["draw"]) if row["draw"] is not None else None,
             termination=row["termination"],
             wname=row["wname"],
