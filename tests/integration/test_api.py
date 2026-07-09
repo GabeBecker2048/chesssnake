@@ -133,6 +133,60 @@ def test_image_endpoint_returns_png(api_client):
     assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_image_perspective(api_client):
+    _create(api_client)
+    api_client.post(f"{GAME}/moves", json={"move": "e4"})
+    white = api_client.get(f"{GAME}/image", params={"perspective": "white"})
+    black = api_client.get(f"{GAME}/image", params={"perspective": "black"})
+    assert white.status_code == 200 and white.headers["content-type"] == "image/png"
+    assert white.content != black.content  # different orientations
+    # an invalid perspective is rejected by request validation
+    assert api_client.get(f"{GAME}/image", params={"perspective": "sideways"}).status_code == 422
+
+
+def _finish_game(api_client):
+    for mv in ["f3", "e5", "g4", "Qh4"]:  # fool's mate -> black wins
+        api_client.post(f"{GAME}/moves", json={"move": mv})
+
+
+def test_rematch_starts_new_generation(api_client):
+    _create(api_client)
+    _finish_game(api_client)
+    assert api_client.get(GAME).json()["generation"] == 1
+
+    rematch = _create(api_client)  # current game is over -> a fresh generation
+    assert rematch["generation"] == 2
+    assert rematch["fen"] == INITIAL_FEN and rematch["status"] == 0
+    assert api_client.get(GAME).json()["generation"] == 2  # "current" is now the new game
+
+
+def test_old_generation_is_readable(api_client):
+    _create(api_client)
+    _finish_game(api_client)
+    _create(api_client)  # start generation 2
+
+    old = api_client.get(GAME, params={"generation": 1}).json()
+    assert old["generation"] == 1 and old["status"] == 2
+    assert "Qh4#" in api_client.get(f"{GAME}/pgn", params={"generation": 1}).text
+    assert api_client.get(GAME, params={"generation": 99}).status_code == 404
+
+
+def test_archive_lists_all_generations(api_client):
+    _create(api_client)
+    _finish_game(api_client)
+    _create(api_client)
+    archive = api_client.get(f"{GAME}/archive").json()["games"]
+    assert [a["generation"] for a in archive] == [1, 2]
+    assert [a["status"] for a in archive] == [2, 0]  # gen1 black-won, gen2 in play
+
+
+def test_current_games_is_active_only(api_client):
+    _create(api_client)
+    assert api_client.get("/v1/games", params={"player_id": 1, "group_id": 10}).json()["opponents"] == [2]
+    _finish_game(api_client)  # now over -> no active game
+    assert api_client.get("/v1/games", params={"player_id": 1, "group_id": 10}).json()["opponents"] == []
+
+
 def test_delete_game(api_client):
     _create(api_client)
     api_client.post(f"{GAME}/moves", json={"move": "e4"})

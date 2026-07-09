@@ -72,7 +72,8 @@ print(game)
 
 # Rendering is separate from moving:
 game.move('Nc3')
-game.render().show()           # a PIL image of the board (last move highlighted)
+game.render().show()           # a PIL image (both perspectives + names)
+game.render(perspective="white").show()  # or a single board from one side's POV
 game.save('/path/to/img.png')  # or write it straight to disk
 ```
 
@@ -163,6 +164,10 @@ Optionally pass `player_id=` to `Game.remote(...)` so the server validates that 
 client only acts for its own side, and the client sends its last-seen `version` so a
 stale/duplicate action is rejected rather than double-applied.
 
+Once a game finishes, calling `POST /v1/games` (or `Game.remote(...)`) again starts a
+**rematch** — a new game between the same players — while the finished game is kept in
+the archive and stays readable via `?generation=`.
+
 Any REST client can drive a game without Python or a chess engine, for example:
 
 ```
@@ -172,7 +177,8 @@ POST /v1/games/789/123/456/draw/offer   {"player_id": 123}
 GET  /v1/games/789/123/456/legal-moves  -> the legal moves
 GET  /v1/games/789/123/456/pgn          -> the game as PGN
 GET  /v1/games/789/123/456/fen          -> the position as FEN
-GET  /v1/games/789/123/456/image        -> a PNG of the board
+GET  /v1/games/789/123/456/image?perspective=white  -> a PNG from white's POV
+GET  /v1/games/789/123/456/archive      -> past games between these players
 ```
 
 **The full REST API is documented in [docs/rest-api.md](docs/rest-api.md).**

@@ -56,11 +56,12 @@ class Game(BaseGame):
     moves are computed by the api-endpoint.
     """
 
-    def __init__(self, *args, client=None, player_id=None, version=None, **kwargs):
+    def __init__(self, *args, client=None, player_id=None, version=None, generation=None, **kwargs):
         # Low-level constructor. Prefer Game.local() / Game.remote().
         self._client = client
         self.player_id = player_id
         self.version = version
+        self.generation = generation
         super().__init__(*args, **kwargs)
 
     # --- factories ---------------------------------------------------------
@@ -80,6 +81,7 @@ class Game(BaseGame):
         white_name: str = "",
         black_name: str = "",
         player_id: int | None = None,
+        generation: int | None = None,
         api_url: str | None = None,
         api_key: str | None = None,
         client=None,
@@ -89,17 +91,23 @@ class Game(BaseGame):
 
         :param player_id: if given, this player is asserted on every action (the
             server rejects out-of-turn / non-participant actions with 403).
+        :param generation: load a specific past game (read-only) instead of the current
+            one; ``None`` (default) loads/creates the current game.
         :param api_url: base URL of the api-endpoint (falls back to ``CHESSSNAKE_API_URL``).
         :param api_key: optional API key sent with every request.
         :param client: an injected ``ApiClient`` (mainly for testing).
         """
         client = _make_client(api_url, client, api_key)
-        state = client.get_or_create_game(group_id, white_id, black_id, white_name, black_name)
+        if generation is None:
+            state = client.get_or_create_game(group_id, white_id, black_id, white_name, black_name)
+        else:
+            state = client.get_state(group_id, white_id, black_id, generation)
         board, turn = board_and_turn(state)
         game = cls(
             client=client,
             player_id=player_id,
             version=state.version,
+            generation=state.generation,
             white_id=white_id,
             black_id=black_id,
             group_id=group_id,
@@ -110,6 +118,11 @@ class Game(BaseGame):
             draw=state.draw,
         )
         return game
+
+    @classmethod
+    def archive(cls, white_id, black_id, group_id=0, *, api_url=None, api_key=None, client=None):
+        """List all games (generations) for a triple — summaries, oldest first."""
+        return _make_client(api_url, client, api_key).archive(group_id, white_id, black_id)
 
     @property
     def is_remote(self) -> bool:
@@ -123,6 +136,7 @@ class Game(BaseGame):
         self.board, self.turn = board_and_turn(state)
         self.draw = Color(state.draw) if state.draw is not None else None
         self.version = state.version
+        self.generation = state.generation
         if state.wname is not None:
             self.wname = state.wname
         if state.bname is not None:
@@ -133,7 +147,7 @@ class Game(BaseGame):
         from ..serialize import state_from_game
 
         return MoveResult(
-            state=state_from_game(self, self.version or 0),
+            state=state_from_game(self, self.version or 0, self.generation or 1),
             from_square=engine_move.prev.c_notation,
             to_square=engine_move.to.c_notation,
             san=self.move_history[-1],
@@ -186,30 +200,30 @@ class Game(BaseGame):
         """The legal moves in the current position (from the server if remote)."""
         if not self.is_remote:
             return super().legal_moves()
-        return self._client.legal_moves(self.gid, self.wid, self.bid)
+        return self._client.legal_moves(self.gid, self.wid, self.bid, self.generation)
 
     def pgn(self):
         """The game's PGN (from the server if remote)."""
         if not self.is_remote:
             return super().pgn()
-        return self._client.pgn(self.gid, self.wid, self.bid)
+        return self._client.pgn(self.gid, self.wid, self.bid, self.generation)
 
     def history(self):
         """The played moves as ``[{ply, san}]`` (remote only; local: use move_history)."""
         if not self.is_remote:
             return [{"ply": i + 1, "san": san} for i, san in enumerate(self.move_history)]
-        return self._client.history(self.gid, self.wid, self.bid)
+        return self._client.history(self.gid, self.wid, self.bid, self.generation)
 
     def refresh(self):
-        """Re-fetch the latest state from the server (e.g. after the opponent moved)."""
+        """Re-fetch this game's latest state from the server (e.g. after the opponent moved)."""
         if self.is_remote:
-            self._apply_state(self._client.get_state(self.gid, self.wid, self.bid))
+            self._apply_state(self._client.get_state(self.gid, self.wid, self.bid, self.generation))
 
     def end(self):
         """If the game is over, delete it from the remote database. Returns True if ended."""
         if self.is_over:
             if self.is_remote:
-                self._client.delete_game(self.gid, self.wid, self.bid)
+                self._client.delete_game(self.gid, self.wid, self.bid, self.generation)
             return True
         return False
 

@@ -36,12 +36,13 @@ def game_from_state(state: GameState, group_id, white_id, black_id, position_his
     return game
 
 
-def state_from_game(game: EngineGame, version: int) -> GameState:
+def state_from_game(game: EngineGame, version: int, generation: int = 1) -> GameState:
     """Serialize an engine :class:`Game` back into a :class:`GameState` for storage."""
     return GameState(
         fen=to_fen(game.board, game.turn),
         status=int(game.board.status),
         version=version,
+        generation=generation,
         draw=int(game.draw) if game.draw is not None else None,
         termination=game.board.termination.value if game.board.termination is not None else None,
         wname=game.wname,

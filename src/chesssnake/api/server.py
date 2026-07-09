@@ -19,6 +19,7 @@ Mutating routes accept an optional ``player_id`` (validated → 403) and an opti
 import io
 import os
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -151,6 +152,17 @@ def _load_game(group_id, white_id, black_id, row, history=None):
     return game_from_state(state, group_id, white_id, black_id, **kwargs)
 
 
+def _require_game(group_id, white_id, black_id, generation=None):
+    """Fetch a game row (current, or a specific ``generation``) or raise 404."""
+    row = ops.game_get(group_id, white_id, black_id, generation)
+    if row is None:
+        detail = f"No game for group {group_id} between {white_id} and {black_id}"
+        if generation is not None:
+            detail += f" (generation {generation})"
+        raise errors.GameNotFoundError(detail)
+    return row
+
+
 def _columns(state: GameState) -> dict:
     return {"fen": state.fen, "draw": state.draw, "status": state.status, "termination": state.termination}
 
@@ -175,11 +187,13 @@ async def create_game(body: GameCreate):
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}")
-async def get_game(group_id: int, white_id: int, black_id: int):
-    row = ops.game_get(group_id, white_id, black_id)
-    if row is None:
-        raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
-    return GameState.from_row(row).to_dict()
+async def get_game(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+    return GameState.from_row(_require_game(group_id, white_id, black_id, generation)).to_dict()
+
+
+@v1.get("/games/{group_id}/{white_id}/{black_id}/archive")
+async def game_archive(group_id: int, white_id: int, black_id: int):
+    return {"games": ops.game_archive(group_id, white_id, black_id)}
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/moves")
@@ -189,8 +203,7 @@ async def play_move(group_id: int, white_id: int, black_id: int, body: MoveBody)
         if body.player_id is not None and not game.is_players_turn(body.player_id):
             raise errors.NotYourTurnError(f"It is not player {body.player_id}'s turn to move")
         m = game.move(body.move)  # runs the engine; raises ChessError on illegal input
-        new_version = int(row["version"]) + 1
-        new_state = state_from_game(game, new_version)
+        new_state = state_from_game(game, int(row["version"]) + 1, int(row["generation"]))
         san = game.move_history[-1]
         result = MoveResult(
             state=new_state,
@@ -214,7 +227,7 @@ def _draw_or_resign(group_id, white_id, black_id, player_id, expected_version, m
         if player_id not in (white_id, black_id):
             raise errors.NotYourTurnError(f"Player {player_id} is not in this game")
         getattr(game, method)(player_id)  # draw_offer / draw_accept / draw_decline / resign
-        new_state = state_from_game(game, int(row["version"]) + 1)
+        new_state = state_from_game(game, int(row["version"]) + 1, int(row["generation"]))
         return _columns(new_state), [], new_state
 
     return ops.apply_game_change(group_id, white_id, black_id, mutate, expected_version).to_dict()
@@ -241,52 +254,47 @@ async def draw_decline(group_id: int, white_id: int, black_id: int, body: DrawBo
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/legal-moves")
-async def legal_moves(group_id: int, white_id: int, black_id: int):
-    row = ops.game_get(group_id, white_id, black_id)
-    if row is None:
-        raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
+async def legal_moves(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+    row = _require_game(group_id, white_id, black_id, generation)
     return {"moves": _load_game(group_id, white_id, black_id, row).legal_moves()}
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/history")
-async def history(group_id: int, white_id: int, black_id: int):
-    if ops.game_get(group_id, white_id, black_id) is None:
-        raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
-    return {"moves": ops.game_history(group_id, white_id, black_id)}
+async def history(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+    row = _require_game(group_id, white_id, black_id, generation)
+    return {"moves": ops.game_history(group_id, white_id, black_id, int(row["generation"]))}
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/pgn")
-async def pgn(group_id: int, white_id: int, black_id: int):
-    row = ops.game_get(group_id, white_id, black_id)
-    if row is None:
-        raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
-    sans = [m["san"] for m in ops.game_history(group_id, white_id, black_id)]
+async def pgn(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+    row = _require_game(group_id, white_id, black_id, generation)
     game = _load_game(group_id, white_id, black_id, row)
-    game.move_history = sans
+    game.move_history = [m["san"] for m in ops.game_history(group_id, white_id, black_id, int(row["generation"]))]
     return PlainTextResponse(game.pgn())
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/fen")
-async def fen(group_id: int, white_id: int, black_id: int):
-    row = ops.game_get(group_id, white_id, black_id)
-    if row is None:
-        raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
-    return PlainTextResponse(GameState.from_row(row).fen)
+async def fen(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+    return PlainTextResponse(GameState.from_row(_require_game(group_id, white_id, black_id, generation)).fen)
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/image")
-async def game_image(group_id: int, white_id: int, black_id: int):
-    row = ops.game_get(group_id, white_id, black_id)
-    if row is None:
-        raise errors.GameNotFoundError(f"No game for group {group_id} between {white_id} and {black_id}")
+async def game_image(
+    group_id: int,
+    white_id: int,
+    black_id: int,
+    generation: int | None = None,
+    perspective: Literal["white", "black"] | None = None,
+):
+    row = _require_game(group_id, white_id, black_id, generation)
     buffer = io.BytesIO()
-    _load_game(group_id, white_id, black_id, row).render().save(buffer, format="PNG")
+    _load_game(group_id, white_id, black_id, row).render(perspective=perspective).save(buffer, format="PNG")
     return Response(content=buffer.getvalue(), media_type="image/png")
 
 
 @v1.delete("/games/{group_id}/{white_id}/{black_id}")
-async def delete_game(group_id: int, white_id: int, black_id: int):
-    ops.game_delete(group_id, white_id, black_id)
+async def delete_game(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+    ops.game_delete(group_id, white_id, black_id, generation)
     return {"status": "ok"}
 
 

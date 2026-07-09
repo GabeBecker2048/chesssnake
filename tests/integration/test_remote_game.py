@@ -113,3 +113,36 @@ def test_challenge_lifecycle(remote_client):
 def test_self_challenge_raises(remote_client):
     with pytest.raises(GameError.ChallengeError):
         challenge(300, 300, group_id=10, client=remote_client)
+
+
+def _mate(game):
+    for m in ["f3", "e5", "g4", "Qh4"]:  # fool's mate -> black wins
+        game.move(m)
+
+
+def test_rematch_starts_new_generation(remote_client):
+    g = make_game(remote_client, white_id=20, black_id=21, group_id=10)
+    _mate(g)
+    assert g.generation == 1 and g.is_over
+    rematch = make_game(remote_client, white_id=20, black_id=21, group_id=10)
+    assert rematch.generation == 2 and not rematch.is_over
+
+
+def test_load_and_archive_past_games(remote_client):
+    g = make_game(remote_client, white_id=22, black_id=23, group_id=10)
+    _mate(g)
+    make_game(remote_client, white_id=22, black_id=23, group_id=10)  # start generation 2
+
+    old = Game.remote(22, 23, 10, generation=1, client=remote_client)
+    assert old.generation == 1 and old.is_over
+    assert "Qh4#" in old.pgn()
+
+    archive = Game.archive(22, 23, 10, client=remote_client)
+    assert [a["generation"] for a in archive] == [1, 2]
+
+
+def test_challenge_allowed_after_game_finishes(remote_client):
+    # a *finished* game between two players must not block a fresh challenge
+    g = make_game(remote_client, white_id=30, black_id=31, group_id=10)
+    _mate(g)
+    assert challenge(30, 31, group_id=10, client=remote_client) is False  # created, not blocked
