@@ -48,7 +48,9 @@ pip install chesssnake[api]
 ```
 
 ## Usage
-This library's API is focused around a `Game` object. Every `Game` object represents a game between two players
+This library's API is focused around a `Game` object. Every `Game` object represents a game between two players.
+
+Build games with the factory methods: `Game.local(...)` for an in-memory game, or `Game.remote(...)` for one persisted through an api-endpoint (see below).
 
 ### Basic usage
 
@@ -56,25 +58,35 @@ A simple example:
 ```Python3
 from chesssnake import Game
 
-# Initialize a new game
-game = Game(white_name="Bob", black_name="Phil")
+# Initialize a new local game
+game = Game.local(white_name="Bob", black_name="Phil")
 
-# Make moves
-game.move('e4') # Bob's move
-game.move('e5') # Phil's move
+# Make moves — move() returns the Move that was played
+game.move('e4')  # Bob's move
+game.move('e5')  # Phil's move
 
 # Print the board
 print(game)
 
-# make the move, return a PIL image object, and show the board in png format
-game.move('Nc3', img=True).show()
-
-# save the board as a png
-game.save('/path/to/your/image1.png')
-
-# make the move, and save the board as a png
-game.move('Bc5', save='/path/to/your/image2.png')
+# Rendering is separate from moving:
+game.move('Nc3')
+game.render().show()           # a PIL image of the board (last move highlighted)
+game.save('/path/to/img.png')  # or write it straight to disk
 ```
+
+### Inspecting game state
+
+Use the intention-revealing accessors instead of raw internals:
+
+```Python3
+game.to_move          # Color.WHITE or Color.BLACK — whose turn it is
+game.is_over          # True once the game has ended
+game.result           # a GameStatus: IN_PLAY, CHECKMATE, or DRAW
+game.winner           # the winning Color on checkmate, else None
+game.draw_offered_by  # the Color with an open draw offer, else None
+```
+
+`Color`, `GameStatus`, and `PieceType` are importable from `chesssnake`.
 
 ### Persisting games through the api-endpoint
 
@@ -97,34 +109,38 @@ Then start the server (the `--init-db` flag creates the schema on first run):
 chesssnake api-endpoint --host 0.0.0.0 --port 8000 --init-db
 ```
 
-Interactive API docs are served at `http://<host>:8000/docs`.
+Interactive API docs are served at `http://<host>:8000/docs`. The HTTP routes are versioned under `/v1`; the client handles that for you. To require authentication, set `CHESSSNAKE_API_KEY` on the server and pass the same `api_key=` to `Game.remote(...)`.
 
-**2. Connect game clients.** Any number of clients can share the one endpoint. Set `remote=True` and give the endpoint URL via the `api_url` argument or the `CHESSSNAKE_API_URL` environment variable:
+**2. Connect game clients.** Any number of clients can share the one endpoint. Use `Game.remote(...)`, giving the endpoint URL via the `api_url` argument or the `CHESSSNAKE_API_URL` environment variable:
 
 ```Python3
 from chesssnake import Game
 
 # If a game already exists for these ids it is loaded; otherwise a new one is created.
 # Games are unique per (white_id, black_id, group_id) — all BIGINTs.
-game = Game(
-  white_id=123,
-  black_id=456,
+game = Game.remote(
+  123,            # white_id
+  456,            # black_id
   group_id=789,
   white_name="Bob",
   black_name="Phil",
-  remote=True,
   api_url="http://localhost:8000",
+  # api_key="...",  # if the server requires one
 )
 
 game.move('e4')  # Bob's move
-game.move('e5')  # Phil's move
-
-# push the new state to the api-endpoint
-game.sync()
+game.move('e5')  # Phil's move — each move is synced automatically (auto_sync defaults to True)
 ```
 
-Pass `auto_sync=True` instead of calling `sync()` to have every move and draw action pushed to the endpoint automatically.
+Remote games sync after every move and draw action by default. Pass `auto_sync=False` to batch changes and push them yourself with `game.sync()`. A remote game is also a context manager that syncs on exit, so a forgotten `sync()` can't silently drop moves:
 
-Without `remote=True`, a `Game` is a purely local, in-memory game (no server or database required).
+```Python3
+with Game.remote(123, 456, group_id=789, api_url="http://localhost:8000", auto_sync=False) as game:
+    game.move('e4')
+    game.move('e5')
+# state is pushed here, on exit
+```
+
+Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`) are also importable from `chesssnake`.
 
 For more information, see the docs (coming soon)

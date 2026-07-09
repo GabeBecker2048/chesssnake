@@ -1,20 +1,22 @@
 from chesssnake import Game
 
-# Initialize a new game
-game = Game(white_name="Bob", black_name="Phil")
+# Initialize a new local game
+game = Game.local(white_name="Bob", black_name="Phil")
 
-# Make moves
+# Make moves (move() returns the Move that was played)
 game.move("e4")  # Bob's move
 game.move("e5")  # Phil's move
 
 # Print the board
 print(game)
 
-# make the move, and show the board in png format
-game.move("Nc3", img=True).show()
+# Rendering is separate from moving:
+game.move("Nc3")
+game.render().show()  # show the current board as an image
 
-# save the board as a png
+# save the board as a png (highlights the last move)
 game.save("/path/to/your/image1.png")
 
-# make the move, and save the board as a png
-game.move("Bc5", save="/path/to/your/image2.png")
+# inspect game state through intention-revealing accessors
+print("to move:", game.to_move)
+print("game over?", game.is_over)
