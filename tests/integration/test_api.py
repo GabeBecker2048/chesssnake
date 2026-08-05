@@ -4,9 +4,8 @@ The server runs the chess engine: clients POST moves and the server validates,
 applies, stores, and returns the new state (or a mapped error).
 """
 
-import os
-
 import pytest
+from fastapi.testclient import TestClient
 
 from chesssnake.engine import INITIAL_FEN
 
@@ -260,14 +259,37 @@ def test_invalid_id_returns_422(api_client):
     assert resp.status_code == 422 and resp.json()["error_type"] == "SQLIdError"
 
 
-def test_api_key_enforced_when_configured(api_client):
-    os.environ["CHESSSNAKE_API_KEY"] = "s3cret"
-    try:
-        assert api_client.get("/health").status_code == 200  # health stays open
-        assert api_client.post("/v1/games", json={"group_id": 10, "white_id": 1, "black_id": 2}).status_code == 401
-        ok = api_client.post(
-            "/v1/games", json={"group_id": 10, "white_id": 1, "black_id": 2}, headers={"X-API-Key": "s3cret"}
-        )
-        assert ok.status_code == 200
-    finally:
-        del os.environ["CHESSSNAKE_API_KEY"]
+@pytest.fixture
+def auth_client(api_client, settings):
+    """
+    A second app that requires an API key, sharing the already-initialized pool.
+
+    Two apps with different settings can coexist because settings live on the app
+    rather than in the environment; ``api_client`` is requested first so the
+    connection pool already exists when this app's lifespan runs.
+    """
+    from chesssnake.api.server import create_app
+    from chesssnake.config import Settings
+
+    auth = Settings(
+        api={"require_auth": True, "api_key": "s3cret"},
+        database={"url": settings.database.url},
+    )
+    with TestClient(create_app(auth)) as client:
+        yield client
+
+
+def test_api_key_enforced_when_required(auth_client):
+    game = {"group_id": 10, "white_id": 1, "black_id": 2}
+    assert auth_client.get("/health").status_code == 200  # health stays open
+
+    rejected = auth_client.post("/v1/games", json=game)
+    assert rejected.status_code == 401
+    assert rejected.json()["error_type"] == "AuthError"
+
+    assert auth_client.post("/v1/games", json=game, headers={"X-API-Key": "s3cret"}).status_code == 200
+
+
+def test_no_api_key_required_by_default(api_client):
+    """A key set without require_auth must not silently start enforcing auth."""
+    assert api_client.post("/v1/games", json={"group_id": 11, "white_id": 1, "black_id": 2}).status_code == 200

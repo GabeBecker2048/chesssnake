@@ -22,3 +22,5 @@ coverage.xml
 
 # local Postgres data (docker-compose volume)
 postgres-db/
+# local configuration (./chesssnake.toml is the first discovery candidate)
+/chesssnake.toml

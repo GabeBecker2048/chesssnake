@@ -4,16 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chesssnake"
-version = "0.7.1"
+version = "0.8.0"
 description = "A robust Chess API and backend"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Gabe Becker", email = "gabebecker2048@gmail.com" }]
 dependencies = ["pillow>=11.3"]
 classifiers = [
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -31,14 +30,14 @@ chesssnake = "chesssnake.cli:main"
 # For playing remote games (Game(remote=True)) against a chesssnake api-endpoint.
 client = ["requests>=2.31"]
 # For running the api-endpoint server (`chesssnake api-endpoint`).
-api = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "psycopg2-binary>=2.9"]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "psycopg2-binary>=2.9", "pydantic>=2.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["chesssnake*"]
 
 [tool.setuptools.package-data]
-chesssnake = ["data/*.sql", "data/*.ttf", "data/img/*.png", "py.typed"]
+chesssnake = ["data/*.sql", "data/*.toml", "data/*.ttf", "data/img/*.png", "py.typed"]
 
 [dependency-groups]
 dev = [
@@ -69,7 +68,7 @@ show_missing = true
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -85,12 +84,17 @@ ignore = ["E501"]
 # Tests intentionally compare with `== None` to exercise Square.__eq__ (E711),
 # and use `pytest.importorskip(...)` before importing optional deps (E402).
 "tests/**" = ["E711", "E402"]
+# UP042 wants `Termination(str, Enum)` rewritten as a StrEnum now that 3.11 is the
+# floor. That changes `str(member)` from "Termination.X" to "x", which is a
+# behavioral change to a serialized value — worth doing deliberately, not as
+# lint fallout from a version bump.
+"src/chesssnake/engine/enums.py" = ["UP042"]
 
 [tool.mypy]
 # Lenient starting point (per the refactor plan): type-check the package without
 # requiring every function to be annotated yet. Tighten in later phases.
 files = ["src/chesssnake"]
-python_version = "3.10"
+python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
