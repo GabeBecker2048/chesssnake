@@ -1,4 +1,10 @@
-# A local PostgreSQL for the api-endpoint to talk to.
+# A local PostgreSQL for an api-endpoint you run from source (`uv run chesssnake
+# api-endpoint`). This is the development database only -- it does not run
+# chesssnake itself.
+#
+# To run the whole stack in containers instead, see docker/:
+#   docker compose -f docker/compose.sqlite.yaml   up --build   # no server at all
+#   docker compose -f docker/compose.postgres.yaml up --build   # api + postgres
 #
 # Create the schema with `chesssnake init-db` (or `api-endpoint --init-db`);
 # since 0.9.0 it is built from the SQLAlchemy metadata rather than a bundled

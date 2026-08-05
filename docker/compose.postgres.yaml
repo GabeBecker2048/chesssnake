@@ -1,0 +1,63 @@
+# chesssnake api-endpoint backed by PostgreSQL.
+#
+#   docker compose -f docker/compose.postgres.yaml up --build
+#   curl http://localhost:8000/health
+#
+# Two containers: the api-endpoint and a PostgreSQL server. Use this over
+# compose.sqlite.yaml when you want multiple api-endpoint workers, or the
+# database on its own host.
+#
+# The credentials below are development defaults. Override them for anything
+# reachable from outside your machine — POSTGRES_PASSWORD and the password in
+# CHESSSNAKE__DATABASE__URL have to agree.
+
+name: chesssnake-postgres
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-chesssnake}
+      POSTGRES_USER: ${POSTGRES_USER:-chesssnake}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chesssnake}
+    # No published port: only the api service needs to reach it. Add
+    # `ports: ["5433:5432"]` if you want to connect with psql from the host.
+    volumes:
+      - chesssnake-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The api container waits on this, so it never starts against a server
+      # that is still initializing.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chesssnake} -d ${POSTGRES_DB:-chesssnake}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      # The repository root, so the build can see pyproject.toml and src/.
+      context: ..
+      dockerfile: docker/build/Dockerfile
+    image: chesssnake:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # `db` is the service name, resolved on the compose network. The schema is
+      # created by the api-endpoint, not by a mounted .sql script — since 0.9.0 it
+      # is generated from the SQLAlchemy metadata.
+      CHESSSNAKE__DATABASE__URL: postgresql://${POSTGRES_USER:-chesssnake}:${POSTGRES_PASSWORD:-chesssnake}@db:5432/${POSTGRES_DB:-chesssnake}
+      CHESSSNAKE__DATABASE__INIT_SCHEMA: "1"
+      # Unlike SQLite, PostgreSQL locks per row, so the pool is worth sizing.
+      CHESSSNAKE__DATABASE__POOL_MIN_SIZE: "1"
+      CHESSSNAKE__DATABASE__POOL_MAX_SIZE: "10"
+      # Uncomment both to require an X-API-Key header on every /v1 route.
+      # CHESSSNAKE__API__REQUIRE_AUTH: "1"
+      # CHESSSNAKE__API__API_KEY: "change-me"
+    ports:
+      - "8000:8000"
+
+volumes:
+  chesssnake-pgdata:
