@@ -179,6 +179,21 @@ Then pass the same `api_key=` to `Game.remote(...)`. See
 [docs/configuration.md](docs/configuration.md) for the full list of settings, and
 `chesssnake config init` to write a fully commented starter config.
 
+### Running in Docker
+
+Both backends have a ready-made stack under `docker/`, built from
+`docker/build/Dockerfile`:
+
+```commandline
+docker compose -f docker/compose.sqlite.yaml up --build     # one container, no database server
+docker compose -f docker/compose.postgres.yaml up --build   # api-endpoint + PostgreSQL
+```
+
+Either way the api-endpoint is on `http://localhost:8000`. The image carries every
+extra, so the same image serves both stacks — the backend is chosen at runtime by
+`CHESSSNAKE__DATABASE__URL`. `./docker/smoke-test.sh` builds the image and plays a
+full game against each stack.
+
 **2. Connect game clients.** Any number of clients can share the one endpoint. Use `Game.remote(...)`, giving the endpoint URL via the `api_url` argument or the `CHESSSNAKE__CLIENT__API_URL` environment variable:
 
 ```Python3
