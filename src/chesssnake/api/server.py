@@ -28,8 +28,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from ..config import Settings, resolve
-from ..db import errors, sql
-from ..db import postgres as ops
+from ..db import engine as db_engine
+from ..db import errors, schema
+from ..db import operations as ops
 from ..dto import GameState, MoveResult
 from ..engine import INITIAL_FEN, from_fen, position_key
 from ..engine import errors as chess_errors
@@ -353,16 +354,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app):
         # The guard keeps a second app in the same process (as the tests build)
-        # from replacing a working pool; its database settings are ignored.
-        if sql.connection_pool is None:
-            sql.initialize_connection_pool(
+        # from replacing a working engine; its database settings are ignored.
+        owns_engine = db_engine.current_engine() is None
+        if owns_engine:
+            engine = db_engine.initialize_engine(
                 settings.database.url,
-                minconn=settings.database.pool_min_size,
-                maxconn=settings.database.pool_max_size,
+                pool_min_size=settings.database.pool_min_size,
+                pool_max_size=settings.database.pool_max_size,
+                sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
             )
             if settings.database.init_schema:
-                sql.psql_db_schema_init(settings.database.url)
-        yield
+                schema.create_all(engine)
+        try:
+            yield
+        finally:
+            # Only the app that created the engine disposes it, so a second app
+            # shutting down cannot pull the connection pool out from under the first.
+            if owns_engine:
+                db_engine.dispose_engine()
 
     app = FastAPI(title="chesssnake api-endpoint", lifespan=lifespan)
     app.state.settings = settings

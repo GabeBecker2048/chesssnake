@@ -54,15 +54,57 @@ reported as a warning rather than silently ignored.
 | `api` | `port` | integer | `8000` | Port the api-endpoint binds to. |
 | `api` | `require_auth` | boolean | `false` | Require a matching `X-API-Key` header on all `/v1` routes. |
 | `api` | `api_key` | string | unset | The key clients must send as `X-API-Key`. Secret. |
-| `database` | `url` | string | unset | Connection string; the scheme selects the backend. |
+| `database` | `url` | string | unset | Connection **URL**; the scheme selects the backend. |
 | `database` | `pool_min_size` | integer | `1` | Minimum pooled connections. |
 | `database` | `pool_max_size` | integer | `10` | Maximum pooled connections. |
 | `database` | `init_schema` | boolean | `false` | Create the schema when the server starts. |
+| `database` | `sqlite_busy_timeout` | integer (ms) | `5000` | How long a blocked SQLite writer waits. Ignored on PostgreSQL. |
 | `client` | `api_url` | string | unset | Base URL a remote `Game` connects to. **Environment only.** |
 | `client` | `api_key` | string | unset | Key a remote `Game` sends. Secret. **Environment only.** |
 
 Booleans accept `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` from the
 environment; the config file uses real TOML booleans.
+
+## Choosing a backend
+
+The `database.url` scheme selects the backend. There is no separate "which
+database" setting to drift out of sync with the connection details.
+
+**SQLite** — one file, no server, and no compiled dependencies:
+
+```toml
+[database]
+url = "sqlite:///chesssnake.db"          # relative to the working directory
+# url = "sqlite:////var/lib/chesssnake/chess.db"   # absolute (note four slashes)
+```
+
+Count the slashes: three means a relative path, four means absolute. A relative
+path resolves against the process's working directory, so a service started from
+a different directory silently opens a different database — prefer the absolute
+form for anything long-lived.
+
+SQLite is configured for concurrent use: WAL journaling so readers don't block the
+writer, a `busy_timeout`, and an immediate write lock for read-modify-write
+operations. That makes it correct for **one api-endpoint process serving many
+clients**. It is not suitable for several worker processes writing at once, and it
+must not live on a network filesystem, where its locking is unreliable.
+
+**PostgreSQL** — needs a server and the `postgres` extra:
+
+```commandline
+pip install 'chesssnake[api,postgres]'
+```
+
+```toml
+[database]
+url = "postgresql://user:password@localhost:5432/chesssnake"
+```
+
+Use it for multiple workers, or when the database lives on another host.
+
+Only URL-form connection strings are accepted. libpq keyword strings
+(`dbname='chess' user='u'`) worked before 0.9.0 and no longer do; the startup
+error shows the URL to use instead.
 
 ## Authentication
 

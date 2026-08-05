@@ -1,5 +1,9 @@
--- chesssnake schema initialization.
--- Idempotent: safe to run against a fresh or already-initialized database.
+-- FROZEN: the chesssnake schema as shipped through 0.8.0, kept only as a test
+-- fixture. Databases deployed before 0.9.0 were created by this script, so
+-- tests/integration/test_schema_compat.py builds it alongside the SQLAlchemy
+-- MetaData and compares the two by reflection. Do not edit: it documents what
+-- already exists in the wild. The live schema is src/chesssnake/db/schema.py.
+
 
 -- Games Table
 -- The board (plus turn, castling rights, en-passant, and the move clocks) is stored

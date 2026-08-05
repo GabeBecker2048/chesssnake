@@ -13,7 +13,7 @@ def asset_path(relpath: str) -> str:
     Return the filesystem path to a packaged asset under ``chesssnake/data``.
 
     :param relpath: Path relative to the ``data`` directory, e.g.
-        ``"img/template.png"`` or ``"init.sql"``.
+        ``"img/template.png"`` or ``"chesssnake.toml"``.
     :type relpath: str
     :return: Absolute path to the asset as a string.
     :rtype: str

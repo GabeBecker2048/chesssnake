@@ -12,9 +12,9 @@ class SQLIdError(SQLError):
     def __init__(self, id_):
         msg = "\n".join(
             [
-                "One of the given ids is invalid for a PostgreSQL database:",
+                "One of the given ids is invalid:",
                 f"  id: {id_}",
-                "All IDs must be BIGINT NOT NULL.",
+                "All ids must be integers that fit in a signed 64-bit integer (BIGINT).",
             ]
         )
         super().__init__(msg)
@@ -33,17 +33,22 @@ class SQLAuthError(SQLError):
             [
                 "No database connection string is configured.",
                 "",
+                "The URL scheme selects the backend:",
+                "  sqlite:///chesssnake.db                                  (a local file, no server)",
+                "  postgresql://user:password@localhost:5432/chesssnake     (needs the `postgres` extra)",
+                "",
                 "Set it in any one of these places (later ones win):",
                 "  1. In your config file, under the [database] table:",
                 "       [database]",
-                "       url = 'postgresql://user:password@localhost:5432/chesssnake'",
+                "       url = 'sqlite:///chesssnake.db'",
                 "  2. As an environment variable:",
-                "       CHESSSNAKE__DATABASE__URL='postgresql://user:password@localhost:5432/chesssnake'",
+                "       CHESSSNAKE__DATABASE__URL='sqlite:///chesssnake.db'",
                 "  3. On the command line:",
-                "       chesssnake api-endpoint --database-url 'postgresql://user:password@localhost:5432/chesssnake'",
+                "       chesssnake api-endpoint --database-url sqlite:///chesssnake.db",
                 "",
-                "Both URL and keyword ('dbname=... user=...') connection strings are accepted.",
-                "Run `chesssnake config show` to see the current settings and where each one came from.",
+                "Only URL-form connection strings are accepted; libpq keyword strings",
+                "(dbname=... user=...) are not. Run `chesssnake config init` to write a",
+                "commented config file, or `chesssnake config show` to see current settings.",
             ]
         )
         super().__init__(msg)

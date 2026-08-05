@@ -1,8 +1,8 @@
 # A local PostgreSQL for the api-endpoint to talk to.
 #
-# The schema is loaded from the packaged init.sql on first start. Point the
-# api-endpoint at it with the DSN below — note the host port is 5433, so the
-# port must be explicit in the connection string:
+# Create the schema with `chesssnake init-db` (or `api-endpoint --init-db`);
+# since 0.9.0 it is built from the SQLAlchemy metadata rather than a bundled
+# .sql file. Note the host port is 5433, so it must be explicit in the URL:
 #
 #   export CHESSSNAKE__DATABASE__URL=postgresql://chesssnake@localhost:5433/chesssnake
 #   chesssnake api-endpoint
@@ -18,5 +18,4 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - ./src/chesssnake/data/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./postgres-db:/var/lib/postgresql/data
