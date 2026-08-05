@@ -35,16 +35,27 @@ class _MoveMarker:
         self.to = to
 
 
+# Environment fallbacks for remote games. These must equal
+# ``config.env_name("client", ...)``; a test asserts it, because this module
+# deliberately does not import ``chesssnake.config`` -- doing so would pull
+# pydantic onto the local-game path, which has no dependencies beyond Pillow.
+# Unlike the server, the client reads only the environment, never a config file:
+# a library that read ./chesssnake.toml from the caller's working directory
+# would be surprising.
+API_URL_ENV = "CHESSSNAKE__CLIENT__API_URL"
+API_KEY_ENV = "CHESSSNAKE__CLIENT__API_KEY"
+
+
 def _make_client(api_url=None, client=None, api_key=None):
     """Build (or accept an injected) ApiClient for remote operations."""
     if client is not None:
         return client
     from .client import ApiClient
 
-    url = api_url or os.getenv("CHESSSNAKE_API_URL")
+    url = api_url or os.getenv(API_URL_ENV)
     if not url:
-        raise ValueError("A remote game requires an api_url argument or the CHESSSNAKE_API_URL environment variable.")
-    return ApiClient(url, api_key=api_key)
+        raise ValueError(f"A remote game requires an api_url argument or the {API_URL_ENV} environment variable.")
+    return ApiClient(url, api_key=api_key or os.getenv(API_KEY_ENV))
 
 
 class Game(BaseGame):
@@ -93,7 +104,7 @@ class Game(BaseGame):
             server rejects out-of-turn / non-participant actions with 403).
         :param generation: load a specific past game (read-only) instead of the current
             one; ``None`` (default) loads/creates the current game.
-        :param api_url: base URL of the api-endpoint (falls back to ``CHESSSNAKE_API_URL``).
+        :param api_url: base URL of the api-endpoint (falls back to ``CHESSSNAKE__CLIENT__API_URL``).
         :param api_key: optional API key sent with every request.
         :param client: an injected ``ApiClient`` (mainly for testing).
         """

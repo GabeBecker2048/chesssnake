@@ -7,10 +7,12 @@
 
 Pronounced "chess - snake", in reference to Python being a type of snake. It is not pronounced cheesecake
 
+*Note: This library is in alpha. Updates will regularly contain breaking changes. Not recommended for production usage until version 1.0.0*
+
 ## Features
 
 - Play chess in Python with an easy-to-use and intuitive API
-- Store and retrieve chess games through a REST **api-endpoint** backed by PostgreSQL — many game clients can share one database, without writing any SQL
+- Store and retrieve chess games through a REST **api-endpoint** backed by PostgreSQL. Many game clients can share one database, without writing any SQL!
 - Generate PNG or JPEG images files of your game
 - PIL image support for manipulating images of your chess games
 - Includes a highly optimized python-only chess library
@@ -123,16 +125,30 @@ can read a chesssnake position.
 
 To store and retrieve games, run the api-endpoint server and point your `Game` clients at it.
 
-**1. Run the server.** The server reads its database credentials from environment variables. There are many ways to set these; for this example I use the [python-dotenv](https://pypi.org/project/python-dotenv/) package with a `.env` file:
+**1. Run the server.** The server needs a database connection string. Set it in a
+`chesssnake.toml` file:
+
+```toml
+[database]
+url = "postgresql://user:password@localhost:5432/chesssnake"
+```
+
+or as an environment variable, or as a flag — whichever suits your deployment:
 
 ```commandline
-CHESSDB_NAME='name_of_your_postgresql_db'
-CHESSDB_USER='user_for_your_postgresql_db'
-CHESSDB_PASS='password_for_your_postgresql_user'
-CHESSDB_HOST='host_for_your_postgresql_db'   # optional, defaults to localhost
-CHESSDB_PORT='port_for_your_postgres_db'     # optional, defaults to 5432
+CHESSSNAKE__DATABASE__URL='postgresql://user:password@localhost:5432/chesssnake'
+chesssnake api-endpoint --database-url 'postgresql://...'
 ```
-(You can also set a single `CHESSDB_CONN_STR` connection string instead.)
+
+Those are the same setting reached three ways. Every setting works like this, with
+**command-line flags beating environment variables, which beat the config file,
+which beats the built-in default**. Environment variable names are derived
+mechanically from the setting's name: `[api] port` is always
+`CHESSSNAKE__API__PORT`. To see what is in effect and where each value came from:
+
+```commandline
+chesssnake config show
+```
 
 Then start the server (the `--init-db` flag creates the schema on first run):
 
@@ -140,9 +156,17 @@ Then start the server (the `--init-db` flag creates the schema on first run):
 chesssnake api-endpoint --host 0.0.0.0 --port 8000 --init-db
 ```
 
-Interactive API docs are served at `http://<host>:8000/docs`. The HTTP routes are versioned under `/v1`; the client handles that for you. To require authentication, set `CHESSSNAKE_API_KEY` on the server and pass the same `api_key=` to `Game.remote(...)`.
+Interactive API docs are served at `http://<host>:8000/docs`. The HTTP routes are versioned under `/v1`; the client handles that for you. To require authentication, turn it on explicitly and give the server a key — enabling it without a key is a startup error rather than a server that quietly accepts everything:
 
-**2. Connect game clients.** Any number of clients can share the one endpoint. Use `Game.remote(...)`, giving the endpoint URL via the `api_url` argument or the `CHESSSNAKE_API_URL` environment variable:
+```commandline
+CHESSSNAKE__API__API_KEY='...' chesssnake api-endpoint --require-auth
+```
+
+Then pass the same `api_key=` to `Game.remote(...)`. See
+[docs/configuration.md](docs/configuration.md) for the full list of settings, and
+`chesssnake config init` to write a fully commented starter config.
+
+**2. Connect game clients.** Any number of clients can share the one endpoint. Use `Game.remote(...)`, giving the endpoint URL via the `api_url` argument or the `CHESSSNAKE__CLIENT__API_URL` environment variable:
 
 ```Python3
 from chesssnake import Game

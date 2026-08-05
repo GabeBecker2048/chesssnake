@@ -1,9 +1,19 @@
+# A local PostgreSQL for the api-endpoint to talk to.
+#
+# The schema is loaded from the packaged init.sql on first start. Point the
+# api-endpoint at it with the DSN below — note the host port is 5433, so the
+# port must be explicit in the connection string:
+#
+#   export CHESSSNAKE__DATABASE__URL=postgresql://chesssnake@localhost:5433/chesssnake
+#   chesssnake api-endpoint
+#
+# or put the same value under [database] url in chesssnake.toml.
 services:
   postgresDB:
     image: postgres
     environment:
-      POSTGRES_DB: ${CHESSDB_NAME}
-      POSTGRES_USER: ${CHESSDB_USER}
+      POSTGRES_DB: ${POSTGRES_DB:-chesssnake}
+      POSTGRES_USER: ${POSTGRES_USER:-chesssnake}
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5433:5432"

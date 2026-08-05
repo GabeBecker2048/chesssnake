@@ -5,26 +5,29 @@ The server is authoritative: clients send **moves** (and draw/resign actions), a
 the server runs the chess engine to validate and apply them against the stored
 game, persists the result, and returns the new state (or a structured error).
 
-Run it with ``chesssnake api-endpoint`` (see ``chesssnake.cli``), or point an ASGI
-server at ``chesssnake.api.server:app``. Database credentials are read from the
-``CHESSDB_*`` environment variables on startup; set ``CHESSSNAKE_INIT_DB=1`` to
-also initialize the schema on startup.
+Build it with :func:`create_app`, run it with ``chesssnake api-endpoint`` (see
+``chesssnake.cli``), or point an ASGI server at
+``chesssnake.api.server:create_app --factory`` (``:app`` also works). All settings
+come from :mod:`chesssnake.config` — the config file, ``CHESSSNAKE__*``
+environment variables, and command-line flags, in that order of precedence. Run
+``chesssnake config show`` to see the effective values and where each came from.
 
-Game/challenge routes are versioned under ``/v1``. Set ``CHESSSNAKE_API_KEY`` to
+Game/challenge routes are versioned under ``/v1``. Set ``api.require_auth`` to
 require an ``X-API-Key`` header on those routes (``/health`` stays open).
 Mutating routes accept an optional ``player_id`` (validated → 403) and an optional
 ``expected_version`` (optimistic concurrency → 409).
 """
 
 import io
-import os
+import logging
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from ..config import Settings, resolve
 from ..db import errors, sql
 from ..db import postgres as ops
 from ..dto import GameState, MoveResult
@@ -34,30 +37,31 @@ from ..serialize import game_from_state, state_from_game
 
 API_KEY_HEADER = "X-API-Key"
 
+logger = logging.getLogger(__name__)
+
 # Precompute the starting position's repetition key (engine-derived) for new games.
 _INITIAL_KEY = position_key(*from_fen(INITIAL_FEN))
-
-
-@asynccontextmanager
-async def lifespan(_app):
-    if sql.connection_pool is None:
-        sql.initialize_connection_pool()
-    if os.getenv("CHESSSNAKE_INIT_DB"):
-        sql.psql_db_schema_init()
-    yield
-
-
-app = FastAPI(title="chesssnake api-endpoint", lifespan=lifespan)
 
 
 # --- Auth ------------------------------------------------------------------
 
 
-async def require_api_key(x_api_key: str | None = Header(default=None, alias=API_KEY_HEADER)):
-    """Require a matching ``X-API-Key`` header iff ``CHESSSNAKE_API_KEY`` is set."""
-    configured = os.getenv("CHESSSNAKE_API_KEY")
-    if configured and x_api_key != configured:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+def _api_key_dependency(settings: Settings):
+    """
+    Build the ``/v1`` auth dependency for one app's settings.
+
+    Whether a key is required is now an explicit setting rather than an inference
+    from "is a key configured", so a deployment that meant to enable auth but
+    failed to inject the secret is rejected at startup by
+    :class:`~chesssnake.config.Settings` validation instead of quietly serving
+    unauthenticated traffic.
+    """
+
+    async def require_api_key(x_api_key: str | None = Header(default=None, alias=API_KEY_HEADER)):
+        if settings.api.require_auth and x_api_key != settings.api.api_key:
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    return require_api_key
 
 
 # --- Request bodies (game state lives in chesssnake.dto) -------------------
@@ -100,44 +104,38 @@ def _error(status_code, exc):
     return JSONResponse(status_code=status_code, content={"error_type": type(exc).__name__, "detail": str(exc)})
 
 
-@app.exception_handler(errors.SQLIdError)
-async def _handle_id_error(_request, exc):
-    return _error(422, exc)
+# Exception class -> HTTP status. Starlette resolves a raised exception by walking
+# its MRO and taking the first registered class, so subclasses must be listed
+# before the bases they refine (SQLIdError before SQLError before GameError).
+_ERROR_STATUS = (
+    (errors.SQLIdError, 422),
+    (errors.ChallengeError, 409),
+    (errors.VersionConflictError, 409),
+    (errors.NotYourTurnError, 403),
+    (errors.GameNotFoundError, 404),
+    (errors.SQLError, 500),
+    (errors.GameError, 400),
+    (chess_errors.ChessError, 400),
+)
 
 
-@app.exception_handler(errors.ChallengeError)
-async def _handle_challenge_error(_request, exc):
-    return _error(409, exc)
+def _register_error_handlers(app: FastAPI) -> None:
+    for exc_type, status_code in _ERROR_STATUS:
 
+        async def handler(_request, exc, _status=status_code):
+            return _error(_status, exc)
 
-@app.exception_handler(errors.VersionConflictError)
-async def _handle_version_conflict(_request, exc):
-    return _error(409, exc)
+        app.add_exception_handler(exc_type, handler)
 
+    async def unauthorized(_request, exc):
+        # Match the {error_type, detail} envelope every other error uses, so the
+        # client's error mapping (remote/client.py:_raise) sees a real type
+        # instead of falling back to a bare GameError.
+        if exc.status_code == 401:
+            return JSONResponse(status_code=401, content={"error_type": "AuthError", "detail": str(exc.detail)})
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-@app.exception_handler(errors.NotYourTurnError)
-async def _handle_not_your_turn(_request, exc):
-    return _error(403, exc)
-
-
-@app.exception_handler(errors.GameNotFoundError)
-async def _handle_not_found(_request, exc):
-    return _error(404, exc)
-
-
-@app.exception_handler(errors.SQLError)
-async def _handle_sql_error(_request, exc):
-    return _error(500, exc)
-
-
-@app.exception_handler(errors.GameError)
-async def _handle_game_error(_request, exc):
-    return _error(400, exc)
-
-
-@app.exception_handler(chess_errors.ChessError)
-async def _handle_chess_error(_request, exc):
-    return _error(400, exc)
+    app.add_exception_handler(HTTPException, unauthorized)
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -170,12 +168,17 @@ def _columns(state: GameState) -> dict:
 # --- Routes ----------------------------------------------------------------
 
 
-@app.get("/health")
+health_router = APIRouter()
+
+
+@health_router.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-v1 = APIRouter(prefix="/v1", dependencies=[Depends(require_api_key)])
+# Unversioned/open; the api-key dependency is attached per-app in create_app so
+# the router itself stays reusable across apps with different settings.
+v1 = APIRouter(prefix="/v1")
 
 
 @v1.post("/games")
@@ -329,4 +332,60 @@ async def delete_challenge(body: ChallengeBody):
     return {"status": "ok"}
 
 
-app.include_router(v1)
+# --- Application factory ---------------------------------------------------
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """
+    Build the api-endpoint application.
+
+    :param settings: Resolved configuration. When omitted, it is resolved from the
+        config file and environment — which is what makes this a valid zero-argument
+        ASGI factory (``uvicorn chesssnake.api.server:create_app --factory``).
+    :type settings: chesssnake.config.Settings or None
+    :return: A configured FastAPI application.
+    :rtype: fastapi.FastAPI
+    """
+    settings = settings or resolve()
+    for note in settings.advisories():
+        logger.warning("%s", note)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        # The guard keeps a second app in the same process (as the tests build)
+        # from replacing a working pool; its database settings are ignored.
+        if sql.connection_pool is None:
+            sql.initialize_connection_pool(
+                settings.database.url,
+                minconn=settings.database.pool_min_size,
+                maxconn=settings.database.pool_max_size,
+            )
+            if settings.database.init_schema:
+                sql.psql_db_schema_init(settings.database.url)
+        yield
+
+    app = FastAPI(title="chesssnake api-endpoint", lifespan=lifespan)
+    app.state.settings = settings
+    _register_error_handlers(app)
+    app.include_router(health_router)
+    app.include_router(v1, dependencies=[Depends(_api_key_dependency(settings))])
+    return app
+
+
+_app: FastAPI | None = None
+
+
+def __getattr__(name: str) -> Any:
+    """
+    Resolve ``chesssnake.api.server:app`` lazily (PEP 562).
+
+    Keeps the traditional ASGI import string working without resolving
+    configuration merely because someone imported this module — which would make
+    the module unimportable whenever the config is invalid.
+    """
+    if name == "app":
+        global _app
+        if _app is None:
+            _app = create_app()
+        return _app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

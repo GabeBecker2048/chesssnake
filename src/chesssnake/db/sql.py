@@ -1,8 +1,8 @@
 from contextlib import contextmanager
-from os import getenv
 
 import psycopg2
 from psycopg2 import pool, sql
+from psycopg2.extensions import make_dsn, parse_dsn
 from psycopg2.extras import RealDictCursor
 
 from ..assets import asset_path
@@ -11,59 +11,90 @@ from . import errors
 # Initialize the database connection pool
 connection_pool = None
 
+#: Database connected to when creating another database, since a connection must
+#: target *some* database. Every PostgreSQL cluster has this one.
+MAINTENANCE_DB = "postgres"
 
-def load_env_psql_creds():
+
+def require_dsn(dsn):
     """
-    Loads SQL credentials from environment variables.
-    :return: A dictionary with the SQL credentials.
+    Validate that a database DSN was configured.
+
+    This layer no longer reads the environment; the DSN is resolved by
+    :mod:`chesssnake.config` and passed in. This is the one place that turns a
+    missing value into the actionable :class:`~chesssnake.db.errors.SQLAuthError`.
+
+    :param dsn: The configured database DSN, possibly ``None``.
+    :type dsn: str or None
+    :return: The DSN, unchanged.
+    :rtype: str
+    :raises errors.SQLAuthError: If no DSN is configured.
     """
-    return {
-        "conn_str": getenv("CHESSDB_CONN_STR"),
-        "name": getenv("CHESSDB_NAME"),
-        "user": getenv("CHESSDB_USER"),
-        "password": getenv("CHESSDB_PASS"),
-        "host": getenv("CHESSDB_HOST", "localhost"),
-        "port": getenv("CHESSDB_PORT", "5432"),
-    }
-
-
-def load_psql_conn_str(sql_creds=None):
-    """
-    Constructs an SQL connection string from programmatic or environment-provided credentials.
-    :param sql_creds: Optional programmatic SQL credentials.
-    :return: A valid PostgreSQL connection string.
-    """
-    env_sql_creds = load_env_psql_creds()
-    sql_creds = sql_creds or {}
-
-    # Merge dictionaries, with sql_creds having priority
-    _sql_creds = {**env_sql_creds, **sql_creds}
-
-    # create the connection string
-    if _sql_creds.get("conn_str"):
-        return _sql_creds["conn_str"]
-    elif _sql_creds.get("name") and _sql_creds.get("user") and _sql_creds.get("password"):
-        return "dbname='{name}' user='{user}' password='{password}' host='{host}' port='{port}'".format(**_sql_creds)
-    else:
+    if not dsn:
         raise errors.SQLAuthError()
+    return dsn
 
 
-def initialize_connection_pool(minconn=1, maxconn=10, sql_creds=None):
+def admin_dsn(dsn, admin_db=MAINTENANCE_DB):
     """
-    Initializes a connection pool for PostgreSQL. To be called once at the application startup.
+    Derive a DSN for the maintenance database, plus the name of the target database.
+
+    ``CREATE DATABASE`` cannot run on a connection to the database being created,
+    so the target is swapped for the maintenance database. Every other connection
+    parameter — credentials, port, ``sslmode``, a unix-socket ``host`` — is carried
+    over untouched, because ``parse_dsn``/``make_dsn`` understand both the URL and
+    the keyword forms of a libpq connection string.
+
+    :param dsn: The configured database DSN, in either URL or keyword form.
+    :type dsn: str
+    :param admin_db: Database to connect to instead of the target one.
+    :type admin_db: str
+    :return: ``(admin_dsn, target_database_name)``.
+    :rtype: tuple[str, str]
+    :raises errors.SQLError: If the DSN cannot be parsed or names no database.
+    """
+    try:
+        parsed = parse_dsn(require_dsn(dsn))
+    except psycopg2.Error as e:
+        raise errors.SQLError(f"Could not parse the database DSN: {e}")
+
+    target = parsed.get("dbname")
+    if not target:
+        raise errors.SQLError("The database DSN does not name a database, so there is nothing to create.")
+    return make_dsn(**{**parsed, "dbname": admin_db}), target
+
+
+def initialize_connection_pool(dsn, minconn=1, maxconn=10):
+    """
+    Initializes a connection pool for PostgreSQL. To be called once at application startup.
+
+    :param dsn: The database connection string.
+    :type dsn: str
     :param minconn: Minimum number of connections in the pool.
     :param maxconn: Maximum number of connections in the pool.
-    :param sql_creds: Dictionary of SQL credentials.
+    :raises errors.SQLAuthError: If no DSN is configured.
+    :raises errors.SQLError: If the pool cannot be created.
     """
     global connection_pool
     try:
-        connection_pool = pool.SimpleConnectionPool(
-            minconn=minconn, maxconn=maxconn, dsn=load_psql_conn_str(sql_creds=sql_creds)
-        )
+        connection_pool = pool.SimpleConnectionPool(minconn=minconn, maxconn=maxconn, dsn=require_dsn(dsn))
         if connection_pool:
             print("Database connection pool successfully initialized.")
     except psycopg2.Error as e:
         raise errors.SQLError(f"Failed to initialize database connection pool: {str(e)}")
+
+
+def close_connection_pool():
+    """
+    Close every pooled connection and reset the pool.
+
+    Safe to call when no pool was ever created, so teardown paths don't need to
+    inspect the module global themselves.
+    """
+    global connection_pool
+    if connection_pool is not None:
+        connection_pool.closeall()
+        connection_pool = None
 
 
 def get_connection():
@@ -87,62 +118,52 @@ def release_connection(conn):
         connection_pool.putconn(conn)
 
 
-def psql_db_init(sql_creds=None, schema_init=True):
+def psql_db_init(dsn, schema_init=True):
     """
     Checks if the database exists and creates it if it does not, provided the user has sufficient permissions.
 
     Requires proper permissions to create the database.
 
-    :param sql_creds: Dictionary of SQL credentials, including the "name" of the database to be created.
-                      {"name": str, "user": str, "password": str, "host": str, "port": str}.
-                      If not provided, environment variables are used.
+    :param dsn: A URL-form database DSN naming the database to create.
+    :type dsn: str
     :param schema_init: Boolean flag indicating whether to initialize the database schema after creating or ensuring
                         the database exists. If set to `True`, the function will call `db_schema_init`, which runs
                         the schema initialization script to set up the necessary database structure.
                         If `False`, the function will only ensure the database exists and will skip the schema
                         initialization step.
-    :type sql_creds: dict or None
     :raises GameError: If there is a failure due to missing permissions or other SQL errors.
     """
-    # Merge provided credentials over the environment defaults so the database
-    # name can come from either source.
-    creds = {**load_env_psql_creds(), **(sql_creds or {})}
+    admin, db_name = admin_dsn(dsn)
 
-    db_name = creds.get("name")
-    if not db_name:
-        raise ValueError("Database name is not provided in the credentials.")
-
-    # Use modified credentials without a database name to connect to the PostgreSQL server
-    admin_conn_creds = creds.copy()
-    admin_conn_creds["name"] = None  # Remove db-name for admin-level connection
-
+    conn = None
     try:
-        # Establish a connection to the server (not to a specific database)
-        with psycopg2.connect(load_psql_conn_str(admin_conn_creds)) as conn:
-            conn.autocommit = True
-            with conn.cursor() as cur:
-                # Check if the database exists
-                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
-                exists = cur.fetchone()
-
-                if not exists:
-                    # Attempt to create the database
-                    cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
-                    print(f"Database '{db_name}' created successfully.")
-                else:
-                    print(f"Database '{db_name}' already exists.")
+        # Not `with psycopg2.connect(...)`: that context manager wraps the block in a
+        # transaction, and CREATE DATABASE cannot run inside one. Autocommit has to be
+        # set before any statement opens a transaction.
+        conn = psycopg2.connect(admin)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+            if cur.fetchone():
+                print(f"Database '{db_name}' already exists.")
+            else:
+                cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
+                print(f"Database '{db_name}' created successfully.")
     except psycopg2.errors.InsufficientPrivilege as e:
         raise errors.SQLError(
             f"Insufficient privileges to create the database '{db_name}'. Ensure the user has appropriate permissions:\n{e}"
         )
     except psycopg2.Error as e:
         raise errors.SQLError(f"Database creation error: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
 
     if schema_init:
-        psql_db_schema_init(sql_creds=sql_creds)
+        psql_db_schema_init(dsn)
 
 
-def psql_db_schema_init(sql_creds=None):
+def psql_db_schema_init(dsn):
     """
     Initializes the database schema by executing the `init.sql` script.
 
@@ -150,17 +171,16 @@ def psql_db_schema_init(sql_creds=None):
     schema initialization script, and disconnects afterward.
     The initialization script is required to set up the database schema for chesssnake.
 
-    :param sql_creds: Dictionary of SQL credentials, including the "name" of the database to connect to and initialize.
-                      Example: {"name": str, "user": str, "password": str, "host": str, "port": str}.
-                      If not provided, environment variables are used to load the credentials.
-    :type sql_creds: dict or None
+    :param dsn: The database connection string.
+    :type dsn: str
     :raises GameError: If the initialization file is not found, if there are connection issues,
                        or if there are SQL errors during initialization.
     """
     conn = None
     try:
-        # Establish a direct connection using environment-based or provided credentials
-        conn = psycopg2.connect(load_psql_conn_str(sql_creds=sql_creds))
+        # Connect directly rather than through the pool: the schema may need to
+        # exist before the pool is created.
+        conn = psycopg2.connect(require_dsn(dsn))
         db_init_fp = asset_path("init.sql")
         with open(db_init_fp) as db_init_file:
             init_script = db_init_file.read()
