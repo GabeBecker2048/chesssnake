@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.8.0 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0 — see `VersionHistory.md`).
+`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.9.0 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0 — see `VersionHistory.md`).
 
 The package uses a **`src/` layout**: all importable code lives under `src/chesssnake/` (tests import the installed package, not a repo-root package).
 
@@ -14,11 +14,13 @@ The project is managed with **uv**; all metadata lives in `pyproject.toml` (ther
 
 ```bash
 # Create/refresh the venv. Extras: `client` (requests, for remote games),
-# `api` (fastapi + uvicorn + pydantic + psycopg2, for the server).
-# `.python-version` pins local dev to 3.12: the package supports 3.11-3.14, but
-# `pgserver` (integration tests) only ships cp311/cp312 wheels.
+# `api` (fastapi + uvicorn + pydantic + sqlalchemy — runs on SQLite with no
+# compiled deps), `postgres` (psycopg2, only for postgresql:// URLs).
+# `.python-version` pins local dev to 3.12 because the `pg` test group's
+# `pgserver` only ships cp311/cp312 wheels; the package itself supports 3.11-3.14
+# and the SQLite tests run on all of them.
 uv sync                                  # core only (local, in-memory games)
-uv sync --extra api --extra client --group dev   # everything needed to run + test the full stack
+uv sync --extra api --extra client --extra postgres --group dev --group pg   # full stack
 
 # Run anything inside the managed environment
 uv run python examples/example.py        # core (no-DB) smoke example
@@ -29,11 +31,12 @@ uv run chesssnake init-db                # just create the schema, then exit
 uv run chesssnake config init            # write a commented default config file
 uv run chesssnake config show            # effective settings + where each came from
 
-# Tests (the `dev` group provides pytest, pgserver, fastapi, requests, httpx)
+# Tests (`dev` provides pytest/fastapi/httpx/sqlalchemy; `pg` provides pgserver + psycopg2)
 uv run pytest                            # everything under tests/
 uv run pytest tests/unit                 # fast, pure-Python engine tests (no DB)
-uv run pytest tests/integration          # API + remote-Game stack; spins up a throwaway
-                                         # Postgres via pgserver (no Docker/system Postgres)
+uv run pytest tests/integration          # API + remote-Game stack, run against BOTH backends:
+                                         # a temp SQLite file and a throwaway Postgres (pgserver)
+CHESSSNAKE_TEST_BACKENDS=sqlite uv run pytest tests/integration   # SQLite only (no pgserver needed)
 uv run pytest tests/config               # config + CLI; needs pydantic but no database
 uv run pytest tests/unit/test_rules.py::test_en_passant_capture  # a single test
 
@@ -45,8 +48,8 @@ uv add --optional api <pkg>              # add to the `api` extra
 # Build the distributable
 uv build
 
-# Bring up a local Postgres for the api-endpoint to talk to (schema auto-loaded from
-# src/chesssnake/data/init.sql). Exposes Postgres on host port 5433.
+# Bring up a local Postgres for the api-endpoint to talk to (create the schema with
+# `chesssnake init-db`). Exposes Postgres on host port 5433.
 docker compose up
 ```
 
@@ -65,7 +68,7 @@ The three tiers and where they live:
 
 1. **Client** (`src/chesssnake/remote/`) — `Game` + the challenge functions (`game.py`); `ApiClient` (`client.py`) is a thin `requests`-style wrapper (talks to the `/v1` routes, sends an optional `X-API-Key`). For **remote** games the client does **no** chess computation — it sends moves and mirrors the returned state. For **local** games `move`/`draw_*` call the base `engine.Game` in-process. `requests` is imported lazily (only on the remote path), so local games stay dependency-free.
 2. **Server** (`src/chesssnake/api/server.py`) — a FastAPI app built by `create_app(settings)` that **owns the engine** (the authoritative rules). `/health` is unversioned/open; all game+challenge routes live on a `/v1` `APIRouter` gated by an API-key dependency built per-app from settings (`_api_key_dependency`, active only when `api.require_auth` is true). Mutating routes (`/moves`, `/resign`, `/draw/*`) load the row + its `Moves` history, build an `engine.Game` (via `serialize.game_from_state`), apply the action (which may raise `ChessError`), and persist the result — all inside one `apply_game_change` transaction; they accept an optional `player_id` (validated → `NotYourTurnError`/403) and `expected_version` (→ `VersionConflictError`/409). Read routes: `GET .../` (state), `.../legal-moves`, `.../history`, `.../pgn` (text), `.../fen` (text), `.../image` (PNG). Errors map to JSON `{error_type, detail}` (chess→400, auth→403, not-found→404, challenge/version→409, id→422, sql→500).
-3. **Database** (`src/chesssnake/db/`) — the SQL, behind a common interface (`db/__init__.py`; room for a future `db/sqlite.py`). `db/postgres.py` holds the query functions (`game_get_or_create`, `game_get`, `game_archive`, `game_history`, `apply_game_change`, `game_delete`, `current_games`, `game_exists`, `game_record`, `challenge*`); `db/sql.py` the pool + `execute_psql` + the `transaction()` context manager; `db/errors.py` the `GameError` types (`GameNotFoundError`, `NotYourTurnError`, `VersionConflictError`, …); `data/init.sql` the schema. The **`Games`** table stores the position as a single `Fen` column plus `Status`/`Draw`/`Termination`/`Version` (no more per-field board columns); the **`Moves`** table stores one row per ply (`San` + `PositionKey`, plus a ply-0 row for the initial position) for PGN and threefold detection. **This layer stays engine-free** — `apply_game_change` runs the caller's `mutate(row, history)` callback (the engine logic) between a `SELECT … FOR UPDATE` and the `UPDATE`, bumping `Version` and appending `Moves` rows atomically.
+3. **Database** (`src/chesssnake/db/`) — SQLAlchemy Core, backend-agnostic. `db/operations.py` holds the query functions (`game_get_or_create`, `game_get`, `game_archive`, `game_history`, `apply_game_change`, `game_delete`, `current_games`, `game_exists`, `game_record`, `challenge*`) as Core expressions; `db/schema.py` the `MetaData`; `db/engine.py` the engine + `transaction()`/`locked_transaction()`; `db/postgres.py` and `db/sqlite.py` only what differs per dialect; `db/errors.py` the `GameError` types (`GameNotFoundError`, `NotYourTurnError`, `VersionConflictError`, …). The **`Games`** table stores the position as a single `Fen` column plus `Status`/`Draw`/`Termination`/`Version` (no more per-field board columns); the **`Moves`** table stores one row per ply (`San` + `PositionKey`, plus a ply-0 row for the initial position) for PGN and threefold detection. **This layer stays engine-free** — `apply_game_change` runs the caller's `mutate(row, history)` callback (the engine logic) between a locked read and the `UPDATE`, bumping `version` and appending `moves` rows atomically — see the locking note in the `db/` section below.
 
 The wire payloads are defined once in `src/chesssnake/dto.py`: `GameState` (the position as **FEN** + `status`/`version`/`generation`/`draw`/`termination`/names) and `MoveResult` (a move + resulting state, incl. `san`) — stdlib dataclasses, so the client needs no pydantic. The FEN codec is `src/chesssnake/engine/fen.py` (`to_fen`/`from_fen`/`position_key`/`INITIAL_FEN`), and `src/chesssnake/serialize.py` bridges `GameState` ⇄ engine `Game` (`game_from_state` with history, `state_from_game`, `board_and_turn`). `src/chesssnake/cli.py` is the console-script entry point; `src/chesssnake/assets.py` (`asset_path`) centralizes packaged-data lookups.
 
@@ -114,11 +117,16 @@ Full reference: `docs/configuration.md`. The commented default file shipped by `
 
 ### `db/` — the database layer (tier 3, **engine-free**)
 
-- `__init__.py` — the common interface: re-exports the operation functions and `errors`/`sql`/`postgres` so callers use `chesssnake.db`. A future `db/sqlite.py` can implement the same functions behind this interface. The operations and the `postgres`/`sql` modules are resolved **lazily** through a module `__getattr__`; only `errors` is imported eagerly, because `remote/client.py` needs it for error mapping and the `client` extra does not install psycopg2.
-- `postgres.py` — the PostgreSQL backend. "Current" game = the max-`Generation` row for a triple (`_IDS` is the shared WHERE clause). `game_get_or_create` returns the current game, or creates the next generation when the current one is **over** (rematch) — race-safe via `ON CONFLICT` + re-select. `game_get(…, generation=None)` / `game_history(…, generation)` / `game_delete(…, generation=None)` default to the current game; `game_archive` lists all generations. `apply_game_change` locks + mutates the **current** game (`… ORDER BY Generation DESC LIMIT 1 FOR UPDATE` → `mutate(row, history)` → `UPDATE`+bump `Version`+append `Moves`, one `transaction()`; enforces `expected_version`). `game_exists`/`current_games` are **active-only** (`Status = 0`), so a finished game doesn't block a rematch. `game_record` aggregates the win/draw/loss tally between two players across all finished games (both color arrangements). Deals only in primitives/dicts — **no `engine` import**; the engine-derived initial FEN/key are passed *in*. Validates ids via `validate_ids`.
-- `sql.py` — connection pooling (`initialize_connection_pool(dsn, minconn, maxconn)`, `close_connection_pool`), `execute_psql(statement, params)` (single statement, commits/rolls back, returns dict rows), and `transaction()` (a context manager yielding a cursor for multi-statement atomic read-modify-write). It uses a `RealDictCursor`, so **query results are dict rows keyed by column name — and PostgreSQL folds unquoted identifiers to lowercase, so the keys are lowercase** (`row['opponentid']`, not `row['OpponentId']`) unless a query quotes the alias. **This layer reads no configuration**: the DSN and pool sizes are passed in by the caller (resolved from `chesssnake.config`), and `db/` deliberately never imports `config` — that would drag pydantic into a layer the `client` extra also loads. `admin_dsn()` derives a maintenance-database DSN via psycopg2's `parse_dsn`/`make_dsn` for the create-database path.
-- `data/init.sql` — idempotent schema for `Games`, `Moves`, and `Challenges`. A triple can own **many** games, one per `Generation` (the "current" game = highest generation; earlier ones are the read-only archive). `Games` PK `(GroupId, WhiteId, BlackId, Generation)` stores `Fen TEXT`, `Draw`/`Status` (INTEGER; Status 0–3), `Termination TEXT`, `Version INTEGER`, names, and an `UpdatedAt` trigger. `Moves` PK `(GroupId, WhiteId, BlackId, Generation, Ply)` stores `San` + `PositionKey`. There is no `Groups` table — `GroupId` is just a discriminator, not a foreign key.
-- `errors.py` — SQL/challenge exception hierarchy rooted at `GameError` (an `Exception` subclass, separate from the engine's `ChessError`; shared by client and server for error mapping). (Its `### db/` header replaces the former `postgres/` package.)
+Backend-agnostic SQLAlchemy Core. The `database.url` scheme picks the backend; there is no separate "which database" setting to drift.
+
+- `__init__.py` — the common interface. Everything is lazy except `errors`, which `remote/client.py` imports for error mapping: the `client` extra installs neither SQLAlchemy nor psycopg2, so an eager import would break `pip install chesssnake[client]`.
+- `schema.py` — the `MetaData` and the three `Table` definitions. **Every identifier is lowercase, deliberately**: the pre-0.9.0 `init.sql` used unquoted mixed case, which PostgreSQL folds to lowercase, and SQLAlchemy *quotes* anything not already lowercase — so `Column("GroupId", …)` would emit `games."GroupId"` and fail against every deployed database. Lowercase keeps it unquoted, keeps deployed databases working, and makes result-row keys lowercase on both backends (which is what `dto.GameState.from_row` expects). `create_all(checkfirst=True)` replaces the old script; it also leaves existing tables untouched, so a 0.8.0 database never gains a missing index.
+- `engine.py` — `parse_url` (validates the scheme, rejects libpq keyword strings with the URL equivalent), `create_engine`/`initialize_engine`/`dispose_engine`, `transaction()`, and `locked_transaction()`. The process-wide engine handle lives here. `_engine_kwargs` is per-dialect: an in-memory SQLite database needs `StaticPool` and rejects pool sizing, a file one takes `QueuePool`, and PostgreSQL gets `pool_pre_ping`.
+- `operations.py` — all fourteen query functions as Core expressions. Public functions open their own transaction; the `_`-prefixed variants take a connection so `challenge()` can run its check-and-mutate atomically. Still **no `engine` import** — the chess logic arrives as `apply_game_change`'s `mutate` callback.
+- `postgres.py` / `sqlite.py` — only what genuinely differs: the locking strategy, the dialect's `insert()` for `ON CONFLICT`, and creating a database.
+- `errors.py` — SQL/challenge exception hierarchy rooted at `GameError` (separate from the engine's `ChessError`; shared by client and server for error mapping).
+
+**Locking is the thing to be careful about.** `apply_game_change` is a read-modify-write with the engine running in the middle. PostgreSQL serializes it with `SELECT … FOR UPDATE`; SQLite has no row locks, and **SQLAlchemy compiles `FOR UPDATE` away on SQLite silently rather than raising** — so a naive port looks correct and loses moves. SQLite instead takes the write lock as the transaction opens, via `BEGIN IMMEDIATE`, which is why write paths must use `locked_transaction()` and not `transaction()`. `require_write_transaction()` enforces that; `tests/integration/test_concurrency.py` proves it on both backends (and fails if the lock is removed).
 
 ## Conventions
 

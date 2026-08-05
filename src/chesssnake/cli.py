@@ -92,16 +92,29 @@ def _run_api_endpoint(args):
 
 def _run_init_db(args):
     settings = _resolve(args)
-    from .db.sql import initialize_connection_pool, psql_db_init, psql_db_schema_init
+    from .db import engine as db_engine
+    from .db import errors, schema
 
-    if args.create_database:
-        psql_db_init(settings.database.url, schema_init=False)
-    initialize_connection_pool(
-        settings.database.url,
-        minconn=settings.database.pool_min_size,
-        maxconn=settings.database.pool_max_size,
-    )
-    psql_db_schema_init(settings.database.url)
+    try:
+        url = settings.database.url
+        if args.create_database:
+            parsed = db_engine.parse_url(url)
+            # For SQLite this only ensures the parent directory exists; the file
+            # itself is created on first connection.
+            print(db_engine.backend_module(parsed.get_backend_name()).create_database(parsed))
+        engine = db_engine.initialize_engine(
+            url,
+            pool_min_size=settings.database.pool_min_size,
+            pool_max_size=settings.database.pool_max_size,
+            sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
+        )
+        try:
+            schema.create_all(engine)
+            print("Database schema initialized successfully.")
+        finally:
+            db_engine.dispose_engine()
+    except errors.GameError as e:
+        sys.exit(str(e))
 
 
 def _run_config_show(args):
@@ -179,7 +192,7 @@ def main(argv=None):
     init_db.add_argument(
         "--create-database",
         action="store_true",
-        help="create the database first, if it does not exist (requires permission)",
+        help="create the database first if it does not exist (PostgreSQL: requires permission; SQLite: creates the directory)",
     )
     init_db.set_defaults(func=_run_init_db)
 

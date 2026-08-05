@@ -1,33 +1,60 @@
 """
 Shared fixtures for the API/remote integration tests.
 
-Spins up a throwaway PostgreSQL via ``pgserver`` (no Docker/system Postgres
-needed), builds the FastAPI app from an explicit :class:`~chesssnake.config.Settings`
-pointed at it, and drives it in-process with a ``TestClient`` (whose lifespan
-initializes the pool and schema). Tables are truncated between tests.
+Every test in this directory runs against **both** backends: a temporary SQLite
+file and a throwaway PostgreSQL spun up via ``pgserver`` (no Docker or system
+Postgres needed). That is the point of the 0.9.0 database work — the two backends
+have to be behaviorally identical, and the way to know is to run the same suite
+against each.
 
-The app is constructed *from* settings rather than configured *through* the
+PostgreSQL is skipped when ``pgserver`` is unavailable, which is the normal case
+outside CI's pinned interpreter: it publishes only cp311/cp312 wheels. SQLite has
+no such constraint, so the suite still runs everywhere.
+
+The app is built from an explicit ``Settings`` rather than configured through the
 environment, so there is no ordering constraint between setting variables and
 importing the server module.
 """
 
+import os
 import tempfile
+from pathlib import Path
 
 import pytest
 
-pgserver = pytest.importorskip("pgserver")
+pytest.importorskip("sqlalchemy")
 from fastapi.testclient import TestClient
+
+#: Which backends to exercise. CI narrows this to "sqlite" for the Python-matrix
+#: job, where pgserver has no wheels; locally and in the PostgreSQL job it is both.
+BACKENDS = tuple(os.environ.get("CHESSSNAKE_TEST_BACKENDS", "sqlite,postgresql").split(","))
+
+
+def _postgres_url(stack):
+    """A throwaway PostgreSQL cluster, or skip if pgserver isn't installed."""
+    pgserver = pytest.importorskip("pgserver", reason="pgserver is unavailable (it ships only cp311/cp312 wheels)")
+    pgdata = stack.enter_context(tempfile.TemporaryDirectory())
+    server = pgserver.get_server(pgdata)
+    stack.callback(server.cleanup)
+    return server.get_uri()
+
+
+@pytest.fixture(scope="session", params=BACKENDS)
+def backend(request):
+    """The backend under test. Every downstream fixture is per-backend."""
+    return request.param
 
 
 @pytest.fixture(scope="session")
-def database_url():
-    """A throwaway PostgreSQL instance, torn down at the end of the session."""
-    with tempfile.TemporaryDirectory() as pgdata:
-        server = pgserver.get_server(pgdata)
-        try:
-            yield server.get_uri()
-        finally:
-            server.cleanup()
+def database_url(backend):
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        if backend == "sqlite":
+            tmp = stack.enter_context(tempfile.TemporaryDirectory())
+            yield f"sqlite:///{Path(tmp) / 'chesssnake.db'}"
+        else:
+            yield _postgres_url(stack)
 
 
 @pytest.fixture(scope="session")
@@ -40,21 +67,41 @@ def settings(database_url):
 @pytest.fixture(scope="session")
 def api_client(settings):
     from chesssnake.api.server import create_app
-    from chesssnake.db import sql
+    from chesssnake.db import engine
 
-    # Entering the context runs the FastAPI lifespan (pool + schema init).
+    # A previous backend's engine must be gone before this one builds its own;
+    # the engine handle is process-wide.
+    engine.dispose_engine()
+    # Entering the context runs the FastAPI lifespan (engine + schema creation).
     with TestClient(create_app(settings)) as client:
         try:
             yield client
         finally:
-            sql.close_connection_pool()
+            engine.dispose_engine()
 
 
 @pytest.fixture(autouse=True)
-def clean_tables(api_client):
-    from chesssnake.db.sql import execute_psql
+def clean_tables(request):
+    """
+    Empty every table between tests, on whichever backend is active.
 
-    execute_psql("TRUNCATE Games, Challenges, Moves")
+    Only for tests that actually use the app. Depending on ``api_client``
+    unconditionally would drag a PostgreSQL cluster up for every test in this
+    directory — including ones that only parse URLs or build their own engine —
+    and would parametrize them over both backends for no reason.
+    """
+    if "api_client" not in request.fixturenames:
+        yield
+        return
+
+    from sqlalchemy import delete
+
+    from chesssnake.db import engine, schema
+
+    request.getfixturevalue("api_client")
+    with engine.transaction() as conn:
+        for table in schema.TABLES:
+            conn.execute(delete(table))
     yield
 
 

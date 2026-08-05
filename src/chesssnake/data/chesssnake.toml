@@ -83,28 +83,37 @@ require_auth = false
 
 
 #: ===========================================================================
-#: [database] — the PostgreSQL connection
+#: [database] — where games are stored
 #: ===========================================================================
 [database]
 
 #: Database connection string. This is the one setting with no usable default:
 #: the api-endpoint cannot start without it.
 #:
-#: The scheme selects the backend. Both the URL form and the libpq keyword form
-#: are accepted:
+#: The URL scheme selects the backend.
+#:
+#: SQLite — a single file, no server, and no compiled dependencies. Good for a
+#: single api-endpoint process serving many clients. Note the number of slashes:
+#: three for a relative path, four for an absolute one.
+#:   url = "sqlite:///chesssnake.db"            # relative to the working directory
+#:   url = "sqlite:////var/lib/chesssnake/chesssnake.db"   # absolute
+#:
+#: PostgreSQL — needs a server and the `postgres` extra
+#: (pip install 'chesssnake[api,postgres]'). Use this for multiple worker
+#: processes, or when the database lives on another host.
 #:   url = "postgresql://user:password@localhost:5432/chesssnake"
 #:   url = "postgresql://user@localhost:5432/chesssnake?sslmode=require"
-#:   url = "dbname='chesssnake' user='user' password='pw' host='localhost'"
 #:
 #: For the bundled docker-compose Postgres (published on host port 5433):
 #:   url = "postgresql://chesssnake@localhost:5433/chesssnake"
 #:
-#: Because this usually contains a password, consider setting it through the
+#: Because this may contain a password, consider setting it through the
 #: environment instead: CHESSSNAKE__DATABASE__URL='postgresql://...'
 #: `chesssnake config show` prints this with the password redacted.
 #:
-#: Values: any libpq connection string. No default (unset).
-# url = "postgresql://user:password@localhost:5432/chesssnake"
+#: Values: a database URL. libpq keyword strings ("dbname=... user=...") are not
+#: accepted. No default (unset).
+# url = "sqlite:///chesssnake.db"
 
 #: Number of connections opened to the database when the pool is created.
 #: Values: integer >= 1, and no greater than pool_max_size. Default 1.
@@ -126,6 +135,13 @@ pool_max_size = 10
 #: database itself, given sufficient permissions).
 #: Values: true, false. Default false.
 init_schema = false
+
+#: How long a blocked SQLite writer waits for the database lock before giving up
+#: with "database is locked". SQLite serializes writers, so under concurrent play
+#: a request may briefly wait its turn; raise this if you see lock errors under
+#: load. Ignored on PostgreSQL, which locks per row instead.
+#: Values: integer milliseconds >= 0. Default 5000 (five seconds).
+sqlite_busy_timeout = 5000
 
 
 #: ===========================================================================

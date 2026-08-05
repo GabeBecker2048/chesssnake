@@ -12,7 +12,7 @@ Pronounced "chess - snake", in reference to Python being a type of snake. It is 
 ## Features
 
 - Play chess in Python with an easy-to-use and intuitive API
-- Store and retrieve chess games through a REST **api-endpoint** backed by PostgreSQL. Many game clients can share one database, without writing any SQL!
+- Store and retrieve chess games through a REST **api-endpoint** backed by SQLite or PostgreSQL. Many game clients can share one database, without writing any SQL!
 - Generate PNG or JPEG images files of your game
 - PIL image support for manipulating images of your chess games
 - Includes a highly optimized python-only chess library
@@ -23,7 +23,7 @@ chesssnake is split into three tiers so that many lightweight game clients — i
 
 1. **Game client** — sends a move (e.g. `"e4"`) over REST and receives the new state or a structured error. It never needs a chess engine of its own.
 2. **api-endpoint** — a REST server (`chesssnake api-endpoint`) that **runs the chess engine**: it validates and applies every move, is the single source of truth for the rules, and stores the result.
-3. **Database** — the api-endpoint owns the PostgreSQL connection and does all SQL.
+3. **Database** — the api-endpoint owns the database connection and does all SQL. SQLite needs no server; PostgreSQL is one config value away.
 
 Because the server owns the rules, any frontend (web, mobile, a chat bot, …) can use the chesssnake backend by speaking REST — no chess logic required on the client side. (A `Game.local(...)` game still runs the engine in-process, with no server needed.)
 
@@ -46,9 +46,14 @@ pip install chesssnake[client]
 
 ### To run the api-endpoint server
 
-Install the api extra (adds FastAPI, uvicorn, and a PostgreSQL driver):
+Install the api extra (adds FastAPI, uvicorn, pydantic, and SQLAlchemy). This runs
+on SQLite with no compiled dependencies:
 ```commandline
 pip install chesssnake[api]
+```
+For a PostgreSQL backend, add the `postgres` extra, which brings the driver:
+```commandline
+pip install chesssnake[api,postgres]
 ```
 
 ## Usage
@@ -130,14 +135,22 @@ To store and retrieve games, run the api-endpoint server and point your `Game` c
 
 ```toml
 [database]
+url = "sqlite:///chesssnake.db"
+```
+
+That is the whole database setup for SQLite — no server to install or run. To use
+PostgreSQL instead, install `chesssnake[api,postgres]` and change the one value:
+
+```toml
+[database]
 url = "postgresql://user:password@localhost:5432/chesssnake"
 ```
 
 or as an environment variable, or as a flag — whichever suits your deployment:
 
 ```commandline
-CHESSSNAKE__DATABASE__URL='postgresql://user:password@localhost:5432/chesssnake'
-chesssnake api-endpoint --database-url 'postgresql://...'
+CHESSSNAKE__DATABASE__URL='sqlite:///chesssnake.db'
+chesssnake api-endpoint --database-url 'sqlite:///chesssnake.db'
 ```
 
 Those are the same setting reached three ways. Every setting works like this, with

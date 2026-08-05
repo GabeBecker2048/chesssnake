@@ -40,19 +40,44 @@ jobs:
       - name: Unit tests
         run: uv run --no-dev --with pytest --python ${{ matrix.python-version }} pytest tests/unit
 
-  integration:
+  integration-sqlite:
+    name: integration sqlite (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    env:
+      CHESSSNAKE_TEST_BACKENDS: sqlite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+      # SQLite needs no driver, so the api extra must stay free of compiled
+      # dependencies. This asserts psycopg2 really isn't pulled in.
+      - name: The SQLite path has no compiled dependencies
+        run: |
+          uv run --no-dev --extra api --extra client --python ${{ matrix.python-version }} \
+            python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('psycopg2') is not None)"
+      # The `pg` group (pgserver) is deliberately omitted: it ships only
+      # cp311/cp312 wheels, and the SQLite backend has no such constraint.
+      - name: Integration and configuration tests (SQLite)
+        run: uv run --extra api --extra client --python ${{ matrix.python-version }} pytest tests/integration tests/config
+
+  integration-postgres:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      # Integration tests spin up a throwaway Postgres via pgserver (dev group)
-      # and exercise the api-endpoint + remote client (api/client extras).
-      # tests/config needs pydantic (api extra) but no database, so it rides along
-      # here rather than in the dependency-free unit matrix.
-      - name: Integration and configuration tests
-        run: uv run --extra api --extra client pytest tests/integration tests/config
+      # Spins up a throwaway Postgres via pgserver (the `pg` group), which only
+      # publishes cp311/cp312 wheels -- hence no Python matrix here.
+      - name: Integration and configuration tests (PostgreSQL and SQLite)
+        run: uv run --extra api --extra client --extra postgres --group pg pytest tests/integration tests/config
 
   coverage:
     runs-on: ubuntu-latest
@@ -64,4 +89,4 @@ jobs:
       # Runs the whole suite (unit + integration) so the coverage number is
       # authoritative, and fails the build if it drops below the gate.
       - name: Tests with coverage gate
-        run: uv run --extra api --extra client pytest --cov --cov-report=term-missing --cov-fail-under=75
+        run: uv run --extra api --extra client --extra postgres --group pg pytest --cov --cov-report=term-missing --cov-fail-under=75

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chesssnake"
-version = "0.8.0"
+version = "0.9.0"
 description = "A robust Chess API and backend"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,20 +29,22 @@ chesssnake = "chesssnake.cli:main"
 [project.optional-dependencies]
 # For playing remote games (Game(remote=True)) against a chesssnake api-endpoint.
 client = ["requests>=2.31"]
-# For running the api-endpoint server (`chesssnake api-endpoint`).
-api = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "psycopg2-binary>=2.9", "pydantic>=2.0"]
+# For running the api-endpoint server. Works on SQLite with no compiled dependencies;
+# add the `postgres` extra for a PostgreSQL backend.
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "pydantic>=2.0", "sqlalchemy>=2.0"]
+# The PostgreSQL driver. Only needed for postgresql:// database URLs.
+postgres = ["psycopg2-binary>=2.9"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["chesssnake*"]
 
 [tool.setuptools.package-data]
-chesssnake = ["data/*.sql", "data/*.toml", "data/*.ttf", "data/img/*.png", "py.typed"]
+chesssnake = ["data/*.toml", "data/*.ttf", "data/img/*.png", "py.typed"]
 
 [dependency-groups]
 dev = [
-    "pgserver>=0.1.4",
-    "psycopg2-binary>=2.9.12",
+    "sqlalchemy>=2.0",
     "pytest>=9.1.1",
     "fastapi>=0.110",
     "uvicorn>=0.29",
@@ -52,6 +54,14 @@ dev = [
     "mypy>=1.8",
     "pytest-cov>=5.0",
     "pre-commit>=3.5",
+]
+# The PostgreSQL test stack. Split out of `dev` because pgserver publishes only
+# cp311/cp312 wheels, which would otherwise pin the whole test suite to those
+# interpreters -- the SQLite backend has no such constraint and is tested across
+# the full supported matrix.
+pg = [
+    "pgserver>=0.1.4",
+    "psycopg2-binary>=2.9.12",
 ]
 
 [tool.pytest.ini_options]
