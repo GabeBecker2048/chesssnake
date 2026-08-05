@@ -35,10 +35,12 @@ jobs:
           enable-cache: true
       - name: Install Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
-      # Unit tests only need the core package + pytest (no DB / server deps),
-      # so run them lightweight across the whole supported version matrix.
+      # Unit tests only need the core package + pytest (no DB / server deps), so
+      # run them lightweight across the whole supported version matrix.
+      # --no-default-groups, not --no-dev: `pg` is a default group as well, and
+      # its pgserver has no wheels beyond cp311/cp312.
       - name: Unit tests
-        run: uv run --no-dev --with pytest --python ${{ matrix.python-version }} pytest tests/unit
+        run: uv run --no-default-groups --with pytest --python ${{ matrix.python-version }} pytest tests/unit
 
   integration-sqlite:
     name: integration sqlite (py${{ matrix.python-version }})
@@ -60,7 +62,7 @@ jobs:
       # dependencies. This asserts psycopg2 really isn't pulled in.
       - name: The SQLite path has no compiled dependencies
         run: |
-          uv run --no-dev --no-group pg --extra api --extra client --python ${{ matrix.python-version }} \
+          uv run --no-default-groups --extra api --extra client --python ${{ matrix.python-version }} \
             python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('psycopg2') is not None)"
       # The `pg` group (pgserver) is deliberately omitted: it ships only
       # cp311/cp312 wheels, and the SQLite backend has no such constraint.
