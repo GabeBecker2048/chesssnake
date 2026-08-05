@@ -5,8 +5,10 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-build/
-dist/
+# Anchored to the repo root: setuptools writes ./build, but an unanchored
+# pattern also swallows docker/build/, which holds the Dockerfile.
+/build/
+/dist/
 
 # test & coverage artifacts
 .pytest_cache/

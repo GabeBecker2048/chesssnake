@@ -1,0 +1,41 @@
+# chesssnake api-endpoint backed by SQLite.
+#
+#   docker compose -f docker/compose.sqlite.yaml up --build
+#   curl http://localhost:8000/health
+#
+# One container, no database server, no compiled dependencies. This is the whole
+# stack: SQLite lives in a file on the `chesssnake-data` volume.
+#
+# Suitable for a single api-endpoint process serving many clients, which is what
+# this runs. Do not scale the api service beyond one replica — SQLite serializes
+# writers through a single file lock, and the volume must not live on NFS, where
+# that locking is unreliable. For multiple workers, use compose.postgres.yaml.
+
+name: chesssnake-sqlite
+
+services:
+  api:
+    build:
+      # The repository root, so the build can see pyproject.toml and src/.
+      context: ..
+      dockerfile: docker/build/Dockerfile
+    image: chesssnake:latest
+    restart: unless-stopped
+    environment:
+      # Four slashes: sqlite://<host>/<path>, with an empty host and an absolute
+      # path. Three would make it relative to the working directory.
+      CHESSSNAKE__DATABASE__URL: sqlite:////data/chesssnake.db
+      # Create the schema on startup. Idempotent, so it is safe to leave on.
+      CHESSSNAKE__DATABASE__INIT_SCHEMA: "1"
+      # Uncomment both to require an X-API-Key header on every /v1 route.
+      # Setting the key alone does nothing: auth is explicit, and enabling it
+      # without a key is a startup error rather than a silently open server.
+      # CHESSSNAKE__API__REQUIRE_AUTH: "1"
+      # CHESSSNAKE__API__API_KEY: "change-me"
+    ports:
+      - "8000:8000"
+    volumes:
+      - chesssnake-data:/data
+
+volumes:
+  chesssnake-data:
