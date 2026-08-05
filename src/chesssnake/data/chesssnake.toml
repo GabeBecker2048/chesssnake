@@ -1,0 +1,143 @@
+#: chesssnake configuration
+#:
+#: Created by `chesssnake config init`. Every value below is the built-in default,
+#: so deleting a line changes nothing — it just falls back to the same value.
+#: Settings with no default are commented out; uncomment and fill them in.
+#:
+#: ---------------------------------------------------------------------------
+#: Precedence
+#: ---------------------------------------------------------------------------
+#: Each setting can come from four places. Later ones win:
+#:
+#:   1. this file
+#:   2. an environment variable
+#:   3. a command-line flag
+#:   0. (lowest) the built-in default, used when nothing else sets it
+#:
+#: Environment variable names are derived mechanically from the setting's
+#: position in this file: CHESSSNAKE__<SECTION>__<KEY>, uppercased, with a
+#: DOUBLE underscore before the section and before the key. So `[api] port`
+#: below is always CHESSSNAKE__API__PORT, and `[database] pool_max_size` is
+#: CHESSSNAKE__DATABASE__POOL_MAX_SIZE.
+#:
+#: Any setting can also be overridden on the command line with -o/--set:
+#:   chesssnake api-endpoint -o database.pool_max_size=20
+#:
+#: To see what is actually in effect and which layer each value came from:
+#:   chesssnake config show
+#:
+#: ---------------------------------------------------------------------------
+#: Where this file is read from
+#: ---------------------------------------------------------------------------
+#: The first of these that exists is used:
+#:
+#:   1. the path given to --config
+#:   2. the path in the CHESSSNAKE_CONFIG environment variable
+#:   3. ./chesssnake.toml (the working directory)
+#:   4. $CHESSSNAKE_HOME/chesssnake.toml
+#:   5. ~/.config/chesssnake/chesssnake.toml
+#:
+#: Having no config file at all is fine; the defaults stand on their own.
+#: (Note CHESSSNAKE_CONFIG and CHESSSNAKE_HOME use a SINGLE underscore. They are
+#: read before this file is located, so they are not settings themselves.)
+#:
+#: Unknown keys are rejected at startup rather than ignored, so a typo here is
+#: an error you will see immediately instead of a setting that silently does
+#: nothing.
+
+
+#: ===========================================================================
+#: [api] — the api-endpoint HTTP server
+#: ===========================================================================
+[api]
+
+#: Address the server binds to.
+#: Use "127.0.0.1" to accept only local connections, or "0.0.0.0" to accept
+#: connections from anywhere (what you usually want inside a container).
+#: Values: any IP address or hostname the machine can bind. Default "127.0.0.1".
+host = "127.0.0.1"
+
+#: TCP port the server listens on.
+#: Values: 1-65535. Ports below 1024 need elevated privileges. Default 8000.
+port = 8000
+
+#: Whether every /v1 route requires an X-API-Key header matching `api_key`.
+#: GET /health is always open regardless, so load balancers can probe it.
+#:
+#: This is deliberately explicit: setting `api_key` on its own does NOT turn
+#: authentication on (the server warns that the key is being ignored), and
+#: turning this on WITHOUT a key is a startup error rather than a server that
+#: quietly accepts everything.
+#: Values: true, false. Default false.
+require_auth = false
+
+#: The key clients must send as the X-API-Key header, and pass to
+#: Game.remote(..., api_key="..."). Required when require_auth is true.
+#:
+#: Prefer supplying this through the environment so the secret stays out of
+#: version control:
+#:   CHESSSNAKE__API__API_KEY='...' chesssnake api-endpoint --require-auth
+#:
+#: Values: any non-empty string. No default (unset).
+# api_key = "change-me"
+
+
+#: ===========================================================================
+#: [database] — the PostgreSQL connection
+#: ===========================================================================
+[database]
+
+#: Database connection string. This is the one setting with no usable default:
+#: the api-endpoint cannot start without it.
+#:
+#: The scheme selects the backend. Both the URL form and the libpq keyword form
+#: are accepted:
+#:   url = "postgresql://user:password@localhost:5432/chesssnake"
+#:   url = "postgresql://user@localhost:5432/chesssnake?sslmode=require"
+#:   url = "dbname='chesssnake' user='user' password='pw' host='localhost'"
+#:
+#: For the bundled docker-compose Postgres (published on host port 5433):
+#:   url = "postgresql://chesssnake@localhost:5433/chesssnake"
+#:
+#: Because this usually contains a password, consider setting it through the
+#: environment instead: CHESSSNAKE__DATABASE__URL='postgresql://...'
+#: `chesssnake config show` prints this with the password redacted.
+#:
+#: Values: any libpq connection string. No default (unset).
+# url = "postgresql://user:password@localhost:5432/chesssnake"
+
+#: Number of connections opened to the database when the pool is created.
+#: Values: integer >= 1, and no greater than pool_max_size. Default 1.
+pool_min_size = 1
+
+#: Ceiling on simultaneous database connections held by this process.
+#: Raise it if you run many concurrent requests; keep it comfortably under the
+#: server's own `max_connections`, especially when running multiple workers,
+#: since each worker keeps its own pool.
+#: Values: integer >= 1, and no less than pool_min_size. Default 10.
+pool_max_size = 10
+
+#: Create the database schema when the api-endpoint starts. The schema script
+#: is idempotent, so leaving this on is safe, but it costs a connection and a
+#: few statements on every boot.
+#:
+#: Equivalent to passing --init-db. To create the schema once and exit instead,
+#: run `chesssnake init-db` (which also takes --create-database to create the
+#: database itself, given sufficient permissions).
+#: Values: true, false. Default false.
+init_schema = false
+
+
+#: ===========================================================================
+#: [client] — intentionally absent
+#: ===========================================================================
+#: Remote Game clients read only the environment, never this file:
+#:
+#:   CHESSSNAKE__CLIENT__API_URL=http://localhost:8000
+#:   CHESSSNAKE__CLIENT__API_KEY=...
+#:
+#: A library that read ./chesssnake.toml out of whatever directory the calling
+#: program happened to start in would be surprising, so it does not. Adding a
+#: [client] table here is an error rather than a value that would be silently
+#: ignored — see `chesssnake config show`, which reports where each value came
+#: from and would otherwise be lying to you.
