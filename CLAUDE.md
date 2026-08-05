@@ -20,7 +20,7 @@ The project is managed with **uv**; all metadata lives in `pyproject.toml` (ther
 # `pgserver` only ships cp311/cp312 wheels; the package itself supports 3.11-3.14
 # and the SQLite tests run on all of them.
 uv sync                                  # core only (local, in-memory games)
-uv sync --extra api --extra client --extra postgres --group dev --group pg   # full stack
+uv sync --extra api --extra client --extra postgres   # full stack (dev + pg groups are default)
 
 # Run anything inside the managed environment
 uv run python examples/example.py        # core (no-DB) smoke example
@@ -31,7 +31,8 @@ uv run chesssnake init-db                # just create the schema, then exit
 uv run chesssnake config init            # write a commented default config file
 uv run chesssnake config show            # effective settings + where each came from
 
-# Tests (`dev` provides pytest/fastapi/httpx/sqlalchemy; `pg` provides pgserver + psycopg2)
+# Tests. Both dependency groups install by default, so a bare `uv run pytest` covers
+# both backends; CI's SQLite matrix opts out with --no-group pg (no pgserver wheels).
 uv run pytest                            # everything under tests/
 uv run pytest tests/unit                 # fast, pure-Python engine tests (no DB)
 uv run pytest tests/integration          # API + remote-Game stack, run against BOTH backends:
@@ -51,6 +52,12 @@ uv build
 # Bring up a local Postgres for the api-endpoint to talk to (create the schema with
 # `chesssnake init-db`). Exposes Postgres on host port 5433.
 docker compose up
+
+# Run the whole stack in containers (image built from docker/build/Dockerfile).
+# One image serves both; the backend is chosen at runtime by database.url.
+docker compose -f docker/compose.sqlite.yaml up --build     # single container, no DB server
+docker compose -f docker/compose.postgres.yaml up --build   # api-endpoint + PostgreSQL
+./docker/smoke-test.sh                                      # build + play a game against each
 ```
 
 Package data (`data/*.sql`, `data/*.ttf`, `data/img/*.png`) is declared under `[tool.setuptools.package-data]` in `pyproject.toml` and accessed at runtime via `chesssnake.assets.asset_path("img/template.png")` (a thin wrapper over `importlib.resources`). If you add runtime assets, register them there or they won't ship in the wheel. `uv.lock` is committed and should be kept in sync (`uv lock`).

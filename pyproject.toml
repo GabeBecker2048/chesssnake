@@ -64,6 +64,13 @@ pg = [
     "psycopg2-binary>=2.9.12",
 ]
 
+[tool.uv]
+# Install the PostgreSQL test stack by default. Without this a bare `uv run
+# pytest` quietly drops pgserver and skips every PostgreSQL test while still
+# reporting green -- the worst kind of passing build. CI's SQLite matrix job
+# opts out with --no-group pg, since pgserver has no wheels beyond cp311/cp312.
+default-groups = ["dev", "pg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
