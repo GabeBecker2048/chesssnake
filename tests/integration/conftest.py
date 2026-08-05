@@ -2,12 +2,15 @@
 Shared fixtures for the API/remote integration tests.
 
 Spins up a throwaway PostgreSQL via ``pgserver`` (no Docker/system Postgres
-needed), points the API server at it through ``CHESSDB_CONN_STR``, and drives the
-FastAPI app in-process with a ``TestClient`` (whose lifespan initializes the pool
-and schema). Tables are truncated between tests.
+needed), builds the FastAPI app from an explicit :class:`~chesssnake.config.Settings`
+pointed at it, and drives it in-process with a ``TestClient`` (whose lifespan
+initializes the pool and schema). Tables are truncated between tests.
+
+The app is constructed *from* settings rather than configured *through* the
+environment, so there is no ordering constraint between setting variables and
+importing the server module.
 """
 
-import os
 import tempfile
 
 import pytest
@@ -17,23 +20,34 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture(scope="session")
-def api_client():
+def database_url():
+    """A throwaway PostgreSQL instance, torn down at the end of the session."""
     with tempfile.TemporaryDirectory() as pgdata:
         server = pgserver.get_server(pgdata)
-        os.environ["CHESSDB_CONN_STR"] = server.get_uri()
-        os.environ["CHESSSNAKE_INIT_DB"] = "1"  # let the app init the schema on startup
+        try:
+            yield server.get_uri()
+        finally:
+            server.cleanup()
 
-        from chesssnake.api.server import app
-        from chesssnake.db import sql
 
-        # Entering the context runs the FastAPI lifespan (pool + schema init).
-        with TestClient(app) as client:
-            try:
-                yield client
-            finally:
-                if sql.connection_pool is not None:
-                    sql.connection_pool.closeall()
-        server.cleanup()
+@pytest.fixture(scope="session")
+def settings(database_url):
+    from chesssnake.config import Settings
+
+    return Settings(database={"url": database_url, "init_schema": True})
+
+
+@pytest.fixture(scope="session")
+def api_client(settings):
+    from chesssnake.api.server import create_app
+    from chesssnake.db import sql
+
+    # Entering the context runs the FastAPI lifespan (pool + schema init).
+    with TestClient(create_app(settings)) as client:
+        try:
+            yield client
+        finally:
+            sql.close_connection_pool()
 
 
 @pytest.fixture(autouse=True)

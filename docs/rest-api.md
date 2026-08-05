@@ -71,12 +71,17 @@ response you can get, and how a client is expected to interpret them.
 
 ## Authentication
 
-Authentication is **optional and off by default**.
+Authentication is **optional and off by default**, and must be enabled explicitly.
 
-- If the server process has the environment variable `CHESSSNAKE_API_KEY` set, then
-  **every `/v1` route requires** the header `X-API-Key: <that value>`. Requests
-  without it, or with a wrong value, get **`401 Unauthorized`**.
-- If `CHESSSNAKE_API_KEY` is unset, no key is required.
+- If the server is configured with `api.require_auth` **true**, then **every `/v1`
+  route requires** the header `X-API-Key: <api.api_key>`. Requests without it, or
+  with a wrong value, get **`401 Unauthorized`**.
+- If `api.require_auth` is false, no key is required. Setting `api.api_key` on its
+  own does **not** turn authentication on; the server warns that the key is being
+  ignored.
+- Enabling `api.require_auth` without an `api.api_key` is a **startup error**, so a
+  deployment whose secret failed to inject fails loudly rather than serving
+  unauthenticated traffic.
 - `GET /health` is **always open** — it never requires the key (so load balancers and
   uptime checks can probe it).
 
@@ -84,8 +89,15 @@ Authentication is **optional and off by default**.
 X-API-Key: my-secret-key
 ```
 
-A `401` body is FastAPI's standard shape: `{"detail": "Invalid or missing API key"}`
-(note: no `error_type` field — see [Error handling](#error-handling)).
+Configure it however you like (see [configuration.md](configuration.md)):
+
+```commandline
+CHESSSNAKE__API__API_KEY='my-secret-key' chesssnake api-endpoint --require-auth
+```
+
+A `401` body uses the same envelope as every other error —
+`{"error_type": "AuthError", "detail": "Invalid or missing API key"}` — see
+[Error handling](#error-handling).
 
 ---
 

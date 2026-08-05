@@ -12,22 +12,31 @@ from . import errors
 from .sql import execute_psql, initialize_connection_pool, psql_db_init, transaction, validate_ids
 
 
-def db_init(sql_creds=None, create_database=False):
+def db_init(dsn, create_database=False, minconn=1, maxconn=10):
     """
     Initializes the database environment: optionally creates the database, sets up
     the connection pool, and initializes the schema.
 
     If ``create_database`` is True, attempts to create the database if it does not
-    exist (requires appropriate permissions). If ``sql_creds`` is not provided,
-    credentials are read from the ``CHESSDB_*`` environment variables.
+    exist (requires appropriate permissions).
 
+    :param dsn: The database connection string. Resolve it from configuration with
+                ``chesssnake.config.resolve().database.url``.
+    :type dsn: str
+    :param create_database: Whether to create the database if it is missing.
+    :param minconn: Minimum number of pooled connections.
+    :param maxconn: Maximum number of pooled connections.
     :raises errors.GameError: If any step of initialization fails.
     """
     try:
         if create_database:
-            psql_db_init(sql_creds=sql_creds)
-        initialize_connection_pool(sql_creds=sql_creds)
+            psql_db_init(dsn)
+        initialize_connection_pool(dsn, minconn=minconn, maxconn=maxconn)
         print("Database initialized successfully.")
+    except errors.GameError:
+        # Already a well-formed persistence error (e.g. SQLAuthError, whose message
+        # explains exactly how to configure credentials); don't flatten its type.
+        raise
     except Exception as e:
         raise errors.GameError(f"Database initialization error:\n{str(e)}")
 
