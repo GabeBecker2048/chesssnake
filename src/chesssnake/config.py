@@ -129,6 +129,11 @@ class DatabaseSettings(_Section):
     pool_min_size: int = Field(default=1, ge=1, description="Minimum number of pooled database connections.")
     pool_max_size: int = Field(default=10, ge=1, description="Maximum number of pooled database connections.")
     init_schema: bool = Field(default=False, description="Create the database schema when the api-endpoint starts.")
+    sqlite_busy_timeout: int = Field(
+        default=5000,
+        ge=0,
+        description="Milliseconds a blocked SQLite writer waits for the lock. Ignored on PostgreSQL.",
+    )
 
     @model_validator(mode="after")
     def _check_pool_bounds(self) -> DatabaseSettings:

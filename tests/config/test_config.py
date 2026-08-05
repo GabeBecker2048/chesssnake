@@ -23,6 +23,7 @@ EXPECTED_ENV_NAMES = {
     ("database", "pool_min_size"): "CHESSSNAKE__DATABASE__POOL_MIN_SIZE",
     ("database", "pool_max_size"): "CHESSSNAKE__DATABASE__POOL_MAX_SIZE",
     ("database", "init_schema"): "CHESSSNAKE__DATABASE__INIT_SCHEMA",
+    ("database", "sqlite_busy_timeout"): "CHESSSNAKE__DATABASE__SQLITE_BUSY_TIMEOUT",
     ("client", "api_url"): "CHESSSNAKE__CLIENT__API_URL",
     ("client", "api_key"): "CHESSSNAKE__CLIENT__API_KEY",
 }
