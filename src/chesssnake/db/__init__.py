@@ -1,22 +1,25 @@
 """Persistence layer — the common database interface.
 
-The active backend is PostgreSQL (:mod:`chesssnake.db.postgres`, with connection
-plumbing in :mod:`chesssnake.db.sql`). The operation functions are re-exported
-here so callers depend on ``chesssnake.db`` rather than a specific backend; a
-future ``chesssnake.db.sqlite`` can implement the same functions behind this
-same interface.
+Queries are backend-agnostic SQLAlchemy Core expressions in
+:mod:`chesssnake.db.operations`, built against the schema in
+:mod:`chesssnake.db.schema`. The backend is chosen by the scheme of
+``settings.database.url``: ``postgresql://…`` or ``sqlite:///…``. Only the
+handful of things that genuinely differ between them — row locking, the upsert
+construct, creating a database — live in :mod:`chesssnake.db.postgres` and
+:mod:`chesssnake.db.sqlite`.
 
-The backend modules are imported lazily, because ``errors`` is shared with the
-remote client for error mapping (``remote/client.py``) while ``postgres``/``sql``
-pull in psycopg2 — which the ``client`` extra does not install. Importing them
-eagerly made ``pip install chesssnake[client]`` fail on ``Game.remote(...)``.
+Everything is imported lazily except ``errors``, which is shared with the remote
+client for error mapping (``remote/client.py``). The client extra installs neither
+SQLAlchemy nor psycopg2, so importing them eagerly here would break
+``pip install chesssnake[client]``.
 """
 
 from typing import Any
 
 from . import errors
 
-_LAZY = (
+#: Operations re-exported from :mod:`chesssnake.db.operations`.
+_OPERATIONS = (
     "apply_game_change",
     "challenge",
     "challenge_create",
@@ -31,16 +34,19 @@ _LAZY = (
     "game_get_or_create",
     "game_history",
     "game_record",
+    "validate_ids",
 )
+
+_MODULES = ("engine", "operations", "postgres", "schema", "sqlite")
 
 
 def __getattr__(name: str) -> Any:
-    """Resolve backend operations (and the ``postgres``/``sql`` modules) on first use."""
-    if name in _LAZY:
-        from . import postgres
+    """Resolve operations and backend modules on first use."""
+    if name in _OPERATIONS:
+        from . import operations
 
-        return getattr(postgres, name)
-    if name in ("postgres", "sql"):
+        return getattr(operations, name)
+    if name in _MODULES:
         import importlib
 
         return importlib.import_module(f".{name}", __name__)
@@ -49,20 +55,6 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "errors",
-    "postgres",
-    "sql",
-    "db_init",
-    "game_get_or_create",
-    "game_get",
-    "game_archive",
-    "game_history",
-    "game_record",
-    "apply_game_change",
-    "game_delete",
-    "current_games",
-    "game_exists",
-    "challenge",
-    "challenge_create",
-    "challenge_delete",
-    "challenge_exists",
+    *_MODULES,
+    *_OPERATIONS,
 ]

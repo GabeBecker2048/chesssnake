@@ -215,7 +215,7 @@ class Board:
 
         return out
 
-    def move(self, move, player):
+    def move(self, move, player, detect_outcome=True):
         """
         Executes a move on the chessboard.
 
@@ -227,6 +227,11 @@ class Board:
         :type move: Move
         :param player: The current player's color (0 for white, 1 for black).
         :type player: int
+        :param detect_outcome: Whether to update ``status``/``termination`` afterwards.
+            Internal: :meth:`_has_legal_move` applies candidate moves to a throwaway
+            board purely to see whether they are legal, and outcome detection would
+            recurse back into it. Callers should leave this ``True``.
+        :type detect_outcome: bool
         :return: The executed move object for reference.
         :rtype: Move
         :raises errors.MoveIntoCheckError: If the move would put the player in check.
@@ -298,6 +303,9 @@ class Board:
         self.halfmove_clock = 0 if (is_pawn_move or is_capture) else self.halfmove_clock + 1
         if player == Color.BLACK:
             self.fullmove_number += 1
+
+        if not detect_outcome:
+            return m
 
         # update the game outcome from the rules the board can see by itself
         # (threefold repetition is applied by Game.move, which holds the history)
@@ -457,27 +465,41 @@ class Board:
 
         return len(self.threats_on(king_square, player)) > 0
 
-    def _squares_between(self, a, b):
+    def _has_legal_move(self, player):
         """
-        Squares strictly between two colinear squares ``a`` and ``b`` (exclusive).
+        Whether ``player`` has at least one fully-legal move.
 
-        Works for a shared rank, file, or diagonal — the only lines along which a
-        sliding piece can check a king. Returns an empty list when the squares are
-        adjacent (nothing can be interposed).
+        Candidates are generated pseudo-legally and confirmed by applying them to a
+        throwaway copy, which is the same machinery :meth:`legal_moves` uses — so
+        pins, discovered checks, castling through check, and en passant are all
+        judged by the real move logic rather than a second implementation of it.
+        Returns as soon as one move is found, so the common (non-terminal) case
+        stops almost immediately.
 
-        :param a: One endpoint square (e.g. the king's square).
-        :type a: Square
-        :param b: The other endpoint square (e.g. the checking piece's square).
-        :type b: Square
-        :return: The list of `Square` objects strictly between ``a`` and ``b``.
-        :rtype: list[Square]
+        :param player: The player to test (0 for white, 1 for black).
+        :type player: int
+        :rtype: bool
         """
-        di = b.i - a.i
-        dj = b.j - a.j
-        steps = max(abs(di), abs(dj))
-        step_i = (di > 0) - (di < 0)  # sign of di (-1, 0, or 1)
-        step_j = (dj > 0) - (dj < 0)  # sign of dj (-1, 0, or 1)
-        return [self[a.i + s * step_i, a.j + s * step_j] for s in range(1, steps)]
+        player = Color(player)
+        last_rank = 0 if player == Color.WHITE else 7
+
+        for rank in self:
+            for square in rank:
+                piece = square.piece
+                if piece is None or piece.color != player:
+                    continue
+                for to in self._pseudo_targets(square, piece):
+                    promotions = _PROMOTIONS if (piece.piecetype == PieceType.PAWN and to.i == last_rank) else (None,)
+                    for promo in promotions:
+                        trial = copy.deepcopy(self)
+                        try:
+                            # detect_outcome=False: we only care whether the move is
+                            # legal, and outcome detection would recurse back here.
+                            trial.move(to_san(self, square, to, piece, promotion=promo), player, detect_outcome=False)
+                        except errors.ChessError:
+                            continue
+                        return True
+        return False
 
     # returns true if the given player is in checkmate
     # returns false otherwise
@@ -486,7 +508,12 @@ class Board:
         Determines if the player is in checkmate.
 
         A player is in checkmate if the King is in check and no legal moves can
-        remove it from check.
+        remove it from check — which is exactly what this tests. It previously
+        reimplemented that as a bespoke analysis (can the king step away, can the
+        checker be captured, can the check be blocked), which missed cases the move
+        logic already handles: most visibly, it counted the king as able to capture
+        a *defended* checker, so scholar's mate was reported as check rather than
+        mate.
 
         :param player: The player to check for checkmate (0 for white, 1 for black).
         :type player: int
@@ -494,67 +521,7 @@ class Board:
         :rtype: bool
         """
         player = Color(player)
-        if not self.check_for_check(player):
-            return False
-
-        king_square = self.find_king(player)
-        if king_square is None:
-            return False
-
-        threats = self.threats_on(king_square, player)
-
-        # checks if the king can move.
-        # The king is temporarily lifted off the board so it does not block a
-        # sliding attacker's line of sight to the square behind it (otherwise an
-        # escape square "behind" the king along the checking line, e.g. a back-rank
-        # Kg8->h8, would incorrectly look safe).
-        delta_is = [1, 1, 0, -1, -1, -1, 0, 1]
-        delta_js = [0, 1, 1, 1, 0, -1, -1, -1]
-        with self.lifted(king_square):
-            for index in range(8):
-                psquare = self[king_square.i + delta_is[index], king_square.j + delta_js[index]]
-
-                # if there is a square that the king can move to, returns false
-                if (
-                    psquare is not None
-                    and (psquare.piece is None or psquare.piece.color == player.opponent)
-                    and len(self.threats_on(psquare, player)) == 0
-                ):
-                    return False
-
-        # checks if the piece threatening can be taken OR if the piece threatening can be blocked
-        if len(threats) == 1:  # this will only work if there is only one threatening piece
-            # this is the only threat, now saved to threat
-            threat = threats[0]
-
-            # if the piece can be taken, returns False
-            if len(self.threats_on(threat, player.opponent)) > 0:
-                return False
-
-            # blocking
-            if threat.piece.piecetype in (PieceType.ROOK, PieceType.BISHOP, PieceType.QUEEN):
-                # the squares between the (sliding) checker and the king — any of
-                # which a friendly piece could interpose on to block the check
-                pbsquares = self._squares_between(king_square, threat)
-
-                # if any of the possible blocking squares (pbsquares) are blockable, returns false
-                for pbsquare in pbsquares:
-                    # a friendly pawn can block the threat by advancing (a non-capture move)
-                    if Pawn.find_all(self, pbsquare, player, capture=False):
-                        return False
-
-                    # this is a list of pieces that threaten the possible blocking squares
-                    # possible blocking threats (pbthreats)
-                    pbthreats = self.threats_on(pbsquare, player.opponent)
-                    if len(pbthreats) != 0:
-                        # kings and pawns need to be excluded from this list:
-                        #   - kings can't block a check
-                        #   - pawns can't block a check by capturing
-                        for square in pbthreats:
-                            if square.piece.piecetype not in (PieceType.PAWN, PieceType.KING):
-                                return False
-
-        return True
+        return self.check_for_check(player) and not self._has_legal_move(player)
 
     # returns true if the given player is in stalemate (can't move any of their pieces)
     # returns false otherwise
@@ -562,20 +529,20 @@ class Board:
         """
         Determines if the player is in stalemate.
 
-        A player is in stalemate if they are not in check and have no legal moves remaining.
+        A player is in stalemate if they are not in check and have no legal moves
+        remaining. This tests only the "no legal moves" half; callers pair it with
+        :meth:`check_for_check`, as :meth:`move` does.
+
+        Note this counts moves that are legal, not merely available: a piece that is
+        pinned to its own king cannot move, which the previous ``can_move`` scan did
+        not account for.
 
         :param player: The player to check for stalemate (0 for white, 1 for black).
         :type player: int
-        :return: `True` if the player is in stalemate, otherwise `False`.
+        :return: `True` if the player has no legal move, otherwise `False`.
         :rtype: bool
         """
-        player = Color(player)
-        for rank in self:
-            for square in rank:
-                if square.piece is not None and square.piece.color == player and square.piece.can_move(square, self):
-                    return False
-
-        return True
+        return not self._has_legal_move(player)
 
     def _pseudo_targets(self, square, piece):
         """Candidate destination squares for ``piece`` (a superset of legal moves)."""
@@ -608,7 +575,7 @@ class Board:
         def _accept(san):
             trial = copy.deepcopy(self)
             try:
-                trial.move(san, turn)
+                trial.move(san, turn, detect_outcome=False)
             except errors.ChessError:
                 return False
             return True
