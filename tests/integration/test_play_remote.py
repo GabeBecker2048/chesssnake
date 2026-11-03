@@ -116,3 +116,45 @@ def test_session_reports_the_generation_for_remote_games(remote_client):
     game = make_game(remote_client, white_id=17, black_id=18)
     _, out = play(["board", "quit"], game)
     assert "gen 1" in out
+
+
+def test_informational_commands_do_not_show_a_stale_position(remote_client):
+    """
+    Regression: the board and ``fen`` come from the local mirror while ``moves``
+    and ``pgn`` are proxied to the server, so once the opponent moved the two
+    disagreed — ``moves`` listed the legal moves of a position not on screen.
+    Every informational command now syncs first.
+    """
+    mine = make_game(remote_client, white_id=19, black_id=20, player_id=19)
+    theirs = make_game(remote_client, white_id=19, black_id=20, player_id=20)
+
+    play(["e4", "quit"], mine, player_id=19)
+    theirs.refresh()
+    theirs.move("e5")  # mine is told nothing
+
+    _, out = play(["moves", "quit"], mine, player_id=19)
+    assert "the position changed on the server" in out
+    # White is to move again, so the listed moves must be White's, and the board
+    # that was redrawn alongside them must be the position they belong to.
+    assert mine.fen.split()[1] == "w"
+    assert "Bc4" in out, "the bishop moves only exist in the post-e5 position"
+
+
+def test_fen_and_board_also_sync(remote_client):
+    mine = make_game(remote_client, white_id=21, black_id=22, player_id=21)
+    theirs = make_game(remote_client, white_id=21, black_id=22, player_id=22)
+
+    play(["e4", "quit"], mine, player_id=21)
+    theirs.refresh()
+    theirs.move("c5")
+
+    _, out = play(["fen", "quit"], mine, player_id=21)
+    assert "2c5" not in out  # sanity: we are reading a FEN, not a move list
+    assert mine.fen.split()[1] == "w"
+    assert "the position changed on the server" in out
+
+
+def test_refresh_says_so_when_there_is_nothing_new(remote_client):
+    game = make_game(remote_client, white_id=23, black_id=24)
+    _, out = play(["refresh", "quit"], game)
+    assert "nothing new" in out
