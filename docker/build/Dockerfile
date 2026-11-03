@@ -61,7 +61,17 @@ RUN useradd --create-home --uid 10001 chesssnake \
     && chown chesssnake:chesssnake /data
 
 USER chesssnake
-WORKDIR /home/chesssnake
+
+# The working directory is /data, not the user's home, and HOME points there
+# too. A published image is routinely run with `user:` set to whoever owns the
+# mounted data directory, and that uid cannot read /home/chesssnake (useradd
+# makes it mode 700). chesssnake looks for chesssnake.toml in the working
+# directory first, so an unreadable cwd kills startup with a PermissionError
+# that says nothing about uids. /data is owned by the running user by
+# definition, which makes any `user:` work and gives config.toml an obvious
+# home next to the database.
+ENV HOME=/data
+WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 8000
 
