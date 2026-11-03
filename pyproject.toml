@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chesssnake"
-version = "0.13.0"
+version = "0.13.1"
 description = "A robust Chess API and backend"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -86,6 +86,13 @@ default-groups = ["dev", "pg"]
 testpaths = ["tests"]
 markers = [
     "integration: tests that need the DB/API stack (deselect with -m 'not integration')",
+]
+# The live-update client uses websockets' sync client, which deprecates APIs
+# ahead of removing them. 0.13.0 shipped using one that websockets 17 deprecated,
+# unseen because the lock still had 16; as an error, the next one fails here.
+filterwarnings = [
+    "error:connect\\(\\) must be used:DeprecationWarning",
+    "error::DeprecationWarning:chesssnake",
 ]
 
 [tool.coverage.run]
