@@ -111,7 +111,22 @@ else
     : > "$notes_file"
 fi
 
-args=(release create "$TAG" --title "$TAG" --target "$SHA")
+# Create and push the tag ourselves rather than letting `gh` do it through
+# `--target`. GitHub's release API rejects `target_commitish` for some perfectly
+# valid commits with a bare 404 -- reproduced on four of this project's own
+# history commits (0.6.7, 0.7.0, 0.7.1, 0.8.0), each of them on main and
+# resolvable through every other endpoint, while neighbouring commits were fine.
+# Creating the tag first sidesteps the question: the release is then made from a
+# ref that already exists.
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+    existing="$(git rev-parse "refs/tags/$TAG^{commit}")"
+    [ "$existing" = "$SHA" ] || die "tag $TAG already exists locally at ${existing:0:9}, not ${SHA:0:9}"
+else
+    [ "$DRY_RUN" -eq 1 ] || git tag -a "$TAG" -m "$TAG" "$SHA"
+fi
+[ "$DRY_RUN" -eq 1 ] || git push -q origin "refs/tags/$TAG"
+
+args=(release create "$TAG" --title "$TAG")
 if [ -s "$notes_file" ]; then args+=(--notes-file "$notes_file"); else args+=(--generate-notes); fi
 [ "$DRAFT" -eq 1 ] && args+=(--draft)
 [ "$PRERELEASE" -eq 1 ] && args+=(--prerelease)
