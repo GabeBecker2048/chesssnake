@@ -27,18 +27,22 @@ MAINTENANCE_DB = "postgres"
 insert = _insert
 
 
-def lock_current_game(conn, stmt):
+def lock_current_game(conn, stmt, of=None):
     """
     Read the current game row and hold a lock on it for the transaction.
 
     :param conn: An open connection inside a :func:`~chesssnake.db.engine.locked_transaction`.
     :param stmt: The select for the current game row.
+    :param of: The table whose rows to lock (``FOR UPDATE OF``). The game select
+        joins ``users`` twice for the players' names, and a bare ``FOR UPDATE``
+        would lock those two user rows as well, serialising every game either
+        player is in behind this one.
     :return: The executed result.
     """
     from .engine import require_write_transaction
 
     require_write_transaction()
-    return conn.execute(stmt.with_for_update())
+    return conn.execute(stmt.with_for_update(of=of))
 
 
 def configure_engine(engine, **_kwargs) -> None:

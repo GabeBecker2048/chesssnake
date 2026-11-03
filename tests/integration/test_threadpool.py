@@ -51,13 +51,13 @@ def test_health_is_the_only_route_on_the_event_loop():
         "blocking database and rendering calls, so they must be plain `def`."
     )
     # A new route that nobody thought about should trip this, not slip through.
-    assert len(routes) == 21, (
-        f"expected 21 routes, found {len(routes)}; if you added one, confirm it is "
+    assert len(routes) == 29, (
+        f"expected 29 routes, found {len(routes)}; if you added one, confirm it is "
         "`def` and not `async def`, then update this count"
     )
 
 
-def test_requests_run_in_parallel(api_client, monkeypatch):
+def test_requests_run_in_parallel(api_client, pair, monkeypatch):
     """
     Three concurrent reads must be in flight at the same instant.
 
@@ -67,7 +67,7 @@ def test_requests_run_in_parallel(api_client, monkeypatch):
     barrier would break on its timeout, and this fails with a clear message
     instead of a slow test.
     """
-    group, white, black = 70, 71, 72
+    group, (white, black) = 70, pair
     assert (
         api_client.post("/v1/games", json={"group_id": group, "white_id": white, "black_id": black}).status_code == 200
     )
@@ -148,7 +148,7 @@ def test_an_in_memory_database_is_refused(api_client, monkeypatch):
             pass  # pragma: no cover - the lifespan raises before the body runs
 
 
-def test_a_saturated_pool_answers_503_not_500(api_client, monkeypatch):
+def test_a_saturated_pool_answers_503_not_500(api_client, pair, monkeypatch):
     """
     When every database connection is in use, the server says "busy", not "error".
 
@@ -168,7 +168,7 @@ def test_a_saturated_pool_answers_503_not_500(api_client, monkeypatch):
 
     from chesssnake.db import engine as db_engine
 
-    group, white, black = 73, 74, 75
+    group, (white, black) = 73, pair
     assert (
         api_client.post("/v1/games", json={"group_id": group, "white_id": white, "black_id": black}).status_code == 200
     )

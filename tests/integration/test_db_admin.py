@@ -153,7 +153,7 @@ def test_postgres_create_database_and_schema(backend, database_url):
     created = create_engine(target)
     try:
         schema.create_all(created)
-        assert set(inspect(created).get_table_names()) >= {"games", "moves", "challenges"}
+        assert set(inspect(created).get_table_names()) >= {t.name for t in schema.TABLES}
     finally:
         created.dispose()
 

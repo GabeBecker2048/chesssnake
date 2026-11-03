@@ -100,7 +100,8 @@ def clean_tables(request):
 
     request.getfixturevalue("api_client")
     with engine.transaction() as conn:
-        for table in schema.TABLES:
+        # Children before parents, or the foreign keys refuse the delete.
+        for table in reversed(schema.TABLES):
             conn.execute(delete(table))
     yield
 
@@ -111,3 +112,29 @@ def remote_client(api_client):
     from chesssnake.remote.client import ApiClient
 
     return ApiClient("", session=api_client)
+
+
+@pytest.fixture
+def users(api_client):
+    """
+    Create users through the API and return their ids, in the order named.
+
+    Ids are assigned by the server and never reused, so tests take them from
+    here rather than writing them down: ``white, black = users("alice", "bob")``.
+    """
+
+    def create(*names):
+        ids = []
+        for name in names:
+            resp = api_client.post("/v1/users", json={"username": name})
+            assert resp.status_code == 201, resp.text
+            ids.append(resp.json()["id"])
+        return ids
+
+    return create
+
+
+@pytest.fixture
+def pair(users):
+    """Two fresh users, ``(white_id, black_id)``."""
+    return tuple(users("white", "black"))

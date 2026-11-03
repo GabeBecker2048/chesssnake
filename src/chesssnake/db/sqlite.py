@@ -28,7 +28,7 @@ CREATES_DATABASES = True
 insert = _insert
 
 
-def lock_current_game(conn, stmt):
+def lock_current_game(conn, stmt, of=None):
     """
     Read the current game inside an already-exclusive transaction.
 
@@ -40,6 +40,8 @@ def lock_current_game(conn, stmt):
 
     :param conn: An open connection inside a :func:`~chesssnake.db.engine.locked_transaction`.
     :param stmt: The select for the current game row.
+    :param of: Ignored; the whole database is already locked. Accepted so the
+        caller can name the table to lock without caring which backend it has.
     :return: The executed result.
     """
     from .engine import require_write_transaction
@@ -67,6 +69,11 @@ def configure_engine(engine, busy_timeout: int = 5000) -> None:
             # what makes concurrent HTTP requests workable at all.
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute(f"PRAGMA busy_timeout={int(busy_timeout)}")
+            # Off by default in SQLite, and silently so: without this a game
+            # row can name a user that does not exist and ON DELETE CASCADE
+            # does nothing. It must run outside a transaction, which is why
+            # isolation_level is cleared above before the cursor is opened.
+            cursor.execute("PRAGMA foreign_keys=ON")
         finally:
             cursor.close()
 

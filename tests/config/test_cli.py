@@ -171,3 +171,87 @@ def test_config_init_warns_when_cwd_shadows_chesssnake_home(capsys, monkeypatch,
 def test_missing_subcommand_is_an_error():
     with pytest.raises(SystemExit):
         main([])
+
+
+# --- user accounts and init-db ---------------------------------------------
+#
+# These run against a throwaway SQLite file. They need SQLAlchemy (the `api`
+# extra) but no server, so they live here rather than in tests/integration.
+
+
+@pytest.fixture
+def database(isolated_env):
+    pytest.importorskip("sqlalchemy")
+    from chesssnake.db import engine
+
+    url = f"sqlite:///{isolated_env / 'cli.db'}"
+    engine.dispose_engine()
+    main(["init-db", "--database-url", url])
+    return url
+
+
+def user_cmd(capsys, database, *args):
+    main(["user", *args, "--database-url", database])
+    return json.loads(capsys.readouterr().out)
+
+
+def test_user_create_and_show(capsys, database):
+    capsys.readouterr()
+    alice = user_cmd(capsys, database, "create", "Alice", "--admin")
+    assert alice["role"] == "admin" and isinstance(alice["id"], int)
+    bob = user_cmd(capsys, database, "create", "bob")
+    assert bob["role"] == "user" and bob["id"] > alice["id"]
+    assert user_cmd(capsys, database, "show", "alice") == alice
+    assert user_cmd(capsys, database, "show", str(bob["id"]))["username"] == "bob"
+
+
+def test_user_set_role_rename_and_link(capsys, database):
+    capsys.readouterr()
+    user_cmd(capsys, database, "create", "carol")
+    assert user_cmd(capsys, database, "set-role", "carol", "admin")["role"] == "admin"
+    assert user_cmd(capsys, database, "rename", "carol", "Caroline")["username"] == "Caroline"
+    linked = user_cmd(capsys, database, "link", "caroline", "discord", "123456789012345678")
+    assert linked["identities"] == [{"provider": "discord", "external_id": "123456789012345678"}]
+
+
+def test_user_errors_exit_with_the_message(capsys, database):
+    main(["user", "create", "dave", "--database-url", database])
+    with pytest.raises(SystemExit, match="already taken"):
+        main(["user", "create", "DAVE", "--database-url", database])
+    with pytest.raises(SystemExit, match="No user"):
+        main(["user", "show", "nobody", "--database-url", database])
+    with pytest.raises(SystemExit, match="not only digits"):
+        main(["user", "create", "1234", "--database-url", database])
+
+
+def test_init_db_drop_starts_over(capsys, database):
+    main(["user", "create", "erin", "--database-url", database])
+    main(["init-db", "--drop", "--database-url", database])
+    assert "Dropped" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="No user"):
+        main(["user", "show", "erin", "--database-url", database])
+
+
+# --- play flags --------------------------------------------------------------
+
+
+def test_remote_play_needs_both_players(monkeypatch):
+    pytest.importorskip("requests")
+    with pytest.raises(SystemExit, match="--white and --black"):
+        main(["play", "--api-url", "http://localhost:1", "--white", "alice"])
+
+
+def test_names_are_for_local_games_only():
+    with pytest.raises(SystemExit, match="only for --local"):
+        main(["play", "--api-url", "http://localhost:1", "--white", "a1", "--black", "b1", "--white-name", "Al"])
+
+
+def test_local_me_is_a_side_not_a_username():
+    with pytest.raises(SystemExit, match="--me is 0"):
+        main(["play", "--local", "--me", "alice"])
+
+
+def test_a_player_is_an_id_or_a_valid_username(capsys):
+    with pytest.raises(SystemExit):
+        main(["play", "--local", "--white", "not valid"])
+    assert "neither a user id nor a username" in capsys.readouterr().err
