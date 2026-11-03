@@ -114,6 +114,14 @@ gh workflow enable release.yml
 `--commit` is checked the same way as a normal release: the commit has to
 declare that exact version, in `pyproject.toml` or (before 0.6.7) `setup.py`.
 
+The script creates and pushes the tag itself rather than letting `gh` do it via
+`--target`. That is not stylistic: GitHub's release API rejects
+`target_commitish` for some perfectly valid commits with a bare **404**, and
+four of this project's own history commits (0.6.7, 0.7.0, 0.7.1, 0.8.0) hit it
+while their neighbours were fine — each one on `main`, listed by the commits
+API, and resolvable through `compare`. Creating the tag first removes the
+question entirely, because the release is then made from a ref that exists.
+
 **Old versions cannot go through the workflow.** It runs
 `uv run --extra api --extra client --extra postgres --group pg pytest`, and those
 extras did not all exist before 0.9.0 — 0.8.0 fails with
