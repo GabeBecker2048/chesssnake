@@ -62,62 +62,84 @@ except Exception:
     fail "timed out waiting for ${BASE}/health"
 }
 
+bootstrap_accounts() {
+    # Accounts are made in the container, against the database, the way an
+    # operator makes the first admin. The passwords are throwaway: the stack is
+    # torn down with --volumes before and after.
+    local file=$1
+    printf 'ada-password\n' | docker compose -f "$file" exec -T api chesssnake user create ada --password-stdin >/dev/null
+    printf 'bob-password\n' | docker compose -f "$file" exec -T api chesssnake user create bob --password-stdin >/dev/null
+    docker compose -f "$file" exec -T api chesssnake user create bot --admin --no-password >/dev/null
+    ADMIN_TOKEN="$(docker compose -f "$file" exec -T api chesssnake user token bot --name smoke-test 2>/dev/null)"
+    [ -n "$ADMIN_TOKEN" ] || fail "could not mint an admin token"
+}
+
 play_a_game() {
-    python3 - "$BASE" <<'PY'
-import json, sys, urllib.request
+    python3 - "$BASE" "$ADMIN_TOKEN" <<'PY'
+import json, sys, urllib.error, urllib.request
 
-base = sys.argv[1]
+base, admin = sys.argv[1], sys.argv[2]
 
-def call(method, path, body=None):
-    """Return parsed JSON for JSON responses, raw bytes otherwise.
+def call(method, path, body=None, token=None, expect=None):
+    """Return (status, parsed JSON or raw bytes).
 
-    Decided by Content-Type, not by sniffing the first byte: a PGN export starts
-    with tag pairs like [Event "?"], which looks exactly like a JSON array.
+    JSON vs bytes is decided by Content-Type, not by sniffing the first byte: a
+    PGN export starts with tag pairs like [Event "?"], which looks exactly like
+    a JSON array.
     """
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        base + path, data=data, method=method,
-        headers={"Content-Type": "application/json"} if data else {},
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        payload = resp.read()
-        is_json = resp.headers.get_content_type() == "application/json"
-    return json.loads(payload) if is_json else payload
+    headers = {"Content-Type": "application/json"} if data else {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(base + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status, payload, ctype = resp.status, resp.read(), resp.headers.get_content_type()
+    except urllib.error.HTTPError as e:
+        status, payload, ctype = e.code, e.read(), e.headers.get_content_type()
+    result = json.loads(payload) if ctype == "application/json" and payload else payload
+    if expect is not None:
+        assert status == expect, f"{method} {path}: expected {expect}, got {status}: {result!r}"
+    return result
 
-assert call("GET", "/health")["status"] == "ok", "health did not report ok"
+assert call("GET", "/health", expect=200)["status"] == "ok", "health did not report ok"
+call("GET", "/v1/games", expect=401)
 
-# Players are accounts with server-assigned ids, so create them first.
-ada = call("POST", "/v1/users", {"username": "Ada"})["id"]
-bob = call("POST", "/v1/users/discord/123456789012345678", {"username": "Bob"})["id"]
-assert call("GET", "/v1/users/discord/123456789012345678")["id"] == bob, "the external id did not map back"
+ada = call("POST", "/v1/auth/login", {"username": "ada", "password": "ada-password"}, expect=200)["token"]
+bob = call("POST", "/v1/auth/login", {"username": "Bob", "password": "bob-password"}, expect=200)["token"]
+call("POST", "/v1/auth/login", {"username": "ada", "password": "wrong-password"}, expect=401)
 
-url = f"/v1/games/1/{ada}/{bob}"
-game = call("POST", "/v1/games", {"group_id": 1, "white_id": ada, "black_id": bob})
-assert game["version"] == 1, f"unexpected initial version {game['version']}"
-assert (game["white_name"], game["black_name"]) == ("Ada", "Bob"), game
+# The normal way to a game: ada challenges as white, bob accepts.
+bob_id = call("GET", "/v1/users?username=bob", token=ada, expect=200)["id"]
+challenge = call("POST", "/v1/challenges", {"opponent_id": bob_id, "color": "white"}, token=ada, expect=201)
+game = call("POST", f"/v1/challenges/{challenge['id']}/accept", token=bob, expect=201)
+url = f"/v1/games/{game['id']}"
+assert (game["white_name"], game["black_name"]) == ("ada", "bob"), game
 
-# Scholar's mate: a real game, and it exercises checkmate detection.
-for move in ("e4", "e5", "Qh5", "Nc6", "Bc4", "Nf6", "Qxf7"):
-    result = call("POST", f"{url}/moves", {"move": move})
+# Scholar's mate, each side moving as itself; it exercises checkmate detection.
+for token, move in ((ada, "e4"), (bob, "e5"), (ada, "Qh5"), (bob, "Nc6"), (ada, "Bc4"), (bob, "Nf6"), (ada, "Qxf7")):
+    result = call("POST", f"{url}/moves", {"move": move}, token=token, expect=200)
+call("POST", f"{url}/moves", {"move": "a6"}, token=ada, expect=400)  # over now
 
 assert result["san"] == "Qxf7#", f"expected mate, got {result['san']!r}"
-assert result["state"]["status"] == 1, f"expected white to win, got {result['state']['status']}"
-assert result["state"]["termination"] == "checkmate", result["state"]["termination"]
+assert result["state"]["status"] == 1 and result["state"]["termination"] == "checkmate", result["state"]
 
-# The game must survive as stored state, not just in that one response: it is
-# now in the archive, under the id it had while it was being played.
-reloaded = call("GET", f"/v1/games/{game['id']}")
-assert reloaded["status"] == 1, "the finished game did not persist"
-assert reloaded == call("GET", url), "the game reads differently by id and by players"
-
-pgn = call("GET", f"{url}/pgn").decode()
-assert "1. e4 e5" in pgn and "Qxf7#" in pgn and '[White "Ada"]' in pgn, pgn
-
-png = call("GET", f"{url}/image")
+# The game survives as stored state, archived under the id it was played as.
+assert call("GET", url, token=bob, expect=200)["status"] == 1, "the finished game did not persist"
+pgn = call("GET", f"{url}/pgn", token=bob, expect=200).decode()
+assert "1. e4 e5" in pgn and "Qxf7#" in pgn and '[White "ada"]' in pgn, pgn
+png = call("GET", f"{url}/image", token=bob, expect=200)
 assert png[:4] == b"\x89PNG", "the board image is not a PNG"
-
-record = call("GET", f"/v1/games/1/record?player1={ada}&player2={bob}")
+record = call("GET", f"/v1/games/record?player1={game['white_id']}&player2={bob_id}", token=ada, expect=200)
 assert record["player1_wins"] == 1, record
+
+# An admin token, as a bot would hold, maps an external id onto a user.
+linked = call("POST", "/v1/users/discord/123456789012345678", {"username": "carol"}, token=admin, expect=200)
+assert call("GET", "/v1/users/discord/123456789012345678", token=admin, expect=200)["id"] == linked["id"]
+call("GET", "/v1/users/discord/123456789012345678", token=ada, expect=403)
+
+call("POST", "/v1/auth/logout", token=ada, expect=204)
+call("GET", "/v1/auth/me", token=ada, expect=401)
 
 print(f"  game played and persisted; pgn tail: {pgn.strip().splitlines()[-1]}")
 print(f"  board image: {len(png)} bytes")
@@ -135,6 +157,9 @@ run_stack() {
 
     log "$stack: waiting for the api-endpoint"
     wait_for_health "$file"
+
+    log "$stack: creating accounts"
+    bootstrap_accounts "$file"
 
     log "$stack: playing a game"
     play_a_game

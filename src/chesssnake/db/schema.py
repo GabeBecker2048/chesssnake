@@ -15,7 +15,10 @@ The shape, and the invariants :mod:`chesssnake.db.operations` keeps:
 - ``users`` owns identity. Game rows reference players by ``users.id`` and never
   carry names. ``user_identities`` maps an external id (a Discord id, say) to a
   user, one row per ``(provider, external_id)``, so a person can be reached
-  from any number of outside systems.
+  from any number of outside systems. ``auth_tokens`` holds the bearer tokens a
+  user logs in with, as SHA-256 hashes only.
+- Games are normally created by accepting a ``challenges`` row, which is deleted
+  in the same transaction.
 - A row in ``games`` *is* a game in progress; there is no status column. The
   moment a game ends it is moved, in the same transaction, to
   ``finished_games``, with its ``moves`` rows collapsed into one ``movetext``
@@ -74,9 +77,9 @@ def _timestamp(name, nullable=False):
     return Column(name, DateTime(timezone=True), nullable=nullable)
 
 
-#: Accounts. ``password_hash`` and ``disabled_at`` are reserved for the 0.12.0
-#: authentication work and are not written before it; ``role`` is 0 for a player
-#: and 1 for an administrator.
+#: Accounts. ``password_hash`` is an Argon2id PHC string, or NULL for an account
+#: that cannot log in (a bot that only uses api tokens); ``role`` is 0 for a
+#: player and 1 for an administrator; a disabled user's tokens are refused.
 users = Table(
     "users",
     metadata,
@@ -106,6 +109,25 @@ user_identities = Table(
 )
 
 Index("ix_user_identities_user_id", user_identities.c.user_id)
+
+#: Bearer tokens. ``kind`` 0 is a login session (always expires), 1 a named api
+#: token for scripts and bots (expiry optional). Only ``sha256(token)`` is stored,
+#: so a database dump does not hand out working credentials.
+auth_tokens = Table(
+    "auth_tokens",
+    metadata,
+    _assigned_id(),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("kind", SmallInteger, nullable=False),
+    Column("name", Text),
+    Column("token_hash", Text, nullable=False, unique=True),
+    _timestamp("created_at"),
+    _timestamp("expires_at", nullable=True),
+    CheckConstraint("kind IN (0, 1)", name="ck_auth_tokens_kind"),
+    sqlite_autoincrement=True,
+)
+
+Index("ix_auth_tokens_user_id", auth_tokens.c.user_id)
 
 #: Games in progress. The board (plus turn, castling rights, en-passant target
 #: and the move clocks) is one standard FEN string; ``draw`` is the colour with
@@ -172,21 +194,29 @@ finished_games = Table(
 Index("ix_finished_games_white_id", finished_games.c.white_id)
 Index("ix_finished_games_black_id", finished_games.c.black_id)
 
-#: Pending challenges between two users in a group.
+#: Pending challenges. ``color`` is the colour the challenger asked for: 0 white,
+#: 1 black, 2 random (decided when it is accepted). Accepting deletes the row and
+#: creates the game in one transaction; declining or withdrawing deletes it.
 challenges = Table(
     "challenges",
     metadata,
-    Column("group_id", BigInteger, primary_key=True),
-    Column("challenger", BigInteger, ForeignKey("users.id"), primary_key=True),
-    Column("challenged", BigInteger, ForeignKey("users.id"), primary_key=True),
+    _assigned_id(),
+    Column("group_id", BigInteger, nullable=False),
+    Column("challenger_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("challenged_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("color", SmallInteger, nullable=False, server_default=text("2")),
     _timestamp("created_at"),
+    UniqueConstraint("group_id", "challenger_id", "challenged_id", name="uq_challenges_pairing"),
+    CheckConstraint("color IN (0, 1, 2)", name="ck_challenges_color"),
+    sqlite_autoincrement=True,
 )
 
-Index("ix_challenges_challenged", challenges.c.challenged)
+Index("ix_challenges_challenger_id", challenges.c.challenger_id)
+Index("ix_challenges_challenged_id", challenges.c.challenged_id)
 
 #: Every table, in dependency order: a table only references tables before it.
 #: Delete in reverse to empty a database without tripping a foreign key.
-TABLES = (users, user_identities, games, moves, finished_games, challenges)
+TABLES = (users, user_identities, auth_tokens, games, moves, finished_games, challenges)
 
 
 def create_all(engine) -> None:
@@ -200,6 +230,32 @@ def create_all(engine) -> None:
     :param engine: A SQLAlchemy engine.
     """
     metadata.create_all(engine, checkfirst=True)
+
+
+def stale_tables(engine) -> list[str]:
+    """
+    Name every existing chesssnake table whose columns differ from this schema.
+
+    :func:`create_all` never alters a table, so a database created by an older
+    chesssnake keeps its old shape and would fail at the first query that touches
+    a changed table. The api-endpoint checks this at startup and refuses to run,
+    rather than half-working. Tables that do not exist yet are not stale: they are
+    simply created.
+
+    :param engine: A SQLAlchemy engine.
+    :return: The names of mismatched tables, empty when the database is current.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names())
+    stale = []
+    for table in TABLES:
+        if table.name in existing:
+            columns = {column["name"] for column in inspector.get_columns(table.name)}
+            if columns != {column.name for column in table.columns}:
+                stale.append(table.name)
+    return stale
 
 
 def drop_all(engine) -> None:

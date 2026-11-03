@@ -6,6 +6,35 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.12.0 - 2026-11-03
+
+### Added
+- Logins. Users log in with a username and password for a token, and every
+  route except logging in now needs one. `chesssnake login` stores the token
+  for the terminal client and for `chesssnake.connect()`.
+- Two roles, user and administrator. Users play as themselves; administrators
+  also manage accounts, create games directly, and can act for any player,
+  which is how a bot plays for the people it represents.
+- Named api tokens for scripts and bots, and `chesssnake user` commands to set
+  passwords, disable accounts and mint a bot's token on the server.
+- Open registration, off by default (`api.registration`).
+
+### Changed
+- Games start when a challenge is accepted. Challenges now have ids and let the
+  challenger pick a colour, and `chesssnake challenge`, `challenges`, `accept`
+  and `decline` drive them from the terminal.
+- Games are addressed by id everywhere (`/v1/games/{id}/...`); `chesssnake play`
+  takes `--game` or `--vs`, and `new` after a game sends or accepts a rematch
+  challenge.
+- The server refuses to start on a database from an older version instead of
+  failing part way through a request. Existing databases must be recreated
+  with `chesssnake init-db --drop`.
+
+### Removed
+- The shared API key (`api.require_auth`, `api.api_key`, `X-API-Key`).
+- The routes that addressed a game by its players, and `generation` in request
+  bodies; `GET /v1/games/between` lists the games two players have played.
+
 ## 0.11.0 - 2026-11-03
 
 ### Added

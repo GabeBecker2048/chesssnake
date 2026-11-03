@@ -45,6 +45,30 @@ def lock_current_game(conn, stmt, of=None):
     return conn.execute(stmt.with_for_update(of=of))
 
 
+def lock_pair(conn, group_id, a, b):
+    """
+    Serialise every write that depends on "is there already a game or challenge
+    between these two players in this group".
+
+    Those checks are plain reads, so on their own two transactions could both see
+    nothing and both create (A challenges B while B challenges A; an accept racing
+    an admin creating the game with the colours reversed). A transaction-scoped
+    advisory lock on the unordered pair makes the second wait for the first, and
+    is released at commit or rollback. Row locks on ``users`` would also work but
+    conflict with the key-share locks that foreign-key checks take.
+
+    :param conn: An open connection inside a :func:`~chesssnake.db.engine.locked_transaction`.
+    """
+    from .engine import require_write_transaction
+
+    require_write_transaction()
+    low, high = sorted((int(a), int(b)))
+    conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:pair, 0))"),
+        {"pair": f"chesssnake-pair:{int(group_id)}:{low}:{high}"},
+    )
+
+
 def configure_engine(engine, **_kwargs) -> None:
     """No connect-time setup is needed for PostgreSQL."""
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.11.0 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1, published container images in 0.9.2, the threadpool in 0.10.0, users and the redesigned schema in 0.11.0 — see `CHANGELOG.md`, with what is next in `ROADMAP.md`).
+`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.12.0 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1, published container images in 0.9.2, the threadpool in 0.10.0, users and the redesigned schema in 0.11.0, logins and challenge-created games in 0.12.0 — see `CHANGELOG.md`, with what is next in `ROADMAP.md`).
 
 The package uses a **`src/` layout**: all importable code lives under `src/chesssnake/` (tests import the installed package, not a repo-root package).
 
@@ -29,14 +29,17 @@ uv run python examples/example.py        # core (no-DB) smoke example
 uv run chesssnake api-endpoint --host 0.0.0.0 --port 8000 --init-db
 uv run chesssnake init-db                # just create the schema, then exit
 uv run chesssnake init-db --drop         # drop every table first (pre-1.0 schema changes)
-uv run chesssnake user create alice --admin   # accounts, straight in the database (also show/set-role/rename/link)
+uv run chesssnake user create alice --admin   # accounts, straight in the database; prompts for a password
+                                               # (also show/set-role/rename/link/set-password/disable/enable/token)
 uv run chesssnake config init            # write a commented default config file
 uv run chesssnake config show            # effective settings + where each came from
 
 # Play at the terminal. --local needs nothing but the core install (no server, no
 # requests); without it, --api-url / CHESSSNAKE__CLIENT__API_URL points at an endpoint.
 uv run chesssnake play --local
-uv run chesssnake play --api-url http://localhost:8000 --white alice --black bob --me alice
+uv run chesssnake login --api-url http://localhost:8000   # stores a token (never in the cwd)
+uv run chesssnake challenge bob && uv run chesssnake games  # bob: `chesssnake accept ID`
+uv run chesssnake play --game 7                           # or --vs bob
 
 # Tests. Both dependency groups install by default, so a bare `uv run pytest` covers
 # both backends; CI's SQLite matrix opts out with --no-group pg (no pgserver wheels).
@@ -124,18 +127,18 @@ it, publishes the package to PyPI and the container image to
 
 ## Three-tier architecture
 
-The public exports are `Game`, the challenge helpers (`challenge`, `challenge_exists`, `delete_challenge`), the head-to-head `record` helper, the user helpers (`create_user`, `get_user`, `user_for_identity`), the payloads (`GameState`, `MoveResult`, `User`), and the enums (`Color`, `GameStatus`, `PieceType`, `Termination`) — see `src/chesssnake/__init__.py`. `Game` is an `engine.Game` subclass built via **factory methods** (not a flag-laden constructor):
+The public exports are `Game`, `connect` (a logged-in `ApiClient`), `ApiClient` (lazily, from `remote/client.py`), the payloads (`GameState`, `MoveResult`, `User`, `Challenge`, `LoginResult`, `TokenInfo`), and the enums (`Color`, `GameStatus`, `PieceType`, `Termination`) — see `src/chesssnake/__init__.py`. `Game` is an `engine.Game` subclass built via **factory methods** (not a flag-laden constructor):
 
 - `Game.local(white_name=..., black_name=...)` — pure in-memory game. No network, no `requests`/psycopg2 imported. The engine runs in-process; it has the **full rules** (draw-by-rule, resign, legal-move listing, FEN/PGN) so a local game behaves identically to a remote one.
-- `Game.remote(white, black, group_id=..., player_id=..., generation=..., api_url=..., api_key=..., client=...)` — a game persisted through the api-endpoint, between two **users** given as ids or usernames (`_resolve_id`; usernames can never be all digits, which is what keeps that unambiguous). Names come only from the accounts: there are no name arguments. **The server runs the engine**: `move`/`draw_*`/`resign` send a request, and the returned state is mirrored into the local board (for rendering + accessors). Illegal moves raise the same `ChessError` types as local play. `refresh()` re-fetches state; `player_id` (if given) is asserted server-side; the client auto-sends its `version` and `generation` with every action. `game.id` is the server's game id. `generation=N` loads a specific past game (read-only); `Game.archive(...)` lists all games between the triple. Re-opening a triple whose current game is **over** starts a rematch (a new generation).
+- `Game.remote(game_id, *, client=None, api_url=None, token=None, player_id=None)` — one game on the api-endpoint, **by its id** (or a `GameState`), acting as the client's logged-in user. Games are created by accepting a challenge (`ApiClient.accept_challenge`) or by an admin (`ApiClient.create_game`), never by opening one. **The server runs the engine**: `move`/`draw_*`/`resign` send a request, and the returned state is mirrored into the local board (for rendering + accessors). Illegal moves raise the same `ChessError` types as local play. `refresh()` re-fetches state; the client auto-sends its `version` with every action; `player_id` is only for admins acting for someone. A finished game keeps its id and stays readable; a rematch is a new challenge and a new game.
 
 Gameplay state is read through intention-revealing accessors on `Game`: `to_move` (Color), `is_over` (bool), `result` (GameStatus: `IN_PLAY`/`WHITE_WON`/`BLACK_WON`/`DRAW`), `winner` (Color|None), `termination` (Termination|None), `draw_offered_by` (Color|None). The public `Game.move()` returns a `MoveResult` (from/to/san, check, castle/promotion/en, + the new state); rendering is separate (`render()` / `save(path)`). Other engine methods: `resign(player_id)`, `legal_moves()`, `pgn()`, `fen` (property), `Game.from_fen(...)`. *(The base `engine.Game.move()` returns the bare engine `Move`; the public `remote.Game` deliberately overrides it to return the richer `MoveResult` — the two `# type: ignore` lines in `remote/game.py` mark that intentional divergence.)*
 
 The three tiers and where they live:
 
-1. **Client** (`src/chesssnake/remote/`) — `Game` + the challenge functions (`game.py`); `ApiClient` (`client.py`) is a thin `requests`-style wrapper (talks to the `/v1` routes, sends an optional `X-API-Key`). For **remote** games the client does **no** chess computation — it sends moves and mirrors the returned state. For **local** games `move`/`draw_*` call the base `engine.Game` in-process. `requests` is imported lazily (only on the remote path), so local games stay dependency-free.
-2. **Server** (`src/chesssnake/api/server.py`) — a FastAPI app built by `create_app(settings)` that **owns the engine** (the authoritative rules). `/health` is unversioned/open; all game+challenge routes live on a `/v1` `APIRouter` gated by an API-key dependency built per-app from settings (`_api_key_dependency`, active only when `api.require_auth` is true). Mutating routes (`/moves`, `/resign`, `/draw/*`) load the row + its `moves` history, build an `engine.Game` (via `serialize.game_from_state`), apply the action (which may raise `ChessError`), and persist the result — all inside one `apply_game_change` transaction; they accept an optional `player_id` (validated → `NotYourTurnError`/403), `expected_version` (→ `VersionConflictError`/409) and `generation` (→ `GenerationConflictError`/409). User routes create and look up accounts and their external-id links. Read routes: `GET .../` (state), `GET /v1/games/{id}`, `.../legal-moves`, `.../history`, `.../pgn` (text), `.../fen` (text), `.../image` (PNG). Errors map to JSON `{error_type, detail}` (chess→400, auth→403, not-found→404, challenge/version/user-exists→409, id/username→422, sql→500).
-3. **Database** (`src/chesssnake/db/`) — SQLAlchemy Core, backend-agnostic. `db/operations.py` holds the query functions (`game_get_or_create`, `game_get`, `game_archive`, `game_history`, `apply_game_change`, `game_delete`, `current_games`, `game_exists`, `game_record`, `challenge*`) as Core expressions; `db/schema.py` the `MetaData`; `db/engine.py` the engine + `transaction()`/`locked_transaction()`; `db/postgres.py` and `db/sqlite.py` only what differs per dialect; `db/errors.py` the `GameError` types (`GameNotFoundError`, `NotYourTurnError`, `VersionConflictError`, …). The schema (six tables) is described under `db/` below: `users` own identity, `games` holds only games **in progress** (position as one FEN column), `moves` one row per played ply of those, and a game that ends is moved in the same transaction to `finished_games` with its moves collapsed to one `movetext` string. **This layer stays engine-free** — `apply_game_change` runs the caller's `mutate(row, history, now)` callback (the engine logic) between a locked read and the write, and persists the returned `GameChange` — see the locking note in the `db/` section below.
+1. **Client** (`src/chesssnake/remote/`) — `Game` and `connect` (`game.py`); `ApiClient` (`client.py`) is a thin `requests`-style wrapper with one method per route, sending `Authorization: Bearer <token>`; `credentials.py` stores `chesssnake login` tokens. For **remote** games the client does **no** chess computation — it sends moves and mirrors the returned state. For **local** games `move`/`draw_*` call the base `engine.Game` in-process. `requests` is imported lazily (only on the remote path), so local games stay dependency-free.
+2. **Server** (`src/chesssnake/api/server.py`) — a FastAPI app built by `create_app(settings)` that **owns the engine** (the authoritative rules). `/health` is unversioned/open; `/v1/auth/login` and `/v1/auth/register` are the only other unauthenticated routes; everything else is on the `/v1` `APIRouter`, whose router-level `Depends(current_principal)` (`api/auth.py`) requires a bearer token. Games are addressed **by id** (`/v1/games/{id}/...`). Mutating routes (`/moves`, `/resign`, `/draw/*`) resolve who acts (`acting_as`), load the row + its `moves` history, build an `engine.Game` (via `serialize.game_from_state`), apply the action (which may raise `ChessError`), and persist the result — all inside one `apply_game_change` transaction; `expected_version` → `VersionConflictError`/409. Challenge routes create games (accept → 201 `GameState`). Errors map to JSON `{error_type, detail}` (chess→400, auth→401, forbidden/turn→403, not-found→404, conflict→409, validation→422, busy→503, sql→500).
+3. **Database** (`src/chesssnake/db/`) — SQLAlchemy Core, backend-agnostic. `db/operations.py` holds the query functions (users, tokens, identities, challenges, and the id-keyed game functions) as Core expressions; `db/schema.py` the `MetaData`; `db/engine.py` the engine + `transaction()`/`locked_transaction()`; `db/postgres.py` and `db/sqlite.py` only what differs per dialect; `db/errors.py` the `GameError` types (`GameNotFoundError`, `NotYourTurnError`, `VersionConflictError`, …). The schema (seven tables) is described under `db/` below: `users` own identity, `auth_tokens` hold login and api tokens (hashes only), `challenges` are how games start, `games` holds only games **in progress** (position as one FEN column), `moves` one row per played ply of those, and a game that ends is moved in the same transaction to `finished_games` with its moves collapsed to one `movetext` string. **This layer stays engine-free** — `apply_game_change` runs the caller's `mutate(row, history, now)` callback (the engine logic) between a locked read and the write, and persists the returned `GameChange` — see the locking note in the `db/` section below.
 
 There are **three ways to drive the backend**, all hitting the same `/v1` routes and
 the same rules: direct REST calls (any language, a custom frontend), the Python client
@@ -158,7 +161,7 @@ Every setting is declared **once**, as a field on a section model in `config.py`
 - Env values arrive as strings and are coerced by pydantic's lax mode (`"8000"`→int, `"true"/"1"/"yes"/"on"`→bool). **Do not hand-roll parsing.**
 - Pydantic lives in the **`api` extra**, so `config.py` must never be imported from the core/local-game path. `cli.py` imports it lazily and exits with an install hint. **`db/` must never import `config`** — it is also loaded by the `client` extra.
 - Bootstrap vars `CHESSSNAKE_CONFIG` and `CHESSSNAKE_HOME` use a **single** underscore, so they can't collide with the `CHESSSNAKE__` setting prefix.
-- Auth is explicit: `api.require_auth`. Enabling it without `api.api_key` is a validation error; setting a key *without* `require_auth` produces an advisory (`Settings.advisories()`), logged at startup and printed by `config show`.
+- There is no auth on/off setting: every `/v1` route but login/register needs a token. `api.registration` (`closed`/`open`) and `api.session_lifetime_days` are the only auth settings. `Settings.advisories()` remains as a hook (currently empty). The 0.11 `api.require_auth`/`api.api_key` are gone, and `extra="forbid"` turns a stale one in a file into a startup error.
 
 Full reference: `docs/configuration.md`. The commented default file shipped by `chesssnake config init` is `src/chesssnake/data/chesssnake.toml` (registered under `[tool.setuptools.package-data]`); tests assert it stays valid and documents every schema field, so **add a documented block there whenever you add a setting**.
 
@@ -181,10 +184,9 @@ Full reference: `docs/configuration.md`. The commented default file shipped by `
 
 ### `remote/` — the client (tier 1)
 
-- `game.py` — `Game(BaseGame)` (built via `Game.local()`/`Game.remote()`) plus module-level challenge functions. The low-level `Game.__init__(*args, client=None, player_id=None, version=None, generation=None, game_id=None, **kwargs)` is internal — use the factories. For remote games, `move`/`resign`/`draw_*` call the client (sending `player_id` + the tracked `version` and `generation`) and pass the returned state to `_apply_state` (rebuilds the mirror board via `serialize.board_and_turn` from the FEN, updates `version`); `last_move` is a lightweight `_MoveMarker` for render highlighting. `legal_moves`/`pgn`/`history` proxy to the server when remote, or run the local engine otherwise.
-  - A game is addressed by its id or by the triple `(group_id, white_id, black_id)` (user ids; `group_id` is a free namespace). `POST /v1/games` upserts-then-selects.
-  - Module helpers `create_user`, `get_user`, `user_for_identity` (get-or-create by an external id, the call a bot makes), and the challenge/record helpers, all accept ids or usernames.
-- `client.py` — `ApiClient(base_url, session=None, api_key=None)`. Prefixes `/v1`, adds `X-API-Key` when set. `session` defaults to `requests.Session()` but can be **injected** (tests pass a FastAPI `TestClient`). `move()` → `dto.MoveResult`; `get_state`/`get_or_create_game`/`resign`/draw → `dto.GameState`; `legal_moves`/`history` → lists; `pgn`/`fen` → text; `image()` → PNG bytes. **Error mapping** covers both `engine.errors` and `db.errors`: `_build_error_registry` maps class name→class, and `_raise` reconstructs via `cls.__new__(cls); exc.args=(detail,)` so `except PromotionError`/`except VersionConflictError` work.
+- `game.py` — `Game(BaseGame)` (built via `Game.local()`/`Game.remote()`/`Game.from_state()`) and `connect()`, which resolves a token from: `username`+`password` (logs in), `token=`, `$CHESSSNAKE__CLIENT__TOKEN`, then `credentials.load(url)`; as a library it raises `AuthError` rather than prompting. The low-level `Game.__init__(*args, client=None, player_id=None, version=None, generation=None, game_id=None, **kwargs)` is internal. For remote games, `move`/`resign`/`draw_*` call the client by game id (sending `player_id` + the tracked `version`) and pass the returned state to `_apply_state` (rebuilds the mirror board via `serialize.board_and_turn` from the FEN, updates `version`); `last_move` is a lightweight `_MoveMarker` for render highlighting. `legal_moves`/`pgn`/`history` proxy to the server when remote, or run the local engine otherwise.
+  - The 0.11 module helpers (`create_user`, `challenge`, `record`, ...) are gone: every call needs the same authenticated client, so they are `ApiClient` methods now. Methods that take a player accept an id or a username (`ApiClient.resolve`).
+- `client.py` — `ApiClient(base_url, session=None, token=None)`. Prefixes `/v1`, adds `Authorization: Bearer` when it has a token (`login()` sets it). `session` defaults to `requests.Session()` but can be **injected** (tests pass a FastAPI `TestClient`). `move()` → `dto.MoveResult`; `get_game`/`accept_challenge`/`create_game`/`resign`/draw → `dto.GameState`; `legal_moves`/`history` → lists; `pgn`/`fen` → text; `image()` → PNG bytes. **Error mapping** covers both `engine.errors` and `db.errors`: `_build_error_registry` maps class name→class, and `_raise` reconstructs via `cls.__new__(cls); exc.args=(detail,)` so `except PromotionError`/`except VersionConflictError` work.
 
 ### `play.py` — the terminal client (`chesssnake play`)
 
@@ -201,15 +203,16 @@ a local and a remote game**. Anything it does, the client could already do.
 - **Unknown input is a move.** `dispatch()` looks the first word up in `DISPATCH` and
   otherwise hands the whole line to `game.move()`. That is why every command is a
   lowercase word that cannot collide with algebraic notation.
-- **`actor()` decides whose action it is.** With `--me` it is always that player.
-  Without it, the default is *whoever is to move* — one person at one keyboard playing
-  both sides — except for `accept`/`decline`, which default to the **opponent of the
-  offerer**, since the side to move may well be the player who offered.
-- **`--me` turn-order enforcement is asymmetric, on purpose.** For a **remote** game the
+- **`actor()` decides whose action it is.** With a `player_id` it is always that player:
+  for a remote game `cli.py` passes the **logged-in user's id** when they are playing (so
+  draws and resignations are sent as them, and the server enforces turn order), and
+  `None` only for an admin watching someone else's game. With `None` the default is
+  *whoever is to move* — one person at one keyboard playing both sides, or that admin —
+  except for `accept`/`decline`, which default to the **opponent of the offerer**.
+- **Turn-order enforcement is asymmetric, on purpose.** For a **remote** game the
   server checks it and is the authority, so the session must not duplicate the rule. For
-  a **local** game there is no server to ask and `engine.Game.move()` takes no player id,
-  so `dispatch()` checks `is_players_turn` itself and raises `NotYourTurnError` —
-  otherwise `--me` would silently mean nothing offline.
+  a **local** game (`--me 0|1`) there is no server to ask, so `dispatch()` checks
+  `is_players_turn` itself and raises `NotYourTurnError`.
 - **`sync()` runs before every informational command** (`board`, `fen`, `moves`, `pgn`),
   and this is load-bearing rather than belt-and-braces: `legal_moves`/`pgn`/`history` are
   **proxied to the server** while the board and `fen` come from the local mirror, so
@@ -217,14 +220,17 @@ a local and a remote game**. Anything it does, the client could already do.
   legal moves of a position not on screen. It returns whether the version actually moved
   on, so the caller can redraw and say so instead of silently changing the board. There
   is still **no polling**: nothing arrives while the prompt sits idle.
-- **`allow_action()` gates every action.** Before 0.11.0 the server's mutating routes
-  ignored `generation`, so a session left on a superseded generation had its move
-  applied to the rematch (verified live: a session in a finished generation 1 played
-  `d5` and it landed in generation 2's movetext). Since 0.11.0 every action carries the
-  game's `generation` and the server refuses a stale one (`GenerationConflictError`),
-  so this guard is no longer the only protection. It stays because it explains *why*
-  and names the way out: `sync()` reads the **current** generation, sets
-  `stale_generation` on drift, and `allow_action()` refuses until the player types `new`.
+- **The session follows one game id**, so an action can never land in a rematch (before
+  0.11 one could, and did). Once the game is over, `sync()` also looks for a **newer
+  game between the same two players** (by id, which only increases; *not* by
+  generation, which is per colour arrangement and restarts when a rematch swaps
+  colours) and sets `newer_game`; `allow_action()` then refuses with a sentence naming
+  `new`. `new` joins that game, else accepts the opponent's pending rematch challenge,
+  else sends one with colours swapped: a rematch takes both players' say-so, because
+  games are only created by an accepted challenge.
+- **An `AuthError` ends the session** (exit 1, "run `chesssnake login`"), from a command or
+  from an idle poll. It is a `GameError`, so without this special case it would be
+  printed and repeated on every line and every poll.
 - **`wait_for_line()` is the one thing the session does unasked**, polling every
   `--refresh` seconds (default 10, `0` disables; one poll is a single small GET, measured
   at ~25 ms against a LAN deployment, so the interval is a feel decision not a load one). `select` rather than a thread, so one
@@ -242,12 +248,18 @@ a local and a remote game**. Anything it does, the client could already do.
   that into an exit with the URL in the message rather than a prompt that cannot work.
 - The game-over note fires **on the transition only** (`was_over` vs `is_over`); printing
   it after every command turned the one line that matters into noise.
-- `cli.py`'s `_run_play` deliberately **never imports `config`**: a local game needs only
-  the core install, and a remote one needs only a URL, which `Game.remote` already reads
-  from `CHESSSNAKE__CLIENT__API_URL`. It hardcodes that variable name (argparse needs it
-  at parser-build time, and importing `remote` would pull Pillow into every
-  `config show`), with `test_play.py::test_cli_env_name_matches_the_client` keeping the
-  copy honest — the same pattern as `remote/game.py` and `db/errors.py`.
+- `cli.py`'s client commands (`login`, `logout`, `whoami`, `games`, `challenge`,
+  `challenges`, `accept`, `decline`, `play`) deliberately **never import `config`**: they
+  need only the `client` install. They hardcode `CHESSSNAKE__CLIENT__API_URL` and
+  `CHESSSNAKE__CLIENT__TOKEN` (argparse needs them at parser-build time), with tests in
+  `test_play.py` keeping the copies honest — the same pattern as `remote/game.py`,
+  `remote/credentials.py` (`CHESSSNAKE_HOME`) and `db/errors.py`.
+- **The credentials file is never in the working directory**, unlike config discovery:
+  `$CHESSSNAKE_HOME`, else `$XDG_CONFIG_HOME/chesssnake`, else `~/.config/chesssnake`;
+  directory 0700, file 0600, replaced atomically. A token dropped into a git checkout is
+  one `git add -A` from published.
+- **Passwords are never command-line arguments** (`ps` and shell history): prompted with
+  `getpass`, or `--password-stdin`.
 
 ### `api/` — the server (tier 2, **owns the engine**)
 
@@ -263,9 +275,18 @@ leaving it on the loop means it answers immediately while every worker thread is
 which is what keeps the container's two-second healthcheck honest under load. Note the
 asymmetry this buys: `/health` is a *liveness* probe and after this change it cannot
 report a wedged threadpool. That is the intended trade; a readiness probe would be a
-separate feature. `require_api_key`, the exception handlers and `lifespan` stay async
-too, since they do no blocking work and keeping auth on the loop avoids spending a
-thread per request to compare a header.
+separate feature. The exception handlers and `lifespan` stay async, since they do no
+blocking work. The auth dependency `current_principal` is a plain `def`, deliberately:
+it does a database lookup, so it runs in the threadpool with the route.
+
+**Argon2 is the other expensive thing, and it has two rules** (`api/auth.py`): it never
+runs inside a transaction (on SQLite a `locked_transaction` holds the whole database's
+write lock), and at most `MAX_CONCURRENT_HASHES` (4) run at once, behind a semaphore
+whose timeout is a 503. Each hash takes ~19 MiB, and anyio runs 40 sync routes at
+once, so an anonymous login flood would otherwise exhaust a 512 MiB container. Because
+the verify happens outside the transaction, the write that follows (minting the token,
+changing the password) passes `expected_hash=` so the operations layer re-checks, under
+the lock, that the password was not reset in between.
 
 Anything that runs in a worker thread must not assume request-scoped context survives a
 further thread hop: `WRITE_TRANSACTION` (`db/engine.py`) is a `ContextVar`, and anyio
@@ -273,19 +294,22 @@ copies the context into the worker, so it is correct today precisely because not
 inside `apply_game_change` offloads to another thread. If anything ever does, SQLite
 silently falls back to a deferred `BEGIN` with no error, which is the bug class above.
 
-- `server.py` — `create_app(settings)` builds the FastAPI app (settings on `app.state.settings`); a module-level PEP 562 `__getattr__` still resolves `chesssnake.api.server:app` lazily for ASGI import strings. `/health` is unversioned/open; `/v1` routes gated by the per-app api-key dependency. **29 routes in all**, pinned by `test_threadpool.py`. User routes: `POST /v1/users`, `GET /v1/users?username=`, `GET`/`PATCH /v1/users/{id}`, `GET`/`POST /v1/users/{provider}/{external_id}` (lookup / get-or-create), `PUT /v1/users/{id}/identities/{provider}/{external_id}` (link). Mutating routes (`POST .../moves` `{move, player_id?, expected_version?, generation?}`, `POST .../resign`, `POST .../draw/{offer|accept|decline}` `{player_id, expected_version?, generation?}`) build an `engine.Game` from the stored row + `moves` history and apply the action inside `apply_game_change` (one locked transaction); `_load_game` prepends the starting position's key to the history, since it is not stored. `_change` turns the engine game into a `GameChange`, setting `outcome` when the game is over, which is what moves it to the archive. Read routes: `GET .../` (state), `.../archive` (all generations), `.../legal-moves`, `.../history`, `.../pgn` + `.../fen` (`PlainTextResponse`), `.../image` (PNG). Read routes take an optional `?generation=` (a past game; default = the game in progress, else the last one played); `GET /v1/games/{id}` reads one by id; `/image` also takes `?perspective=white|black`. Group-level reads: `GET .../{g}/exists` and `GET .../{g}/record` (head-to-head win/draw/loss). Request bodies are pydantic; responses are `dto` dataclasses as dicts. Handlers: `ChessError`→400, `NotYourTurnError`→403, `GameNotFoundError`/`UserNotFoundError`→404, `ChallengeError`/`VersionConflictError`/`GenerationConflictError`/`UserExistsError`→409, `SQLIdError`/`UserValidationError`→422, `SQLError`→500, `GameError`→400. `lifespan` inits the pool from `settings.database` (schema init if `database.init_schema`); its `current_engine() is None` guard lets a second app share an existing pool, which is how the tests build an auth-requiring app alongside the open one.
+- `auth.py` — `authenticate(raw_token) -> Principal` (transport-agnostic: the HTTP dependency `current_principal` wraps it, and a 0.13 websocket will call it with the token from its first message); `acting_as(principal, player_id, participants=, require_actor=)` decides who an action is performed as (non-admins: always themselves; admins: the named `player_id`, else themselves if playing, else "side to move" for a move only; never a disabled user); `login()`; Argon2 hashing behind the semaphore. Database errors inside `authenticate` are **not** turned into 401: a saturated pool stays a 503.
+- `server.py` — `create_app(settings)` builds the FastAPI app (settings on `app.state.settings`); a module-level PEP 562 `__getattr__` still resolves `chesssnake.api.server:app` lazily for ASGI import strings. **The public router (`login`, `register`) is built per app by `_public_router(settings)` and included on the app, not into `v1`**: a router included into `v1` inherits its auth dependency. **38 routes in all**, pinned by `test_threadpool.py`, which walks them with `fastapi.routing.iter_route_contexts` (FastAPI 0.139 keeps included routers as wrappers, so `app.routes` alone misses them). Every route also has a row in `tests/integration/test_permissions.py`'s table (expected status for anonymous / outsider / player / admin), and a route without a row fails the suite. Game routes are by id; literal routes (`/games/between`, `/games/record`) are registered before `/games/{game_id}`. Mutating game routes resolve the actor **before** the transaction (it may read users), then `apply_game_change(game_id, mutate, expected_version)`; `mutate` checks the turn only for a game in progress, so a finished game answers `GameOverError`, not "not your turn". `_load_game` prepends the starting position's key; `_change` builds the `GameChange` and clears `draw` on a finished game. Handlers: `AuthError`→401 (with `WWW-Authenticate: Bearer`), `ForbiddenError`/`NotYourTurnError`→403, `*NotFoundError`→404, `ChallengeError`/`VersionConflictError`/`UserExistsError`→409, `SQLIdError`/`UserValidationError`→422, `SQLBusyError`→503, `SQLError`→500, `ChessError`/`GameError`→400. `lifespan` inits the pool and **refuses to start on a database whose existing tables differ from the schema** (`schema.stale_tables`), since `create_all` never alters a table and there are no migrations; its `current_engine() is None` guard lets a second app share an existing pool, which is how the tests build an open-registration app alongside the default one.
 
 ### `db/` — the database layer (tier 3, **engine-free**)
 
 Backend-agnostic SQLAlchemy Core. The `database.url` scheme picks the backend; there is no separate "which database" setting to drift.
 
 - `__init__.py` — the common interface. Everything is lazy except `errors`, which `remote/client.py` imports for error mapping: the `client` extra installs neither SQLAlchemy nor psycopg2, so an eager import would break `pip install chesssnake[client]`.
-- `schema.py` — the `MetaData` and six tables, in dependency order in `TABLES` (tests delete in reverse): `users` (server-assigned id, `username` unique on `lower(username)`, `role` 0/1, `password_hash`/`disabled_at` reserved for 0.12.0 auth), `user_identities` (PK `(provider, external_id)` → `user_id`: external ids such as Discord ids map onto users here, never by choosing user ids), `games` (in progress only; unique `(group_id, white_id, black_id)`; FEN, `draw`, `version`, `generation`), `moves` (`(game_id, ply)`, no ply-0 row), `finished_games` (the archive: same `id`, `status`/`termination`, `movetext`, final `fen`), `challenges`. **Every identifier is lowercase**: SQLAlchemy quotes anything else, and lowercase is the one spelling that is unquoted on both backends and gives identical result-row keys. Load-bearing details, each pinned by `tests/config/test_schema.py`:
+- `schema.py` — the `MetaData` and seven tables, in dependency order in `TABLES` (tests delete in reverse): `users` (server-assigned id, `username` unique on `lower(username)`, `role` 0/1, Argon2id `password_hash` or NULL for token-only accounts, `disabled_at`), `auth_tokens` (`kind` 0 session / 1 api, **only `sha256(token)` stored**, unique; `expires_at` NULL only for api tokens), `user_identities` (PK `(provider, external_id)` → `user_id`: external ids such as Discord ids map onto users here, never by choosing user ids), `games` (in progress only; unique `(group_id, white_id, black_id)`; FEN, `draw`, `version`, `generation`), `moves` (`(game_id, ply)`, no ply-0 row), `finished_games` (the archive: same `id`, `status`/`termination`, `movetext`, final `fen`), `challenges` (assigned id, `color` 0 white / 1 black / 2 random for the challenger, unique per `(group_id, challenger_id, challenged_id)`). **Every identifier is lowercase**: SQLAlchemy quotes anything else, and lowercase is the one spelling that is unquoted on both backends and gives identical result-row keys. Load-bearing details, each pinned by `tests/config/test_schema.py`:
   - **Assigned ids must render as exactly `INTEGER PRIMARY KEY AUTOINCREMENT` on SQLite** (`BigInteger().with_variant(Integer, "sqlite")` + `sqlite_autoincrement=True`; `Identity()` on PostgreSQL). BIGINT is not a rowid alias, and without AUTOINCREMENT SQLite reuses the highest id once that row is deleted, which archiving does, so a new game would collide with an archived one.
   - **No server-side timestamp defaults.** The ops layer writes every timestamp as UTC (`_utcnow`) and normalises reads (`_as_utc`): SQLite strips the offset rather than converting, so binding a non-UTC aware datetime would store the wrong instant silently.
   - `create_all(checkfirst=True)` never alters existing tables. Pre-1.0 a schema change is applied with `chesssnake init-db --drop` (`schema.drop_all`), not a migration.
 - `engine.py` — `parse_url` (validates the scheme, rejects libpq keyword strings with the URL equivalent), `create_engine`/`initialize_engine`/`dispose_engine`, `transaction()`, and `locked_transaction()`. The process-wide engine handle lives here. `_engine_kwargs` is per-dialect: an in-memory SQLite database needs `StaticPool` and rejects pool sizing, a file one takes `QueuePool`, and PostgreSQL gets `pool_pre_ping`.
-- `operations.py` — the query functions as Core expressions: users (`user_create`, `user_get`, `user_get_by_name`, `user_rename`, `user_set_role`), identities (`identity_get`, `identity_link`, `user_get_or_create_by_identity`), games, challenges. Public functions open their own transaction; the `_`-prefixed variants take a connection so `challenge()` can run its check-and-mutate atomically. Still **no `engine` import** — the chess logic arrives as `apply_game_change`'s `mutate(row, history, now)` callback, which returns a `GameChange`. Every game read returns the **same dict for an active and an archived game** (`_game_dict`; names joined from `users` twice), which is what lets the routes ignore where a game lives. An action on a triple with no game in progress hands the *finished* game to `mutate` read-only, so the engine itself raises `GameOverError` rather than this layer inventing an error.
+- `operations.py` — the query functions as Core expressions: users (`user_create`, `user_get`, `user_get_by_name`, `user_credentials` (**the only function that returns a password hash**), `user_rename`, `user_set_role`, `user_set_disabled`, `user_set_password`), tokens (`token_create`, `token_resolve`, `tokens_list`, `token_delete`), identities, challenges (`challenge_create`/`_get`/`challenges_for`/`_delete`/`_accept`), and id-keyed games. Public functions open their own transaction; the `_`-prefixed variants take a connection. **Revocation lives here, not in routes**, so the database-direct CLI gets it too: disabling deletes every token; `user_set_password(revoke="sessions"|"all", keep_token_id=)` (self-service keeps api tokens, an admin reset does not). The last enabled admin cannot be demoted or disabled. `token_resolve` is a plain read (it runs on every request and must never take the write lock); there is no `last_used_at` for the same reason.
+  - **`challenge_accept` deletes the challenge first** and proceeds only if that delete removed it: on PostgreSQL a second accept (or a withdrawal) waits on the row lock, then finds nothing. Create-then-delete let two accepts of a `random` challenge make two games with opposite colours.
+  - **`lock_pair(conn, group_id, a, b)`** (backend hook: `pg_advisory_xact_lock` on a hash of the unordered pair on PostgreSQL, a no-op on SQLite where `BEGIN IMMEDIATE` already serialises) is taken first by challenge create, accept and admin game create, because their "is there already a game / a pending challenge" checks are plain reads. Not `FOR UPDATE` on `users`, which conflicts with the key-share locks foreign-key checks take. `test_challenges.py`'s crossing-challenges race fails without it (measured: 2 runs in 6 with the lock disabled, 0 in 15 with it). Still **no `engine` import** — the chess logic arrives as `apply_game_change`'s `mutate(row, history, now)` callback, which returns a `GameChange`. Every game read returns the **same dict for an active and an archived game** (`_game_dict`; names joined from `users` twice), which is what lets the routes ignore where a game lives. An action on a triple with no game in progress hands the *finished* game to `mutate` read-only, so the engine itself raises `GameOverError` rather than this layer inventing an error.
   - The active-game lock is `FOR UPDATE OF games` (`lock_current_game(conn, stmt, of=games)`): the select joins `users`, and a bare `FOR UPDATE` would lock both players' rows and serialize every game they are in.
   - User uniqueness is pre-checked for a readable message, but the unique index is the guarantee: on PostgreSQL two creates can both pass the check, so an `IntegrityError` is reported as `UserExistsError` too (`test_concurrency.py` races six).
 - `postgres.py` / `sqlite.py` — only what genuinely differs: the locking strategy, the dialect's `insert()` for `ON CONFLICT`, and creating a database. `sqlite.py`'s connect hook also sets **`PRAGMA foreign_keys=ON`**: SQLite ignores foreign keys otherwise, silently, so the backends would diverge on exactly what the schema relies on.
@@ -297,8 +321,9 @@ the rule that the `game_get_or_create` bug in 0.10.0 broke. Under a plain deferr
 write; if another writer holds the lock it refuses that upgrade with SQLITE_BUSY
 **immediately**, because `sqlite_busy_timeout` does not apply to the upgrade path. The
 symptom is a 500 `database is locked` on an ordinary request. `apply_game_change`,
-`game_delete`, `challenge`, `challenge_create`, `game_get_or_create`, `user_create`,
-`user_rename`, `identity_link` and `user_get_or_create_by_identity` are the
+`challenge_create`, `challenge_accept`, `game_get_or_create`, `user_create`,
+`user_rename`, `user_set_role`, `user_set_disabled`, `user_set_password`,
+`token_create`, `identity_link` and `user_get_or_create_by_identity` are the
 read-modify-writes; every other public function in `operations.py` is a plain read or a
 write-first statement and may use `transaction()`.
 
