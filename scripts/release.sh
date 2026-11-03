@@ -122,7 +122,13 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     existing="$(git rev-parse "refs/tags/$TAG^{commit}")"
     [ "$existing" = "$SHA" ] || die "tag $TAG already exists locally at ${existing:0:9}, not ${SHA:0:9}"
 else
-    [ "$DRY_RUN" -eq 1 ] || git tag -a "$TAG" -m "$TAG" "$SHA"
+    # Backdate the tagger to the commit's own date. GitHub derives a release's
+    # `created_at` from the tag, and orders the releases page by it -- so a tag
+    # made today for a commit from July sorts a historical release above the
+    # current one. Live releases are unaffected (the commit is minutes old);
+    # backfilled ones land in the right place instead of on top.
+    [ "$DRY_RUN" -eq 1 ] || GIT_COMMITTER_DATE="$(git log -1 --format=%cI "$SHA")" \
+        git tag -a "$TAG" -m "$TAG" "$SHA"
 fi
 [ "$DRY_RUN" -eq 1 ] || git push -q origin "refs/tags/$TAG"
 
