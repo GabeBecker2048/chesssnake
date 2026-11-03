@@ -42,10 +42,23 @@ long-lived credential that can upload on your behalf until you revoke it.
    `VersionHistory.md` (move the previous `Latest` to `Released`). The version
    there is the source of truth; the tag only has to agree with it.
 2. **Merge that to `main`** and let CI go green.
-3. **Draft the release** on GitHub — `gh release create v0.9.1 --draft --generate-notes`,
-   or the web UI. Tag `v0.9.1` (a bare `0.9.1` is accepted too).
-4. **Publish it.** That is the trigger. Nothing ships from a draft, so the notes
-   can be written and rewritten first.
+3. **Run the script:**
+
+   ```bash
+   ./scripts/release.sh 0.9.1            # tag, release, and publish
+   ./scripts/release.sh 0.9.1 --draft    # write the notes up first
+   ./scripts/release.sh 0.9.1 --dry-run  # print what it would do
+   ```
+
+`scripts/release.sh` uses whatever `gh` is already authenticated as, so it holds
+no secrets and is committed to the repo. Before it creates anything it checks
+that the commit really declares the version you named, that the commit is on
+`origin/main`, and that the release does not already exist — so a typo'd version
+fails on your laptop instead of halfway through a workflow. Release notes are
+taken from that version's row in `VersionHistory.md`, so the release page and the
+changelog cannot drift apart.
+
+Publishing the release is the trigger. Nothing ships from a draft.
 
 The workflow then, in order:
 
@@ -86,11 +99,28 @@ number is what carries that meaning.
   (Manage → Releases → Yank), which hides it from new installs while leaving it
   resolvable for anyone who pinned it, then release a fixed version.
 
-## Note: PyPI is behind
+## Backfilling historical releases
 
-PyPI's latest is **0.6.6**, which predates the REST api-endpoint entirely. 0.7.0
-through 0.9.0 are marked Released in `VersionHistory.md` but were never
-uploaded, so `pip install chesssnake` gets a version with no server, no config
-system and no SQLite support, and none of the documentation in the README
-applies to it. Worth publishing a current version early, whether or not it is
-through this workflow.
+Tagging an old version is a GitHub-only operation: those versions are either
+already on PyPI or should not be uploaded now. **Disable the workflow first**,
+or each historical release will start a run that tries to publish and fails.
+
+```bash
+gh workflow disable release.yml
+./scripts/release.sh 0.7.0 --commit a216b1e     # repeat per version
+gh workflow enable release.yml
+```
+
+`--commit` is checked the same way as a normal release: the commit has to
+declare that exact version, in `pyproject.toml` or (before 0.6.7) `setup.py`.
+
+**Old versions cannot go through the workflow.** It runs
+`uv run --extra api --extra client --extra postgres --group pg pytest`, and those
+extras did not all exist before 0.9.0 — 0.8.0 fails with
+`Extra 'postgres' is not defined`, not because the code is broken but because
+the command does not fit the tree. 0.9.0 is the oldest tag that passes the gate
+as written. Anything older is history on GitHub only.
+
+That leaves 0.6.7, 0.7.0, 0.7.1 and 0.8.0 absent from PyPI, which is harmless:
+`pip install chesssnake` resolves to the newest version, nobody deliberately
+installs an old alpha, and `VersionHistory.md` records what each one changed.
