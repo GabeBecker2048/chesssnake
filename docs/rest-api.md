@@ -238,6 +238,7 @@ The HTTP status code indicates the category; `error_type` names the exact condit
 | `404 Not Found` | The referenced game does not exist | `GameNotFoundError` |
 | `409 Conflict` | Stale `expected_version`, **or** an invalid challenge (self-challenge, duplicate, or a game already exists) | `VersionConflictError`, `ChallengeError` |
 | `422 Unprocessable Entity` | An id is outside the BIGINT range | `SQLIdError` |
+| `503 Service Unavailable` | Every database connection is in use; the request was not attempted. Retry shortly. | `SQLBusyError` |
 | `500 Internal Server Error` | A database failure | `SQLError` |
 | `401 Unauthorized` | Missing/invalid API key (only when a key is configured) | *(none, see below)* |
 
@@ -332,8 +333,13 @@ Liveness probe. Unversioned and never authenticated.
   { "status": "ok" }
   ```
 
-- **Client behavior:** use for readiness/uptime checks. A `200` means the process is
-  up; it does not by itself guarantee the database is reachable.
+- **Client behavior:** use for liveness checks. A `200` means the process is up and
+  its event loop is responsive. It does **not** mean the database is reachable, and it
+  does not mean the server has a free worker to run your request: this is the one route
+  that runs on the event loop rather than in the worker threadpool, so it answers in
+  milliseconds even when every worker is busy. That is deliberate, so that a merely
+  busy server is not reported as a failed one, and it is why this is a liveness probe
+  and not a readiness probe.
 
 ---
 

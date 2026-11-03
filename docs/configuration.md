@@ -89,6 +89,26 @@ operations. That makes it correct for **one api-endpoint process serving many
 clients**. It is not suitable for several worker processes writing at once, and it
 must not live on a network filesystem, where its locking is unreliable.
 
+An **in-memory** database (`sqlite://`, or `sqlite:///:memory:`) is refused by the
+api-endpoint. It cannot be shared safely between the threads that serve requests, and
+it is discarded when the process exits. Use a file path.
+
+### Pool sizing
+
+Requests are served by a pool of worker threads, so several can be in the database at
+once. `pool_max_size` (default 10) caps how many connections they share; beyond that,
+a request waits for one to be returned. `pool_min_size` (default 1) is how many stay
+open between requests, and the rest are opened and closed on demand, so a busy server
+with the default repeatedly reopens connections. That costs little on SQLite and a
+TCP connect plus authentication on PostgreSQL, so a deployment under steady load is
+worth setting `pool_min_size` closer to the concurrency it actually sees.
+
+Neither knob is the usual ceiling. CPU-bound work like board rendering is limited by
+Python's global interpreter lock, measured here at roughly a 3x speedup rather than a
+linear one, and concurrent *writes* to one SQLite database serialize on its single
+write lock by design. Going beyond that means several worker processes, which means
+PostgreSQL.
+
 **PostgreSQL**, which needs a server and the `postgres` extra:
 
 ```commandline
