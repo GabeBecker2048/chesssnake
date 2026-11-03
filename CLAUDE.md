@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.9.1 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1 — see `VersionHistory.md`).
+`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.9.2 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1, published container images in 0.9.2 — see `CHANGELOG.md`, with what is next in `ROADMAP.md`).
 
 The package uses a **`src/` layout**: all importable code lives under `src/chesssnake/` (tests import the installed package, not a repo-root package).
 
@@ -17,7 +17,7 @@ The project is managed with **uv**; all metadata lives in `pyproject.toml` (ther
 # `api` (fastapi + uvicorn + pydantic + sqlalchemy — runs on SQLite with no
 # compiled deps), `postgres` (psycopg2, only for postgresql:// URLs).
 # `.python-version` pins local dev to 3.12 because the `pg` test group's
-# `pgserver` only ships cp311/cp312 wheels; the package itself supports 3.11-3.14
+# `pgserver` only ships cp311/cp312 wheels; the package itself supports 3.12-3.14
 # and the SQLite tests run on all of them.
 uv sync                                  # core only (local, in-memory games)
 uv sync --extra api --extra client --extra postgres   # full stack (dev + pg groups are default)
@@ -67,26 +67,54 @@ docker compose -f docker/compose.postgres.yaml up --build   # api-endpoint + Pos
 
 Package data (`data/*.sql`, `data/*.ttf`, `data/img/*.png`) is declared under `[tool.setuptools.package-data]` in `pyproject.toml` and accessed at runtime via `chesssnake.assets.asset_path("img/template.png")` (a thin wrapper over `importlib.resources`). If you add runtime assets, register them there or they won't ship in the wheel. `uv.lock` is committed and should be kept in sync (`uv lock`).
 
+## Writing the changelog
+
+`CHANGELOG.md` is the release notes: `scripts/release.sh` and the release workflow
+both read the `## X.Y.Z` section out of it, so a version with no section fails the
+release before anything is published. Every version gets an entry, in one format.
+
+- **Keep a Changelog sections**, in this order, and only the ones that apply:
+  `### Added`, `### Changed`, `### Deprecated`, `### Removed`, `### Fixed`,
+  `### Security`. The heading is `## X.Y.Z - YYYY-MM-DD` with a hyphen.
+- **Bullets, never paragraphs.** One change per bullet, one or two sentences.
+  Wrap the text, do not stack several changes into one bullet.
+- **Summary level.** Say what changed and why it matters to someone using the
+  thing. Module names, call signatures and the reasoning behind a decision
+  belong in the commit message, not here. Roughly one to six bullets per
+  version; more than that usually means several bullets are really one.
+- **Comparable depth.** Entries should look like siblings. "Major PostgreSQL
+  changes." is too thin and a four-paragraph migration note is too much; both
+  existed before 0.9.2 and both were rewritten.
+- **No `**Breaking.**` marker.** Breaking changes are ordinary bullets under
+  `### Changed` or `### Removed`; the note at the top of the file already says
+  pre-1.0 minors may break. Dropping a Python version is a `### Removed` bullet.
+- **No em-dashes** here or in any user-facing document (README, CHANGELOG,
+  ROADMAP, everything under `docs/`). Use a colon, comma, semicolon or full
+  stop. `CLAUDE.md` is exempt, being internal.
+- `ROADMAP.md` holds planned versions in the same shape and is **hand-edited by
+  Gabe**: do not rewrite its entries.
+
 ## Releasing
 
-Publishing a **GitHub release** publishes the same version to PyPI, via
-`.github/workflows/release.yml`. Full runbook: `docs/releasing.md`.
+Pushing a tag `vX.Y.Z` releases that version: `.github/workflows/release.yml` builds
+it, publishes the package to PyPI and the container image to
+`ghcr.io/gabebecker2048/chesssnake`, then creates the GitHub release. Full runbook:
+`docs/releasing.md`; cut one with `./scripts/release.sh X.Y.Z`.
 
-- The version in `pyproject.toml` is the source of truth; the tag only has to agree
-  with it (`v0.9.1` or `0.9.1`). The workflow's first job fails on a mismatch, before
-  anything is built — tagging a version the project does not claim would otherwise be
-  rejected by PyPI as a duplicate, or publish something unintended.
-- Upload uses **PyPI Trusted Publishing** (OIDC), not an API token, so there is no
-  secret in the repo. It requires the `pypi` environment named in the workflow to match
-  the publisher configured on PyPI.
-- The workflow re-runs lint, mypy and the full suite before building, then **installs
-  the built wheel into a clean venv** and renders a board from it. That step exists to
-  catch a missing `[tool.setuptools.package-data]` entry, which the test suite cannot
-  see because it runs against the source tree — add a runtime asset without
-  registering it there and only this would notice.
-- **PyPI is currently on 0.6.6**, which predates the api-endpoint. 0.7.0–0.9.0 are
-  marked Released in `VersionHistory.md` but were never uploaded, so `pip install
-  chesssnake` does not get any of what the README documents.
+- The version in `pyproject.toml` is the source of truth, and `CHANGELOG.md` must have
+  a `## X.Y.Z` section — that section *is* the release notes, so a missing one fails
+  the run before anything is published. `release.sh` checks both locally first.
+- Upload uses **PyPI Trusted Publishing** (OIDC) and the automatic `GITHUB_TOKEN` for
+  the registry, so there is no secret in the repo. The PyPI publisher is scoped to the
+  `pypi` environment named in the workflow.
+- The workflow **installs the built wheel into a clean venv** and renders a board from
+  it. That exists to catch a missing `[tool.setuptools.package-data]` entry, which the
+  test suite cannot see because it runs against the source tree — add a runtime asset
+  without registering it there and only this would notice.
+- The GitHub release is created **last**, after both registries have the version, so a
+  release page never exists for something that was not published.
+- The tag's date matters: GitHub derives a release's `created_at` from it and orders
+  the releases page by it, which is why `release.sh` dates the tag to the commit.
 
 ## Three-tier architecture
 

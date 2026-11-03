@@ -1,0 +1,171 @@
+# Changelog
+
+All notable changes, newest first. Versions follow [semantic versioning](https://semver.org/).
+
+Pre-1.0 minor versions may break compatibility; those changes appear under
+**Changed** and **Removed**. Some early patch versions are missing: they were
+documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
+
+## 0.9.2 - 2026-11-03
+
+### Added
+- Container images on `ghcr.io/gabebecker2048/chesssnake` for linux/amd64 and
+  linux/arm64, tagged `X.Y.Z`, `X.Y`, `X` and `latest`.
+- `docs/guide.md`: the Python API, running an api-endpoint, the terminal
+  client, and Docker deployment.
+- `ROADMAP.md`, for planned versions.
+
+### Changed
+- Releases are cut by pushing a tag. One workflow builds, publishes to PyPI and
+  the registry, then creates the GitHub release from this file's entry.
+- Shorter README, with the usage material moved to the guide.
+- This changelog replaces `VersionHistory.md`.
+- The test suite runs against SQLAlchemy 2.1.
+
+### Removed
+- Support for Python 3.11. 3.12 or newer is required.
+
+### Fixed
+- PostgreSQL connections on fresh installs. A bare `postgresql://` URL now
+  names whichever driver is installed, rather than relying on a SQLAlchemy
+  default that changed in 2.1.
+- The container failing to start under a `user:` override. Its working
+  directory and `HOME` are now `/data`, not an unreadable home directory.
+
+## 0.9.1 - 2026-11-03
+
+### Added
+- `chesssnake play`, an interactive terminal client for both local and remote
+  games, built on the existing client.
+- A text board renderer with no dependencies (`engine/text.py`).
+
+### Changed
+- The terminal client polls for the opponent's move while idle, re-reads the
+  server before every command, and refuses to act from a game that a rematch
+  has superseded.
+
+## 0.9.0 - 2026-08-05
+
+### Added
+- SQLite support. The backend is chosen by the `database.url` scheme, and
+  SQLite is configured for concurrent use with WAL and immediate transactions.
+
+### Changed
+- The database layer moved to SQLAlchemy Core: backend-agnostic queries over
+  one schema definition, with only genuine dialect differences per backend.
+- `chesssnake[api]` no longer installs psycopg2; PostgreSQL needs
+  `chesssnake[api,postgres]`.
+- Only URL connection strings are accepted.
+- Existing PostgreSQL databases need no migration; the schema is unchanged.
+
+### Removed
+- `db/sql.py`, replaced by the Core query layer.
+
+### Fixed
+- Checkmate detection, which mis-reported scholar's mate as check.
+- Pinned pieces are now excluded from checkmate and stalemate detection.
+
+## 0.8.0 - 2026-08-04
+
+### Added
+- Centralised configuration: one schema resolved through four layers (CLI flag,
+  environment variable, TOML file, default).
+- `chesssnake config show`, reporting each value and the layer it came from.
+
+### Changed
+- Authentication is explicit (`api.require_auth`), and enabling it without a
+  key fails at startup instead of running open.
+- The server is an app factory, `create_app(settings)`.
+- Every environment variable is renamed; the `CHESSDB_*` family collapses into
+  `CHESSSNAKE__DATABASE__URL`.
+
+### Removed
+- Support for Python 3.10.
+
+## 0.7.1 - 2026-07-09
+
+### Added
+- All six FEN fields as `Game` accessors.
+- `O-O` and `O-O-O` accepted alongside `0-0` and `0-0-0`.
+
+### Changed
+- Engine state matches FEN exactly: en passant is an algebraic target square
+  and castling rights are a rights string.
+
+### Fixed
+- Castling checked the wrong rook.
+
+## 0.7.0 - 2026-07-09
+
+### Added
+- The REST api-endpoint, which runs the engine server-side so clients cannot
+  cheat and a frontend in any language needs no chess logic.
+- Resignation, automatic draw detection, PGN export, legal-move listing,
+  head-to-head records, and single-perspective board images.
+- Per-game generations, giving rematches and an archive of finished games.
+- Optimistic concurrency and per-player move authorisation.
+
+### Changed
+- Standard FEN replaces the previous bespoke board format.
+
+## 0.6.7 - 2026-07-09
+
+### Added
+- Unit and integration test suites.
+
+### Changed
+- Packaging moved to uv and `pyproject.toml`.
+
+### Removed
+- Support for Python 3.9.
+
+### Fixed
+- The PostgreSQL layer, and engine bugs in en passant, back-rank mate and
+  checkmate notation.
+
+## 0.6.6 - 2025-02-16
+
+### Fixed
+- The PostgreSQL layer brought in line with the 0.6.0 schema overhaul,
+  including the new status column and player id checks.
+
+## 0.6.0 - 2025-02-08
+
+### Changed
+- PostgreSQL schema overhaul, with a reworked SQL utility layer.
+
+## 0.5.0 - 2025-01-05
+
+### Added
+- Documentation for the PostgreSQL `Game` API.
+
+### Changed
+- Reworked the PostgreSQL persistence layer.
+
+## 0.4.0 - 2025-01-05
+
+### Added
+- API documentation for the chess library, `Game` and the image renderer.
+
+## 0.3.1 - 2024-12-21
+
+### Added
+- First release on PyPI.
+
+### Fixed
+- Assorted bug fixes.
+
+## 0.3.0 - 2024-12-21
+
+### Fixed
+- Bug fixes and refactoring in the PostgreSQL layer.
+
+## 0.2.0 - 2024-12-21
+
+### Fixed
+- Bug fixes and refactoring in the chess library.
+
+## 0.1.0 - 2024-12-18
+
+### Added
+- Initial pre-release.

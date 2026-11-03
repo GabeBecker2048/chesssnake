@@ -48,6 +48,37 @@ def test_unsupported_backend_is_rejected():
         db_engine.parse_url("mysql://u@h/chess")
 
 
+def test_bare_postgres_url_names_the_installed_driver():
+    """
+    SQLAlchemy's default driver for a bare `postgresql://` changed between 2.0
+    (psycopg2) and 2.1 (psycopg v3), so the same URL and the same
+    `chesssnake[api,postgres]` install worked or failed depending on which
+    SQLAlchemy got resolved. It surfaced as `No module named 'psycopg'` from a
+    package that had installed psycopg2. parse_url now names whichever driver
+    is present, so the behaviour does not depend on that default.
+    """
+    import importlib.util
+
+    parsed = db_engine.parse_url("postgresql://u:p@h:5432/chess")
+    installed = next(
+        (d for d in ("psycopg2", "psycopg") if importlib.util.find_spec(d) is not None),
+        None,
+    )
+    if installed is None:
+        pytest.skip("no PostgreSQL driver installed")
+    assert parsed.drivername == f"postgresql+{installed}"
+
+
+def test_an_explicit_postgres_driver_is_left_alone():
+    """Naming a driver is a deliberate choice; it must survive parse_url."""
+    assert db_engine.parse_url("postgresql+psycopg://u@h/chess").drivername == "postgresql+psycopg"
+    assert db_engine.parse_url("postgresql+psycopg2://u@h/chess").drivername == "postgresql+psycopg2"
+
+
+def test_sqlite_urls_are_not_given_a_driver():
+    assert db_engine.parse_url("sqlite:///chess.db").drivername == "sqlite"
+
+
 def test_keyword_dsn_is_rejected_with_the_url_equivalent():
     """Keyword connection strings worked before 0.9.0; the error has to explain that."""
     with pytest.raises(errors.SQLError) as exc:
