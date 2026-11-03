@@ -260,3 +260,47 @@ def test_every_action_is_guarded_not_just_moves(remote_client, command, white_id
     _, out = play([command, "quit"], game)
     assert "this game is over - `new` starts a rematch" in out
     assert "VersionConflict" not in out
+
+
+# --- auth -------------------------------------------------------------------
+
+
+@pytest.fixture
+def auth_app(api_client, settings):
+    """
+    A second app requiring an API key, sharing the already-initialized pool.
+
+    Mirrors ``test_api.py::auth_client``: settings live on the app rather than in
+    the environment, so two apps with different auth can coexist.
+    """
+    from fastapi.testclient import TestClient
+
+    from chesssnake.api.server import create_app
+    from chesssnake.config import Settings
+
+    auth = Settings(
+        api={"require_auth": True, "api_key": "s3cret"},
+        database={"url": settings.database.url},
+    )
+    with TestClient(create_app(auth)) as client:
+        yield client
+
+
+def test_play_works_against_an_endpoint_that_requires_a_key(auth_app):
+    from chesssnake.remote.client import ApiClient
+
+    client = ApiClient("http://testserver", session=auth_app, api_key="s3cret")
+    game = Game.remote(41, 42, 70, client=client)
+    _, out = play(["d4", "pgn", "quit"], game)
+    assert "played d4" in out
+    assert "1. d4" in out
+
+
+def test_play_without_the_key_fails_loudly_not_silently(auth_app):
+    """A missing key must surface as an auth error, not an empty board."""
+    from chesssnake.db.errors import GameError
+    from chesssnake.remote.client import ApiClient
+
+    client = ApiClient("http://testserver", session=auth_app)  # no api_key
+    with pytest.raises(GameError, match="API key"):
+        Game.remote(43, 44, 70, client=client)

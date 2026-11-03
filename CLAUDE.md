@@ -172,11 +172,17 @@ a local and a remote game**. Anything it does, the client could already do.
   **The real fix is server-side** (have the mutating routes take and validate a
   generation); until then this guard is the only thing preventing it from the CLI.
 - **`wait_for_line()` is the one thing the session does unasked**, polling every
-  `--refresh` seconds (default 15, `0` disables). `select` rather than a thread, so one
+  `--refresh` seconds (default 10, `0` disables; one poll is a single small GET, measured
+  at ~25 ms against a LAN deployment, so the interval is a feel decision not a load one). `select` rather than a thread, so one
   thread touches the game and the output stream and there is nothing to shut down. It
   falls back to a blocking read for a local game, `--refresh 0`, a stdin with no real fd
   (a `StringIO`, as the tests use), or a platform whose `select` will not take one. A
   quiet poll prints nothing; a change redraws and re-issues the prompt.
+- **Ctrl+C is an exit, not a crash.** `run()` catches `KeyboardInterrupt` around both the
+  read and the dispatch and returns **130**; `cli.py`'s `main()` catches it around every
+  subcommand as well. Without this it propagated out of `select()` and printed a traceback
+  through the console script, which tells the player nothing. Verified by sending a real
+  SIGINT to a pty-backed `chesssnake play`.
 - **Errors are normal input.** `ChessError`, `GameError` and `ValueError` are caught per
   line and printed; only a failure to *reach* the endpoint escapes, and `cli.py` turns
   that into an exit with the URL in the message rather than a prompt that cannot work.
