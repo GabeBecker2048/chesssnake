@@ -57,7 +57,7 @@ reported as a warning rather than silently ignored.
 | `database` | `url` | string | unset | Connection **URL**; the scheme selects the backend. |
 | `database` | `pool_min_size` | integer | `1` | Minimum pooled connections. |
 | `database` | `pool_max_size` | integer | `10` | Maximum pooled connections. |
-| `database` | `init_schema` | boolean | `false` | Create the schema when the server starts. |
+| `database` | `init_schema` | boolean | `false` | Create any missing tables when the server starts. Existing tables are never altered; recreate them with `chesssnake init-db --drop` after a release that changes the schema. |
 | `database` | `sqlite_busy_timeout` | integer (ms) | `5000` | How long a blocked SQLite writer waits. Ignored on PostgreSQL. |
 | `client` | `api_url` | string | unset | Base URL a remote `Game` connects to. **Environment only.** |
 | `client` | `api_key` | string | unset | Key a remote `Game` sends. Secret. **Environment only.** |

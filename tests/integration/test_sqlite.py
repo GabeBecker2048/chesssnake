@@ -124,6 +124,7 @@ def test_memory_engine_uses_a_shared_connection():
         schema.create_all(engine)
         with engine.connect() as conn:
             assert conn.execute(text("SELECT count(*) FROM games")).scalar() == 0
+            assert conn.execute(text("SELECT count(*) FROM finished_games")).scalar() == 0
     finally:
         engine.dispose()
 
@@ -141,17 +142,88 @@ def test_schema_creation_is_idempotent(file_engine):
     schema.create_all(file_engine)  # must not raise
 
 
+# --- Schema behavior the operations layer relies on ------------------------
+
+
+def _user(conn, name):
+    from chesssnake.db.operations import _utcnow
+
+    return conn.execute(schema.users.insert().values(username=name, created_at=_utcnow())).inserted_primary_key[0]
+
+
+def _game(conn, white, black, group_id=1):
+    from chesssnake.db.operations import _utcnow
+
+    now = _utcnow()
+    return conn.execute(
+        schema.games.insert().values(
+            group_id=group_id, white_id=white, black_id=black, fen="x", started_at=now, updated_at=now
+        )
+    ).inserted_primary_key[0]
+
+
 def test_timestamps_come_back_as_datetimes(file_engine):
-    """game_archive calls .isoformat(); raw sqlite3 would have returned a string."""
+    """The operations layer calls .isoformat(); raw sqlite3 would have returned a string."""
     import datetime as dt
 
-    schema.create_all(file_engine)
     with file_engine.begin() as conn:
-        conn.execute(
-            schema.games.insert().values(groupid=1, whiteid=2, blackid=3, generation=1, fen="x", status=0, version=1)
-        )
-        value = conn.execute(schema.games.select()).mappings().one()["updatedat"]
+        game_id = _game(conn, _user(conn, "ann"), _user(conn, "bob"))
+        value = conn.execute(schema.games.select().where(schema.games.c.id == game_id)).mappings().one()["updated_at"]
     assert isinstance(value, dt.datetime)
+
+
+def test_timestamps_normalise_to_utc(file_engine):
+    """
+    SQLite keeps the wall-clock text and drops the offset, so only UTC may be written,
+    and a naive value read back is UTC.
+    """
+    import datetime as dt
+
+    from chesssnake.db.operations import _as_utc
+
+    with file_engine.begin() as conn:
+        _user(conn, "ann")
+        stored = conn.execute(schema.users.select()).mappings().one()["created_at"]
+    assert stored.tzinfo is None, "pins the SQLite behavior _as_utc exists for"
+    assert _as_utc(stored).tzinfo == dt.UTC
+    aware = dt.datetime(2026, 1, 1, 12, tzinfo=dt.timezone(dt.timedelta(hours=5)))
+    assert _as_utc(aware) == aware and _as_utc(aware).tzinfo == dt.UTC
+
+
+def test_foreign_keys_are_enforced(file_engine):
+    """Off by default in SQLite; the connect hook turns them on."""
+    from sqlalchemy.exc import IntegrityError
+
+    with file_engine.connect() as conn:
+        assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
+    with pytest.raises(IntegrityError):
+        with file_engine.begin() as conn:
+            _game(conn, 1001, 1002)
+
+
+def test_deleting_a_game_cascades_to_its_moves(file_engine):
+    from sqlalchemy import delete, func, select
+
+    with file_engine.begin() as conn:
+        game_id = _game(conn, _user(conn, "ann"), _user(conn, "bob"))
+        conn.execute(schema.moves.insert().values(game_id=game_id, ply=1, san="e4", position_key="k"))
+        conn.execute(delete(schema.games).where(schema.games.c.id == game_id))
+        assert conn.execute(select(func.count()).select_from(schema.moves)).scalar() == 0
+
+
+def test_game_ids_are_never_reused(file_engine):
+    """
+    Without AUTOINCREMENT SQLite hands out max(rowid) + 1, so deleting the newest
+    game (as archiving it does) would give its id to the next one, colliding with
+    the finished_games row that kept it.
+    """
+    from sqlalchemy import delete
+
+    with file_engine.begin() as conn:
+        white, black = _user(conn, "ann"), _user(conn, "bob")
+        first = _game(conn, white, black)
+        conn.execute(delete(schema.games).where(schema.games.c.id == first))
+        assert _game(conn, white, black) > first
 
 
 def test_missing_driver_reports_the_extra_to_install(monkeypatch):

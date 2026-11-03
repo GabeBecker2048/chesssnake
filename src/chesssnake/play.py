@@ -256,14 +256,15 @@ class Session:
         """
         Why an action must not be sent, or ``None`` when it is safe.
 
-        This exists because the server's **mutating routes ignore the generation
-        entirely** and always act on the current game, while reads are pinned to
-        one. A session left on a superseded generation therefore does not get a
-        clean refusal: its move is applied to *whichever game is current*, and
-        only an accidental version or legality mismatch stops it. Verified
-        against a live endpoint — a session sitting in a finished generation 1
-        played ``d5`` and it landed in generation 2's movetext. So the session
-        refuses to send anything until the player rejoins with ``new``.
+        Every action carries the session's ``generation`` and the server refuses
+        one aimed at a game that is over (``GenerationConflictError``), so a
+        session left on a superseded generation cannot play into the rematch.
+        This check is still made first because it says *why* in words the player
+        can act on (``new`` joins the current game), where the server's refusal
+        would only be an error. Before 0.11.0 the mutating routes ignored the
+        generation entirely and this guard was the only protection: a session
+        sitting in a finished generation 1 played ``d5`` and it landed in
+        generation 2's movetext.
 
         :return: a message to show, or ``None``.
         """
@@ -369,8 +370,6 @@ class Session:
             self.game.wid,
             self.game.bid,
             self.game.gid,
-            white_name=self.game.wname,
-            black_name=self.game.bname,
             player_id=self.player_id,
             client=self.game._client,
         )

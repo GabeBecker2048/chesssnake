@@ -86,29 +86,37 @@ def call(method, path, body=None):
 
 assert call("GET", "/health")["status"] == "ok", "health did not report ok"
 
-game = call("POST", "/v1/games", {"group_id": 1, "white_id": 2, "black_id": 3,
-                                  "white_name": "Ada", "black_name": "Bob"})
+# Players are accounts with server-assigned ids, so create them first.
+ada = call("POST", "/v1/users", {"username": "Ada"})["id"]
+bob = call("POST", "/v1/users/discord/123456789012345678", {"username": "Bob"})["id"]
+assert call("GET", "/v1/users/discord/123456789012345678")["id"] == bob, "the external id did not map back"
+
+url = f"/v1/games/1/{ada}/{bob}"
+game = call("POST", "/v1/games", {"group_id": 1, "white_id": ada, "black_id": bob})
 assert game["version"] == 1, f"unexpected initial version {game['version']}"
+assert (game["white_name"], game["black_name"]) == ("Ada", "Bob"), game
 
 # Scholar's mate: a real game, and it exercises checkmate detection.
 for move in ("e4", "e5", "Qh5", "Nc6", "Bc4", "Nf6", "Qxf7"):
-    result = call("POST", "/v1/games/1/2/3/moves", {"move": move})
+    result = call("POST", f"{url}/moves", {"move": move})
 
 assert result["san"] == "Qxf7#", f"expected mate, got {result['san']!r}"
 assert result["state"]["status"] == 1, f"expected white to win, got {result['state']['status']}"
 assert result["state"]["termination"] == "checkmate", result["state"]["termination"]
 
-# The game must survive as stored state, not just in that one response.
-reloaded = call("GET", "/v1/games/1/2/3")
+# The game must survive as stored state, not just in that one response: it is
+# now in the archive, under the id it had while it was being played.
+reloaded = call("GET", f"/v1/games/{game['id']}")
 assert reloaded["status"] == 1, "the finished game did not persist"
+assert reloaded == call("GET", url), "the game reads differently by id and by players"
 
-pgn = call("GET", "/v1/games/1/2/3/pgn").decode()
-assert "1. e4 e5" in pgn and "Qxf7#" in pgn, pgn
+pgn = call("GET", f"{url}/pgn").decode()
+assert "1. e4 e5" in pgn and "Qxf7#" in pgn and '[White "Ada"]' in pgn, pgn
 
-png = call("GET", "/v1/games/1/2/3/image")
+png = call("GET", f"{url}/image")
 assert png[:4] == b"\x89PNG", "the board image is not a PNG"
 
-record = call("GET", "/v1/games/1/record?player1=2&player2=3")
+record = call("GET", f"/v1/games/1/record?player1={ada}&player2={bob}")
 assert record["player1_wins"] == 1, record
 
 print(f"  game played and persisted; pgn tail: {pgn.strip().splitlines()[-1]}")
