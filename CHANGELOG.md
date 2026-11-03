@@ -6,6 +6,14 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.12.1 - 2026-11-03
+
+### Fixed
+- A burst of logins could push the server to its memory limit and keep it
+  there. Password checks now run on a small dedicated set of threads, so memory
+  stays flat however many people log in at once. Measured after a burst of 40
+  logins: about 700 MiB before, 134 MiB after.
+
 ## 0.12.0 - 2026-11-03
 
 ### Added

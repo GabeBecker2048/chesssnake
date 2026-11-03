@@ -15,15 +15,21 @@ time and memory, so two rules hold everywhere here:
 
 - it never runs inside a database transaction (on SQLite a write transaction
   holds the whole database's lock); and
-- at most :data:`MAX_CONCURRENT_HASHES` run at once. Each takes ~19 MiB, and
-  anyio runs up to 40 sync routes concurrently, so without a cap an anonymous
-  flood of logins could exhaust a small container's memory. Waiting too long
-  for a slot is a 503, like a saturated database pool.
+- it runs on a dedicated pool of :data:`MAX_CONCURRENT_HASHES` threads, never on
+  the request's own worker thread. Each hash takes ~19 MiB, and glibc keeps a
+  block that size in the allocating thread's arena after it is freed rather than
+  returning it to the system. Capping only how many hash *at once* (0.12.0's
+  semaphore) still let each of anyio's 40 worker threads keep its own 19 MiB:
+  measured, one burst of 40 logins left a process at 700 MiB and pinned the
+  512 MiB container at its limit. With four threads that ever hash, the same
+  bursts settle at ~93 MiB and stay there. Waiting too long for the pool is a
+  503, like a saturated database pool.
 """
 
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -40,12 +46,18 @@ ARGON2_TIME_COST = 2
 ARGON2_MEMORY_COST_KIB = 19456
 ARGON2_PARALLELISM = 1
 
-#: Password hashes allowed to run at once (see the module docstring).
+#: Threads that ever run a password hash, so also how many run at once (see the
+#: module docstring for why it must be a fixed set of threads, not just a cap).
 MAX_CONCURRENT_HASHES = 4
 #: How long a login waits for a hashing slot before answering 503.
 HASH_SLOT_TIMEOUT_SECONDS = 5
 
+#: Admission: a caller holds a slot while its hash is queued or running, so the
+#: pool's queue can never grow without bound and a long wait becomes a 503.
 _hash_slots = threading.BoundedSemaphore(MAX_CONCURRENT_HASHES)
+#: The only threads that run Argon2. Created on first use; they do no database
+#: work, so the request's context (WRITE_TRANSACTION) not following them is fine.
+_hash_pool = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_HASHES, thread_name_prefix="chesssnake-argon2")
 
 
 @lru_cache(maxsize=1)
@@ -78,6 +90,12 @@ class _HashSlot:
         _hash_slots.release()
 
 
+def _on_hash_pool(fn, *args):
+    """Run ``fn(*args)`` on the Argon2 pool, holding a slot; returns its result."""
+    with _HashSlot():
+        return _hash_pool.submit(fn, *args).result()
+
+
 def validate_password(password) -> str:
     """
     :return: The password, unchanged.
@@ -93,8 +111,7 @@ def validate_password(password) -> str:
 def hash_password(password: str) -> str:
     """Hash a (validated) password with Argon2id. Slow on purpose; never call inside a transaction."""
     validate_password(password)
-    with _HashSlot():
-        return _hasher().hash(password)
+    return _on_hash_pool(_hasher().hash, password)
 
 
 def verify_password(password_hash: str | None, password: str) -> bool:
@@ -105,15 +122,19 @@ def verify_password(password_hash: str | None, password: str) -> bool:
     unknown user, or an account without a password), so the response time does
     not reveal which usernames exist or which accounts can log in.
     """
-    from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
-
     if not isinstance(password, str):
         password = ""
-    with _HashSlot():
-        try:
-            return _hasher().verify(password_hash or _dummy_hash(), password) and password_hash is not None
-        except (VerifyMismatchError, VerificationError, InvalidHashError):
-            return False
+    return _on_hash_pool(_verify, password_hash, password)
+
+
+def _verify(password_hash: str | None, password: str) -> bool:
+    """The verification itself; runs on the Argon2 pool (the dummy hash is made there too)."""
+    from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+
+    try:
+        return _hasher().verify(password_hash or _dummy_hash(), password) and password_hash is not None
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        return False
 
 
 def needs_rehash(password_hash: str) -> bool:
