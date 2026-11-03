@@ -53,7 +53,13 @@ awk -v v="$VERSION" '
     on {print}' CHANGELOG.md | sed -e '/./,$!d' > "$NOTES"
 [ -s "$NOTES" ] || die "CHANGELOG.md has no '## $VERSION' section; the release would have no notes"
 
-[ -z "$(git status --porcelain)" ] || die "the working tree is dirty; commit or stash first"
+# Tracked changes only. The release is built from the tagged commit, so an
+# untracked scratch file cannot reach it and has no business blocking a release.
+# Worth mentioning though, in case it is work you meant to include.
+[ -z "$(git status --porcelain --untracked-files=no)" ] \
+    || die "you have uncommitted changes to tracked files; commit or stash first"
+untracked="$(git ls-files --others --exclude-standard)"
+[ -z "$untracked" ] || note "note: untracked files are not part of this release: $(echo "$untracked" | tr '\n' ' ')"
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
 [ "$branch" = "main" ] || note "warning: you are on '$branch', not main"
