@@ -40,11 +40,6 @@ contents of a version may change before it ships. Shipped versions are in
 ## 0.11.0 - planned
 
 - Database refactor: add `users` and `finished_games` tables.
-- A migration path, so existing databases survive the change. Schema creation
-  is currently `create_all(checkfirst=True)` with no migration tooling, and
-  1.0.0 cannot ask people to drop their games.
-- Grouped with the migration work on purpose: this is the one version that
-  rewrites the schema, so it should only happen once.
 
 ## 0.10.0 - planned
 
