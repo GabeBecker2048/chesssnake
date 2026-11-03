@@ -6,7 +6,26 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
-## 0.12.1 - 2026-11-03
+## 0.13.0 - 2026-11-03
+
+### Added
+- Live updates over a websocket at `/v1/ws`. A client follows any games it
+  likes and is sent each move, draw offer and result the moment it is saved,
+  plus its own challenges and new games, instead of polling. Off by default
+  (`websocket.enabled`), so REST-only deployments are unaffected.
+- A `[websocket]` configuration section to control the load and exposure:
+  connection limits overall, per user and before login, subscriptions per
+  connection, timeouts, pings and allowed browser origins.
+- `chesssnake play` shows the opponent's move as it happens when the server
+  offers live updates, and falls back to polling with a note when it does not.
+  `--no-live` polls regardless.
+- `ApiClient.events()`, a self-reconnecting stream of live updates for Python
+  programs.
+
+### Changed
+- Logging out, revoking a token, resetting a password or disabling an account
+  also closes that login's live connections at once.
+
 
 ### Fixed
 - A burst of logins could push the server to its memory limit and keep it

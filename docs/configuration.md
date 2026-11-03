@@ -59,6 +59,21 @@ reported as a warning rather than silently ignored.
 | `database` | `pool_max_size` | integer | `10` | Maximum pooled connections. |
 | `database` | `init_schema` | boolean | `false` | Create any missing tables when the server starts. Existing tables are never altered; recreate them with `chesssnake init-db --drop` after a release that changes the schema. |
 | `database` | `sqlite_busy_timeout` | integer (ms) | `5000` | How long a blocked SQLite writer waits. Ignored on PostgreSQL. |
+| `websocket` | `enabled` | boolean | `false` | Serve real-time updates at `/v1/ws`. See [Websockets](#websocket). |
+| `websocket` | `max_connections` | integer | `1000` | Open websockets in total, counted from accept. |
+| `websocket` | `max_pending_auth` | integer | `100` | Websockets connected but not yet logged in. At most `max_connections`. |
+| `websocket` | `max_connections_per_user` | integer | `10` | Open websockets per user. At most `max_connections`. |
+| `websocket` | `max_subscriptions` | integer | `64` | Games one websocket may follow. |
+| `websocket` | `auth_timeout_seconds` | number | `10` | Time a new websocket has to send its token. |
+| `websocket` | `reauth_interval_seconds` | number | `60` | How often an open websocket's token is checked again (+/-10%). |
+| `websocket` | `send_queue_size` | integer | `256` | Messages buffered per websocket before it is closed (`1013`). |
+| `websocket` | `ping_interval_seconds` | number | `20` | Protocol pings that keep proxies from idling a socket out; `0` disables. |
+| `websocket` | `ping_timeout_seconds` | number | `20` | Close a socket whose ping goes unanswered this long. At least 1. |
+| `websocket` | `max_message_bytes` | integer | `65536` | Largest message accepted from a client. At least 1024. |
+| `websocket` | `compression` | boolean | `false` | permessage-deflate. Costs memory per socket; messages are small. |
+| `websocket` | `worker_threads` | integer | `4` | Threads for websocket database work, apart from the REST routes' threads. |
+| `websocket` | `shutdown_timeout_seconds` | number | `5` | How long open connections get on shutdown. |
+| `websocket` | `allowed_origins` | list of strings | `["*"]` | Browser origins allowed to connect. Comma-separated in the environment. |
 | `client` | `api_url` | string | unset | Base URL a remote `Game` connects to. **Environment only.** |
 | `client` | `token` | string | unset | Bearer token the Python client and `chesssnake play` send, instead of the one `chesssnake login` stored. Secret. **Environment only.** |
 
@@ -150,6 +165,40 @@ config file that still sets either is rejected at startup, and the environment
 variables warn as unknown, so a stale setting is noticed rather than ignored. How
 logins, tokens and roles work is in the [REST reference](rest-api.md#authentication).
 
+## Websocket
+
+Real-time updates are opt-in. Turning them on adds one route, `/v1/ws`, on the
+same host and port as everything else:
+
+```toml
+[websocket]
+enabled = true
+allowed_origins = ["https://chess.example"]   # where your web frontend is served from
+```
+
+With them off (the default) the upgrade is refused with HTTP 403 and clients
+poll, so a REST-only deployment does not need to think about this section.
+
+- **Origins.** Browsers send an `Origin` header; `allowed_origins` lists the ones
+  that may connect. Anything else (`chesssnake play`, a bot) sends none and is
+  always allowed, because the token is what really guards a socket. Entries are
+  compared without case or a trailing slash, `"*"` allows any and cannot be mixed
+  with other entries, and in the environment the list is comma-separated:
+  `CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS=https://a.example,https://b.example`.
+- **Limits.** `max_connections`, `max_pending_auth` and `max_connections_per_user`
+  bound how many sockets can be open, with connections that have not logged in
+  yet capped separately so they cannot hold every slot. An idle socket costs
+  about 56 KiB.
+- **Transport.** `ping_interval_seconds`, `ping_timeout_seconds`,
+  `max_message_bytes`, `compression` and `shutdown_timeout_seconds` are passed to
+  uvicorn by `chesssnake api-endpoint`. Under your own ASGI server
+  ([below](#deploying-under-your-own-asgi-server)) pass the equivalent uvicorn
+  flags yourself; the app still enforces `max_message_bytes` on its own.
+- **One process.** Updates reach the sockets of the process that saved the
+  change, so run a single api-endpoint process when websockets are on.
+
+The protocol is in [Real-time updates](realtime-websockets.md).
+
 ## The config file
 
 Discovery order, first match wins:
@@ -232,3 +281,8 @@ uvicorn chesssnake.api.server:create_app --factory --host 0.0.0.0 --port 8000
 the server this way, and the same is true of `uvicorn --reload`/`--workers`, which
 re-import in a fresh process. Use the environment or a config file for those
 deployments. `CHESSSNAKE_CONFIG` is how you point at a specific file.
+
+With websockets on, give uvicorn the transport settings that `chesssnake
+api-endpoint` would have passed, e.g. `--ws-ping-interval 20 --ws-ping-timeout 20
+--ws-max-size 65536 --timeout-graceful-shutdown 5`, and do not use `--workers`
+(see [Websocket](#websocket)).

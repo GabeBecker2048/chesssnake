@@ -354,3 +354,21 @@ def test_credentials_are_private_and_keyed_by_endpoint(monkeypatch, tmp_path):
     assert credentials.load("https://chess.example") is None
     assert credentials.load("http://other.example")["token"] == "css_two"
     assert not list(path.parent.glob(".credentials-*")), "no temporary files left behind"
+
+
+def test_api_endpoint_passes_the_websocket_transport_settings_to_uvicorn(monkeypatch, isolated_env):
+    """[websocket] reaches uvicorn: pings, frame size, compression and the shutdown bound."""
+    import uvicorn
+
+    seen = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: seen.update(kwargs))
+    monkeypatch.setenv("CHESSSNAKE__DATABASE__URL", "sqlite://")
+    monkeypatch.setenv("CHESSSNAKE__WEBSOCKET__PING_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("CHESSSNAKE__WEBSOCKET__MAX_MESSAGE_BYTES", "4096")
+    main(["api-endpoint"])
+    assert seen["ws_ping_interval"] is None, "0 disables pings; uvicorn spells that None"
+    assert seen["ws_ping_timeout"] == 20.0
+    assert seen["ws_max_size"] == 4096
+    assert seen["ws_per_message_deflate"] is False
+    assert seen["timeout_graceful_shutdown"] == 5.0
+    assert "ws_max_queue" not in seen, "uvicorn's websocket implementation ignores it"

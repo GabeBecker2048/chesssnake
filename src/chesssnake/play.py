@@ -87,6 +87,7 @@ class Session:
         figurines: bool = True,
         perspective=None,
         refresh_seconds: float = 10.0,
+        events=None,
     ):
         self.game = game
         self.player_id = player_id
@@ -95,6 +96,12 @@ class Session:
         self.color = color
         self.figurines = figurines
         self.refresh_seconds = refresh_seconds
+        #: Live updates (a :class:`chesssnake.remote.realtime.EventStream`, or
+        #: anything with ``fileno()``/``drain()``/``subscribe()``/``unsubscribe()``),
+        #: or ``None`` to poll every ``refresh_seconds`` as before 0.13.
+        self.events = events
+        #: Whether the live connection is up; while it is down, poll instead.
+        self.connected = events is not None
         #: Set by :meth:`sync` to the id of a newer game between the same two
         #: players, once this session's game is over and a rematch has begun.
         self.newer_game = None
@@ -395,8 +402,12 @@ class Session:
         """Point the session at another game (the rematch) and draw it."""
         from .remote.game import Game
 
+        old = self.game.id
         self.game = Game.remote(game_id, client=self.game._client, player_id=self.game.player_id)
         self.newer_game = None
+        if self.events is not None:
+            self.events.unsubscribe(old)
+            self.events.subscribe(self.game.id)
         if self.player_id is not None:
             self.perspective = Color.BLACK if self.player_id == self.game.bid else Color.WHITE
         self.note(f"rematch - game {self.game.id}")
@@ -456,14 +467,151 @@ class Session:
         self.note(f"played {san}")
         self.show()
 
+    # --- live updates ---------------------------------------------------------
+
+    def _name_of(self, color) -> str:
+        return (self.game.wname if Color(color) == Color.WHITE else self.game.bname) or (
+            "white" if Color(color) == Color.WHITE else "black"
+        )
+
+    def handle_events(self, events) -> bool:
+        """
+        Apply what the live stream delivered; return whether anything was printed.
+
+        Runs on the session's own thread (the stream's thread only queues), so the
+        game and the output are still touched by one thread alone.
+        """
+        from .dto import GameState
+
+        printed = False
+        for event in events:
+            kind = event.get("type")
+            if kind in ("game", "subscribed"):
+                state = GameState.from_dict(event["state"])
+                if state.id != self.game.id or (self.game.version or 0) >= state.version:
+                    continue  # another game, or nothing newer than what is on screen
+                was_over = self.game.is_over
+                self.game._apply_state(state)
+                move = event.get("move")
+                self.write()
+                if move:
+                    self._mark_move(move)
+                    mover = Color(self.game.to_move).opponent
+                    self.note(f"{self._name_of(mover)} played {move['san']}")
+                else:
+                    self.note("the game changed on the server")
+                self.show()
+                if self.game.is_over and not was_over:
+                    self.note("game over - `new` for a rematch")
+                printed = True
+            elif kind == "game_removed" and event.get("game") == self.game.id:
+                self.write()
+                self.error("an administrator deleted this game")
+                printed = True
+            elif kind == "game_started":
+                state = event["state"]
+                players = {self.game.wid, self.game.bid}
+                if (
+                    state["id"] > (self.game.id or 0)
+                    and {state["white_id"], state["black_id"]} == players
+                    and state["group_id"] == self.game.gid
+                    and self.newer_game != state["id"]
+                ):
+                    self.newer_game = state["id"]
+                    self.write()
+                    self.note(self._rematch_notice())
+                    printed = True
+            elif kind == "challenge" and event.get("event") == "created":
+                challenge = event["challenge"]
+                opponent = self.game.bid if self.player_id == self.game.wid else self.game.wid
+                if (
+                    self.player_id is not None
+                    and challenge["challenger_id"] == opponent
+                    and challenge["challenged_id"] == self.player_id
+                    and challenge["group_id"] == self.game.gid
+                ):
+                    self.write()
+                    self.note(f"{challenge['challenger_name']} challenged you to a rematch - `new` accepts")
+                    printed = True
+            elif kind == "disconnected":
+                if self.connected:
+                    self.connected = False
+                    self.write()
+                    polling = f"polling every {self.refresh_seconds:g} s" if self.refresh_seconds > 0 else "not polling"
+                    self.note(f"live updates lost; reconnecting ({polling} meanwhile)")
+                    printed = True
+            elif kind == "reconnected":
+                self.connected = True
+                self.write()
+                self.note("live updates are back")
+                printed = True
+            elif kind == "ended":
+                self.events, self.connected = None, False
+                self.write()
+                self.note(f"live updates stopped: {event.get('reason')}")
+                printed = True
+            elif kind == "auth_error":
+                raise AuthError(event.get("detail") or "the token is no longer valid")
+        return printed
+
+    def _mark_move(self, move) -> None:
+        """Highlight the move the stream announced, as a local move would be."""
+        try:
+            from .engine import Board, Square
+            from .remote.game import _MoveMarker
+
+            i1, j1 = Board.get_coords(move["from"])
+            i2, j2 = Board.get_coords(move["to"])
+            self.game.last_move = _MoveMarker(Square(i1, j1), Square(i2, j2))
+        except Exception:
+            pass  # castling has no single destination square; no highlight then
+
+    def _wait_live(self, fd):
+        """
+        Wait on stdin and the live stream together, with no timeout while connected.
+
+        An opponent's move is shown the moment it arrives; nothing is polled. While
+        the connection is down, wakes every ``refresh_seconds`` to poll instead.
+        """
+        while True:
+            live = self.events is not None
+            fds = [fd, self.events.fileno()] if live else [fd]
+            timeout = (
+                None if (live and self.connected) else (self.refresh_seconds if self.refresh_seconds > 0 else None)
+            )
+            try:
+                ready, _, _ = select.select(fds, [], [], timeout)
+            except (OSError, ValueError):
+                return self.stdin.readline()
+            if fd in ready:
+                return self.stdin.readline()
+            if live and self.events is not None and self.events.fileno() in ready:
+                printed = self.handle_events(self.events.drain())
+            else:
+                had_newer = self.newer_game is not None
+                changed = self.sync()
+                printed = changed or (self.newer_game is not None and not had_newer)
+                if changed:
+                    self.write()
+                    self.note("the opponent moved")
+                    self.show()
+                elif printed:
+                    self.write()
+                    self.note(self._rematch_notice())
+            if printed:
+                self.stdout.write("\n> ")
+                self.stdout.flush()
+
     def wait_for_line(self):
         """
-        Read one line, re-reading the server every ``refresh_seconds`` while idle.
+        Read one line, showing what happens on the server meanwhile.
 
-        This is the only place the session acts without being asked, and it is
-        deliberately narrow: it polls, it does not push. ``select`` is used rather
-        than a background thread so there is exactly one thread touching the game
-        and the output stream, and nothing to shut down on exit.
+        This is the only place the session acts without being asked. With a live
+        stream it waits on stdin and the stream together and shows an opponent's
+        move as it happens; without one it re-reads the server every
+        ``refresh_seconds``. ``select`` is used rather than a background thread
+        touching the game, so there is exactly one thread touching the game and
+        the output stream, and nothing to shut down on exit.
 
         Falls back to a plain blocking read whenever waiting is not possible — a
         local game (nothing to poll), ``--refresh 0``, a stdin with no real file
@@ -473,6 +621,14 @@ class Session:
 
         :return: the line read, or ``""`` at EOF.
         """
+        if self.events is not None and self.game.is_remote:
+            try:
+                fd = self.stdin.fileno()
+            except (AttributeError, io.UnsupportedOperation, ValueError):
+                # No fd to select on (a StringIO, or stdin on Windows): events are
+                # drained before each prompt instead, so they show on the next line.
+                return self.stdin.readline()
+            return self._wait_live(fd)
         if self.refresh_seconds <= 0 or not self.game.is_remote:
             return self.stdin.readline()
         try:
@@ -515,6 +671,13 @@ class Session:
         self.show()
         self.note("type `help` for commands")
         while True:
+            try:
+                # Anything that arrived while a command ran, or that could not
+                # wake the prompt (a stdin that cannot be selected on), shows now.
+                if self.events is not None:
+                    self.handle_events(self.events.drain())
+            except AuthError as e:
+                return self._logged_out(e)
             self.stdout.write("\n> ")
             self.stdout.flush()
             try:

@@ -25,18 +25,3 @@ contents of a version may change before it ships. Shipped versions are in
 
 - Web UI frontend (vibe coded as h*ll).
 - Depends on auth and websockets being settled, so it comes after both.
-
-## 0.13.0 - planned
-
-- WebSocket support, so a client learns of the opponent's move without polling.
-- Opt-in and disabled by default; the REST contract does not change.
-- Designed in `docs/realtime-websockets.md`.
-
-## 0.12.0 - planned
-
-- Auth rework, built on the `users` table from 0.11.0.
-- Replaces the single shared API key with real per-user identity.
-
-## 0.11.0 - planned
-
-- Database refactor: add `users` and `finished_games` tables.

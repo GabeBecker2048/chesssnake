@@ -56,6 +56,8 @@ services:
       # Every /v1 route needs a login. Make the first administrator with:
       #   docker compose -f docker/compose.postgres.yaml exec api chesssnake user create NAME --admin
       # CHESSSNAKE__API__REGISTRATION: "open"
+      # Live updates over a websocket at /v1/ws (chesssnake play, a web frontend).
+      # CHESSSNAKE__WEBSOCKET__ENABLED: "1"
     ports:
       - "8000:8000"
 

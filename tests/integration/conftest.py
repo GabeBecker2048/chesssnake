@@ -61,7 +61,10 @@ def database_url(backend):
 def settings(database_url):
     from chesssnake.config import Settings
 
-    return Settings(database={"url": database_url, "init_schema": True})
+    # Websockets on, so every REST test also runs the publish path (a route that
+    # broke while publishing would fail here, not only in test_websocket.py), and
+    # the websocket tests drive REST and sockets through one app and one broker.
+    return Settings(database={"url": database_url, "init_schema": True}, websocket={"enabled": True})
 
 
 @pytest.fixture(scope="session")
