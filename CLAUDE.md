@@ -115,6 +115,10 @@ it, publishes the package to PyPI and the container image to
   release page never exists for something that was not published.
 - The tag's date matters: GitHub derives a release's `created_at` from it and orders
   the releases page by it, which is why `release.sh` dates the tag to the commit.
+- **Breaking changes are fine before 1.0.0, and there are no database migrations**
+  (Gabe, 2026-11-03). A schema change in a pre-1.0 version drops and recreates; do
+  not plan, propose or build migration tooling for one. Gabe is currently the only
+  deployment. This changes at 1.0.0, which is the release that promises stability.
 
 ## Three-tier architecture
 
