@@ -7,6 +7,7 @@ resolve and print configuration are covered; ``api-endpoint`` is not started
 tested directly through ``_overrides``.
 """
 
+import io
 import json
 import os
 
@@ -74,13 +75,14 @@ def test_config_show_redacts_by_default(capsys, monkeypatch):
 
 
 def test_config_show_can_reveal_secrets(capsys, monkeypatch):
-    monkeypatch.setenv("CHESSSNAKE__API__API_KEY", "sup3rsecret")
+    monkeypatch.setenv("CHESSSNAKE__CLIENT__TOKEN", "sup3rsecret")
+    assert "sup3rsecret" not in show(capsys)
     assert "sup3rsecret" in show(capsys, "--show-secrets")
 
 
-def test_config_show_prints_advisories(capsys, monkeypatch):
-    monkeypatch.setenv("CHESSSNAKE__API__API_KEY", "k")
-    assert "require_auth" in show(capsys)
+def test_registration_flag(capsys):
+    out = show(capsys, "--registration", "open")
+    assert "(cli: --registration)" in out
 
 
 def test_set_flag_sets_any_key(capsys):
@@ -108,19 +110,25 @@ def test_config_flag_reads_the_named_file(capsys, tmp_path):
 
 
 def test_config_show_reports_invalid_config_and_exits_nonzero(capsys, monkeypatch):
-    monkeypatch.setenv("CHESSSNAKE__API__REQUIRE_AUTH", "1")
+    monkeypatch.setenv("CHESSSNAKE__API__REGISTRATION", "anyone")
     with pytest.raises(SystemExit) as exc:
         main(["config", "show"])
     assert exc.value.code == 1
-    assert "require_auth" in capsys.readouterr().err
+    assert "registration" in capsys.readouterr().err
 
 
 def test_api_endpoint_exits_on_invalid_config(monkeypatch):
-    """Auth misconfiguration must stop the server rather than serving unauthenticated."""
-    monkeypatch.setenv("CHESSSNAKE__API__REQUIRE_AUTH", "1")
+    """A misconfiguration stops the server rather than serving with a guessed value."""
+    monkeypatch.setenv("CHESSSNAKE__API__REGISTRATION", "anyone")
     with pytest.raises(SystemExit) as exc:
         main(["api-endpoint"])
-    assert config.env_name("api", "api_key") in str(exc.value)
+    assert "registration" in str(exc.value)
+
+
+def test_the_retired_auth_flags_are_gone():
+    for flag in ("--api-key", "--require-auth"):
+        with pytest.raises(SystemExit):
+            main(["api-endpoint", flag, "x"])
 
 
 def test_config_init_writes_to_cwd(capsys, isolated_env):
@@ -190,68 +198,159 @@ def database(isolated_env):
     return url
 
 
-def user_cmd(capsys, database, *args):
+def user_cmd(capsys, database, *args, password=None, monkeypatch=None):
+    capsys.readouterr()  # drop anything printed before, e.g. by the database fixture
+    if password is not None:
+        monkeypatch.setattr("sys.stdin", io.StringIO(password + "\n"))
+        args = (*args, "--password-stdin")
     main(["user", *args, "--database-url", database])
     return json.loads(capsys.readouterr().out)
 
 
-def test_user_create_and_show(capsys, database):
+def test_user_create_and_show(capsys, database, monkeypatch):
     capsys.readouterr()
-    alice = user_cmd(capsys, database, "create", "Alice", "--admin")
-    assert alice["role"] == "admin" and isinstance(alice["id"], int)
-    bob = user_cmd(capsys, database, "create", "bob")
-    assert bob["role"] == "user" and bob["id"] > alice["id"]
+    alice = user_cmd(capsys, database, "create", "Alice", "--admin", password="alice-password", monkeypatch=monkeypatch)
+    assert alice["role"] == "admin" and alice["has_password"] is True and isinstance(alice["id"], int)
+    bot = user_cmd(capsys, database, "create", "bot", "--no-password")
+    assert bot["role"] == "user" and bot["has_password"] is False and bot["id"] > alice["id"]
     assert user_cmd(capsys, database, "show", "alice") == alice
-    assert user_cmd(capsys, database, "show", str(bob["id"]))["username"] == "bob"
+    assert user_cmd(capsys, database, "show", str(bot["id"]))["username"] == "bot"
 
 
-def test_user_set_role_rename_and_link(capsys, database):
+def test_user_create_without_a_terminal_needs_stdin_or_no_password(database, monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    with pytest.raises(SystemExit, match="--password-stdin"):
+        main(["user", "create", "carol", "--database-url", database])
+
+
+def test_user_set_role_rename_link_and_disable(capsys, database, monkeypatch):
     capsys.readouterr()
-    user_cmd(capsys, database, "create", "carol")
+    user_cmd(capsys, database, "create", "boss", "--admin", "--no-password")
+    user_cmd(capsys, database, "create", "carol", "--no-password")
     assert user_cmd(capsys, database, "set-role", "carol", "admin")["role"] == "admin"
     assert user_cmd(capsys, database, "rename", "carol", "Caroline")["username"] == "Caroline"
     linked = user_cmd(capsys, database, "link", "caroline", "discord", "123456789012345678")
     assert linked["identities"] == [{"provider": "discord", "external_id": "123456789012345678"}]
+    assert user_cmd(capsys, database, "disable", "caroline")["disabled_at"] is not None
+    assert user_cmd(capsys, database, "enable", "caroline")["disabled_at"] is None
+    updated = user_cmd(capsys, database, "set-password", "caroline", password="a-new-password", monkeypatch=monkeypatch)
+    assert updated["has_password"] is True
 
 
-def test_user_errors_exit_with_the_message(capsys, database):
-    main(["user", "create", "dave", "--database-url", database])
+def test_user_token_prints_the_secret_alone(capsys, database):
+    pytest.importorskip("argon2")
+    user_cmd(capsys, database, "create", "bot", "--admin", "--no-password")
+    main(["user", "token", "bot", "--name", "discord-bot", "--database-url", database])
+    out, err = capsys.readouterr()
+    assert out.strip().startswith("css_") and len(out.strip().splitlines()) == 1
+    assert "discord-bot" in err and "not shown again" in err
+
+
+def test_user_errors_exit_with_the_message(capsys, database, monkeypatch):
+    user_cmd(capsys, database, "create", "dave", "--no-password")
     with pytest.raises(SystemExit, match="already taken"):
-        main(["user", "create", "DAVE", "--database-url", database])
+        main(["user", "create", "DAVE", "--no-password", "--database-url", database])
     with pytest.raises(SystemExit, match="No user"):
         main(["user", "show", "nobody", "--database-url", database])
     with pytest.raises(SystemExit, match="not only digits"):
-        main(["user", "create", "1234", "--database-url", database])
+        main(["user", "create", "1234", "--no-password", "--database-url", database])
+    monkeypatch.setattr("sys.stdin", io.StringIO("short\n"))
+    with pytest.raises(SystemExit, match="8 to 256"):
+        main(["user", "create", "erin", "--password-stdin", "--database-url", database])
 
 
 def test_init_db_drop_starts_over(capsys, database):
-    main(["user", "create", "erin", "--database-url", database])
+    user_cmd(capsys, database, "create", "erin", "--no-password")
     main(["init-db", "--drop", "--database-url", database])
     assert "Dropped" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="No user"):
         main(["user", "show", "erin", "--database-url", database])
 
 
-# --- play flags --------------------------------------------------------------
+def test_init_db_refuses_a_database_from_an_older_chesssnake(capsys, isolated_env):
+    """create_all never alters a table, so an old-shaped one must be called out, not half-used."""
+    pytest.importorskip("sqlalchemy")
+    import sqlite3
+
+    path = isolated_env / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE challenges (group_id BIGINT, challenger BIGINT, challenged BIGINT)")
+    with pytest.raises(SystemExit, match="init-db --drop"):
+        main(["init-db", "--database-url", f"sqlite:///{path}"])
+    main(["init-db", "--drop", "--database-url", f"sqlite:///{path}"])
+    assert "initialized" in capsys.readouterr().out
 
 
-def test_remote_play_needs_both_players(monkeypatch):
+# --- client commands -----------------------------------------------------------
+
+
+def test_play_needs_a_game_or_an_opponent(monkeypatch):
     pytest.importorskip("requests")
-    with pytest.raises(SystemExit, match="--white and --black"):
-        main(["play", "--api-url", "http://localhost:1", "--white", "alice"])
+    with pytest.raises(SystemExit, match="--game ID, or --vs USER"):
+        main(["play", "--api-url", "http://localhost:1"])
 
 
-def test_names_are_for_local_games_only():
-    with pytest.raises(SystemExit, match="only for --local"):
-        main(["play", "--api-url", "http://localhost:1", "--white", "a1", "--black", "b1", "--white-name", "Al"])
+def test_names_and_me_are_for_local_games_only():
+    for extra in (["--white-name", "Al"], ["--me", "0"]):
+        with pytest.raises(SystemExit, match="only for --local"):
+            main(["play", "--api-url", "http://localhost:1", "--game", "1", *extra])
 
 
-def test_local_me_is_a_side_not_a_username():
+def test_local_me_is_a_side():
     with pytest.raises(SystemExit, match="--me is 0"):
-        main(["play", "--local", "--me", "alice"])
+        main(["play", "--local", "--me", "7"])
 
 
 def test_a_player_is_an_id_or_a_valid_username(capsys):
     with pytest.raises(SystemExit):
-        main(["play", "--local", "--white", "not valid"])
+        main(["challenge", "not valid", "--api-url", "http://localhost:1"])
     assert "neither a user id nor a username" in capsys.readouterr().err
+
+
+def test_client_commands_without_a_login_say_how(monkeypatch, isolated_env):
+    pytest.importorskip("requests")
+    monkeypatch.setenv("CHESSSNAKE_HOME", str(isolated_env))
+    for command in (["whoami"], ["games"], ["challenges"], ["challenge", "bob"], ["accept", "1"]):
+        with pytest.raises(SystemExit, match="chesssnake login"):
+            main([*command, "--api-url", "http://localhost:1"])
+
+
+def test_logout_without_a_login(capsys, monkeypatch, isolated_env):
+    monkeypatch.setenv("CHESSSNAKE_HOME", str(isolated_env))
+    main(["logout", "--api-url", "http://localhost:1"])
+    assert "Not logged in" in capsys.readouterr().out
+
+
+# --- the credentials file --------------------------------------------------------
+
+
+def test_credentials_never_land_in_the_working_directory(isolated_env, monkeypatch, tmp_path):
+    from chesssnake.remote import credentials
+
+    monkeypatch.delenv("CHESSSNAKE_HOME", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    path = credentials.save("https://chess.example/", "css_secret", "alice")
+    assert path == tmp_path / "xdg" / "chesssnake" / "credentials.json"
+    assert not (isolated_env / "credentials.json").exists()
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+    assert credentials.credentials_path().parent.name == "chesssnake"
+    assert credentials.credentials_path().parent.parent.name == ".config"
+
+
+def test_credentials_are_private_and_keyed_by_endpoint(monkeypatch, tmp_path):
+    import os
+    import stat
+
+    from chesssnake.remote import credentials
+
+    monkeypatch.setenv("CHESSSNAKE_HOME", str(tmp_path / "home"))
+    path = credentials.save("HTTPS://Chess.Example/", "css_one", "alice")
+    credentials.save("http://other.example", "css_two", "bob")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(path.parent).st_mode) == 0o700
+    assert credentials.load("https://chess.example") == {"token": "css_one", "username": "alice"}
+    assert credentials.load("http://other.example/")["token"] == "css_two"
+    assert credentials.forget("https://chess.example") is True
+    assert credentials.load("https://chess.example") is None
+    assert credentials.load("http://other.example")["token"] == "css_two"
+    assert not list(path.parent.glob(".credentials-*")), "no temporary files left behind"

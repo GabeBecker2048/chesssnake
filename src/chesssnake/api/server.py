@@ -12,14 +12,12 @@ come from :mod:`chesssnake.config` — the config file, ``CHESSSNAKE__*``
 environment variables, and command-line flags, in that order of precedence. Run
 ``chesssnake config show`` to see the effective values and where each came from.
 
-User, game and challenge routes are versioned under ``/v1``. Set
-``api.require_auth`` to require an ``X-API-Key`` header on those routes
-(``/health`` stays open). Players are users: create them with ``POST /v1/users``
-(or get-or-create one by an external id with ``POST /v1/users/{provider}/{id}``)
-before starting a game between them. Mutating game routes accept an optional
-``player_id`` (validated → 403), ``expected_version`` (optimistic concurrency →
-409) and ``generation`` (the game the client thinks it is in → 409 when that game
-is over).
+Everything under ``/v1`` needs ``Authorization: Bearer <token>`` except
+``/v1/auth/login`` and ``/v1/auth/register`` (see :mod:`chesssnake.api.auth`);
+``/health`` is unversioned and open. Players are users; games are normally created
+by one user challenging another and the challenge being accepted, and every game
+is addressed by its id. An administrator can create games directly, manage
+accounts, and act for any player by passing ``player_id``.
 """
 
 import io
@@ -27,7 +25,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, FastAPI, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, model_validator
 
@@ -35,41 +33,70 @@ from ..config import Settings, resolve
 from ..db import engine as db_engine
 from ..db import errors, schema
 from ..db import operations as ops
-from ..dto import GameState, MoveResult, User
+from ..dto import COLORS, ROLES, Challenge, GameState, LoginResult, MoveResult, TokenInfo, User
 from ..engine import INITIAL_FEN, from_fen, position_key
 from ..engine import errors as chess_errors
 from ..serialize import game_from_state, state_from_game
-
-API_KEY_HEADER = "X-API-Key"
+from .auth import (
+    Principal,
+    acting_as,
+    check_current_password,
+    current_principal,
+    hash_password,
+    login,
+    require_admin,
+    validate_password,
+)
 
 logger = logging.getLogger(__name__)
 
 # Precompute the starting position's repetition key (engine-derived) for new games.
 _INITIAL_KEY = position_key(*from_fen(INITIAL_FEN))
 
-
-# --- Auth ------------------------------------------------------------------
-
-
-def _api_key_dependency(settings: Settings):
-    """
-    Build the ``/v1`` auth dependency for one app's settings.
-
-    Whether a key is required is now an explicit setting rather than an inference
-    from "is a key configured", so a deployment that meant to enable auth but
-    failed to inject the secret is rejected at startup by
-    :class:`~chesssnake.config.Settings` validation instead of quietly serving
-    unauthenticated traffic.
-    """
-
-    async def require_api_key(x_api_key: str | None = Header(default=None, alias=API_KEY_HEADER)):
-        if settings.api.require_auth and x_api_key != settings.api.api_key:
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
-
-    return require_api_key
+#: Longest name an api token may be given.
+TOKEN_NAME_MAX = 64
+#: Longest lifetime an api token may be given, in days (about ten years).
+TOKEN_LIFETIME_MAX_DAYS = 3650
 
 
-# --- Request bodies (game state lives in chesssnake.dto) -------------------
+# --- Request bodies (responses live in chesssnake.dto) ---------------------
+#
+# Usernames, passwords and other free-text fields are validated by the database
+# and auth layers rather than by pydantic, so a bad value is reported in the
+# usual {error_type, detail} envelope instead of pydantic's list-shaped 422.
+
+
+class Credentials(BaseModel):
+    username: str
+    password: str
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class TokenCreate(BaseModel):
+    name: str
+    current_password: str
+    expires_in_days: int | None = None
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str | None = None
+    role: Literal["user", "admin"] = "user"
+
+
+class UserPatch(BaseModel):
+    username: str | None = None
+    role: Literal["user", "admin"] | None = None
+    disabled: bool | None = None
+    password: str | None = None
+
+
+class UsernameBody(BaseModel):
+    username: str
 
 
 class GameCreate(BaseModel):
@@ -88,54 +115,51 @@ class MoveBody(BaseModel):
     move: str
     player_id: int | None = None
     expected_version: int | None = None
-    generation: int | None = None
 
 
-class DrawBody(BaseModel):
-    player_id: int
+class ActionBody(BaseModel):
+    player_id: int | None = None
     expected_version: int | None = None
-    generation: int | None = None
 
 
-class ResignBody(BaseModel):
-    player_id: int
-    expected_version: int | None = None
-    generation: int | None = None
-
-
-class ChallengeBody(BaseModel):
+class ChallengeCreate(BaseModel):
+    opponent_id: int
     group_id: int = 0
-    challenger: int
-    challenged: int
+    color: Literal["white", "black", "random"] = "random"
+    player_id: int | None = None
 
 
-class UsernameBody(BaseModel):
-    # Validated by the database layer against USERNAME_RE, so a bad name is a
-    # UserValidationError in the usual {error_type, detail} envelope rather
-    # than pydantic's list-shaped 422.
-    username: str
+class ChallengeAccept(BaseModel):
+    player_id: int | None = None
 
 
 # --- Exception handlers ----------------------------------------------------
 
 
-def _error(status_code, exc):
-    return JSONResponse(status_code=status_code, content={"error_type": type(exc).__name__, "detail": str(exc)})
+def _error(status_code, exc, headers=None):
+    return JSONResponse(
+        status_code=status_code,
+        content={"error_type": type(exc).__name__, "detail": str(exc)},
+        headers=headers,
+    )
 
 
 # Exception class -> HTTP status. Starlette resolves a raised exception by walking
 # its MRO and taking the first registered class, so subclasses must be listed
 # before the bases they refine (SQLIdError before SQLError before GameError).
 _ERROR_STATUS = (
+    (errors.AuthError, 401),
+    (errors.ForbiddenError, 403),
     (errors.SQLIdError, 422),
     (errors.UserValidationError, 422),
     (errors.ChallengeError, 409),
-    (errors.GenerationConflictError, 409),
     (errors.VersionConflictError, 409),
     (errors.UserExistsError, 409),
     (errors.NotYourTurnError, 403),
     (errors.GameNotFoundError, 404),
     (errors.UserNotFoundError, 404),
+    (errors.ChallengeNotFoundError, 404),
+    (errors.TokenNotFoundError, 404),
     (errors.SQLBusyError, 503),
     (errors.SQLError, 500),
     (errors.GameError, 400),
@@ -145,21 +169,13 @@ _ERROR_STATUS = (
 
 def _register_error_handlers(app: FastAPI) -> None:
     for exc_type, status_code in _ERROR_STATUS:
+        # RFC 9110: a 401 says how to authenticate.
+        headers = {"WWW-Authenticate": "Bearer"} if status_code == 401 else None
 
-        async def handler(_request, exc, _status=status_code):
-            return _error(_status, exc)
+        async def handler(_request, exc, _status=status_code, _headers=headers):
+            return _error(_status, exc, _headers)
 
         app.add_exception_handler(exc_type, handler)
-
-    async def unauthorized(_request, exc):
-        # Match the {error_type, detail} envelope every other error uses, so the
-        # client's error mapping (remote/client.py:_raise) sees a real type
-        # instead of falling back to a bare GameError.
-        if exc.status_code == 401:
-            return JSONResponse(status_code=401, content={"error_type": "AuthError", "detail": str(exc.detail)})
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-
-    app.add_exception_handler(HTTPException, unauthorized)
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -182,14 +198,10 @@ def _load_game(row, history=None):
     )
 
 
-def _require_game(group_id, white_id, black_id, generation=None):
-    """Fetch a game dict (current, or a specific ``generation``) or raise 404."""
-    row = ops.game_get(group_id, white_id, black_id, generation)
+def _require_game(game_id: int):
+    row = ops.game_get_by_id(game_id)
     if row is None:
-        detail = f"No game for group {group_id} between {white_id} and {black_id}"
-        if generation is not None:
-            detail += f" (generation {generation})"
-        raise errors.GameNotFoundError(detail)
+        raise errors.GameNotFoundError(f"No game with id {game_id}")
     return row
 
 
@@ -223,10 +235,47 @@ def _change(game, row, now, new_moves=(), result=None):
     )
 
 
-def _user(row, detail):
+def _user_out(row, me: Principal) -> dict:
+    """A user for the wire. Linked external ids are shown only to that user and admins."""
+    return User.from_row(row, show_identities=me.is_admin or int(row["id"]) == me.user_id).to_dict()
+
+
+def _require_user(row, detail):
     if row is None:
         raise errors.UserNotFoundError(detail)
-    return User.from_row(row).to_dict()
+    return row
+
+
+def _game_actor(me: Principal, player_id, row, *, require_actor):
+    """
+    The player an action in this game is performed as (see :func:`acting_as`).
+
+    ``None`` only for an administrator who is not playing and named nobody: the
+    move is then made for the side to move.
+
+    :raises errors.NotYourTurnError: If the actor is not one of the players.
+    """
+    players = (int(row["white_id"]), int(row["black_id"]))
+    actor = acting_as(me, player_id, participants=players, require_actor=require_actor)
+    if actor is not None and actor not in players:
+        raise errors.NotYourTurnError(f"Player {actor} is not in this game")
+    return actor
+
+
+def _require_challenge(challenge_id: int, me: Principal):
+    """The challenge, if it exists and the caller is in it (or an admin); else 404."""
+    challenge = ops.challenge_get(challenge_id)
+    if challenge is None or not (me.is_admin or me.user_id in (challenge["challenger_id"], challenge["challenged_id"])):
+        raise errors.ChallengeNotFoundError(f"No pending challenge {challenge_id}")
+    return challenge
+
+
+def _login_result(raw, token, user=None):
+    return LoginResult(
+        token=raw,
+        token_info=TokenInfo.from_row(token),
+        user=User.from_row(user) if user is not None else None,
+    ).to_dict()
 
 
 # --- Routes ----------------------------------------------------------------
@@ -246,94 +295,286 @@ async def health():
     return {"status": "ok"}
 
 
-# Unversioned/open; the api-key dependency is attached per-app in create_app so
-# the router itself stays reusable across apps with different settings.
-v1 = APIRouter(prefix="/v1")
+def _public_router(settings: Settings) -> APIRouter:
+    """
+    The only /v1 routes reachable without a token.
+
+    Built per app because they read that app's settings, and included on the app
+    directly, NOT into `v1`: a router included into `v1` inherits its auth
+    dependency.
+    """
+    public = APIRouter(prefix="/v1/auth")
+
+    @public.post("/register", status_code=201)
+    def register(body: Credentials):
+        if settings.api.registration != "open":
+            raise errors.ForbiddenError("Registration is closed; ask an administrator for an account")
+        ops.validate_username(body.username)
+        password_hash = hash_password(body.password)  # validates; outside any transaction
+        user = ops.user_create(body.username, ops.ROLE_USER, password_hash)
+        raw, token = ops.token_create(
+            user["id"], ops.TOKEN_SESSION, name="login", lifetime_days=settings.api.session_lifetime_days
+        )
+        return _login_result(raw, token, user)
+
+    @public.post("/login")
+    def log_in(body: Credentials):
+        raw, token, user = login(body.username, body.password, settings.api.session_lifetime_days)
+        return _login_result(raw, token, user)
+
+    return public
+
+
+# Everything here needs a token. The router-level dependency is the guarantee that
+# no route can forget it; routes that need to know *who* also declare `me`, and
+# FastAPI resolves the dependency once per request either way.
+v1 = APIRouter(prefix="/v1", dependencies=[Depends(current_principal)])
+
+
+# --- Account ---
+
+
+@v1.post("/auth/logout", status_code=204)
+def log_out(me: Principal = Depends(current_principal)):
+    ops.token_delete(me.token_id)
+    return Response(status_code=204)
+
+
+@v1.get("/auth/me")
+def whoami(me: Principal = Depends(current_principal)):
+    return _user_out(_require_user(ops.user_get(me.user_id), "Your account no longer exists"), me)
+
+
+@v1.post("/auth/password", status_code=204)
+def change_password(body: PasswordChange, me: Principal = Depends(current_principal)):
+    validate_password(body.new_password)
+    stored = check_current_password(me, body.current_password)
+    new_hash = hash_password(body.new_password)
+    # Ends the user's other login sessions but keeps this one and their api
+    # tokens: those are separate credentials, and a bot should not die because
+    # its owner changed a password.
+    ops.user_set_password(me.user_id, new_hash, revoke="sessions", keep_token_id=me.token_id, expected_hash=stored)
+    return Response(status_code=204)
+
+
+@v1.post("/auth/tokens", status_code=201)
+def create_token(body: TokenCreate, me: Principal = Depends(current_principal)):
+    name = body.name.strip()
+    if not (1 <= len(name) <= TOKEN_NAME_MAX):
+        raise errors.UserValidationError(f"A token name must be 1 to {TOKEN_NAME_MAX} characters")
+    days = body.expires_in_days
+    if days is not None and not (1 <= days <= TOKEN_LIFETIME_MAX_DAYS):
+        raise errors.UserValidationError(f"expires_in_days must be 1 to {TOKEN_LIFETIME_MAX_DAYS}")
+    # Re-asking for the password means a stolen session cannot mint itself a
+    # credential that outlives the session.
+    stored = check_current_password(me, body.current_password)
+    raw, token = ops.token_create(me.user_id, ops.TOKEN_API, name=name, lifetime_days=days, expected_hash=stored)
+    return _login_result(raw, token)
+
+
+@v1.get("/auth/tokens")
+def list_tokens(user_id: int | None = None, me: Principal = Depends(current_principal)):
+    target = me.user_id if user_id is None else user_id
+    if target != me.user_id:
+        require_admin(me)
+    return {"tokens": [TokenInfo.from_row(token).to_dict() for token in ops.tokens_list(target)]}
+
+
+@v1.delete("/auth/tokens/{token_id}", status_code=204)
+def revoke_token(token_id: int, me: Principal = Depends(current_principal)):
+    # Someone else's token is "not found" rather than "forbidden": a user should
+    # not learn which token ids exist.
+    if not ops.token_delete(token_id, None if me.is_admin else me.user_id):
+        raise errors.TokenNotFoundError(f"No token {token_id}")
+    return Response(status_code=204)
 
 
 # --- Users ---
 
 
 @v1.post("/users", status_code=201)
-def create_user(body: UsernameBody):
-    return User.from_row(ops.user_create(body.username)).to_dict()
+def create_user(body: UserCreate, me: Principal = Depends(current_principal)):
+    require_admin(me)
+    ops.validate_username(body.username)
+    password_hash = hash_password(body.password) if body.password is not None else None
+    return _user_out(ops.user_create(body.username, ROLES[body.role], password_hash), me)
 
 
 @v1.get("/users")
-def find_user(username: str):
-    return _user(ops.user_get_by_name(username), f"No user named {username!r}")
+def find_user(username: str, me: Principal = Depends(current_principal)):
+    return _user_out(_require_user(ops.user_get_by_name(username), f"No user named {username!r}"), me)
 
 
 @v1.get("/users/{user_id}")
-def get_user(user_id: int):
-    return _user(ops.user_get(user_id), f"No user with id {user_id}")
+def get_user(user_id: int, me: Principal = Depends(current_principal)):
+    return _user_out(_require_user(ops.user_get(user_id), f"No user with id {user_id}"), me)
 
 
 @v1.patch("/users/{user_id}")
-def rename_user(user_id: int, body: UsernameBody):
-    return User.from_row(ops.user_rename(user_id, body.username)).to_dict()
+def update_user(user_id: int, body: UserPatch, me: Principal = Depends(current_principal)):
+    """A user may rename themselves; everything else, and other accounts, is admin-only."""
+    if not me.is_admin:
+        if user_id != me.user_id:
+            raise errors.ForbiddenError("You can only change your own account")
+        if body.role is not None or body.disabled is not None or body.password is not None:
+            raise errors.ForbiddenError(
+                "Only an administrator can change roles, disable accounts or reset passwords; "
+                "change your own password with POST /v1/auth/password"
+            )
+    _require_user(ops.user_get(user_id), f"No user with id {user_id}")
+    new_hash = hash_password(body.password) if body.password is not None else None  # before any transaction
+    if body.username is not None:
+        ops.user_rename(user_id, body.username)
+    if body.role is not None:
+        ops.user_set_role(user_id, ROLES[body.role])
+    if body.disabled is not None:
+        ops.user_set_disabled(user_id, body.disabled)
+    if new_hash is not None:
+        # An admin reset: assume the old password leaked, so every token goes.
+        ops.user_set_password(user_id, new_hash, revoke="all")
+    return _user_out(ops.user_get(user_id), me)
 
 
 @v1.get("/users/{provider}/{external_id}")
-def get_user_by_identity(provider: str, external_id: str):
-    return _user(ops.identity_get(provider, external_id), f"No user is linked to {provider} id {external_id!r}")
+def get_user_by_identity(provider: str, external_id: str, me: Principal = Depends(current_principal)):
+    require_admin(me)
+    row = ops.identity_get(provider, external_id)
+    return _user_out(_require_user(row, f"No user is linked to {provider} id {external_id!r}"), me)
 
 
 # 200, not 201, like POST /v1/games: this is get-or-create, and most calls get.
 @v1.post("/users/{provider}/{external_id}")
-def get_or_create_user_by_identity(provider: str, external_id: str, body: UsernameBody):
-    return User.from_row(ops.user_get_or_create_by_identity(provider, external_id, body.username)).to_dict()
+def get_or_create_user_by_identity(
+    provider: str, external_id: str, body: UsernameBody, me: Principal = Depends(current_principal)
+):
+    require_admin(me)
+    return _user_out(ops.user_get_or_create_by_identity(provider, external_id, body.username), me)
 
 
 @v1.put("/users/{user_id}/identities/{provider}/{external_id}")
-def link_identity(user_id: int, provider: str, external_id: str):
-    return User.from_row(ops.identity_link(user_id, provider, external_id)).to_dict()
+def link_identity(user_id: int, provider: str, external_id: str, me: Principal = Depends(current_principal)):
+    require_admin(me)
+    return _user_out(ops.identity_link(user_id, provider, external_id), me)
+
+
+@v1.delete("/users/{user_id}/identities/{provider}/{external_id}")
+def unlink_identity(user_id: int, provider: str, external_id: str, me: Principal = Depends(current_principal)):
+    require_admin(me)
+    return _user_out(ops.identity_unlink(user_id, provider, external_id), me)
+
+
+# --- Challenges ---
+
+
+@v1.post("/challenges", status_code=201)
+def create_challenge(body: ChallengeCreate, me: Principal = Depends(current_principal)):
+    challenger = acting_as(me, body.player_id)
+    challenge = ops.challenge_create(challenger, body.opponent_id, body.group_id, COLORS[body.color])
+    return Challenge.from_row(challenge).to_dict()
+
+
+@v1.get("/challenges")
+def list_challenges(
+    direction: Literal["incoming", "outgoing", "all"] = "all",
+    user_id: int | None = None,
+    me: Principal = Depends(current_principal),
+):
+    target = me.user_id if user_id is None else user_id
+    if target != me.user_id:
+        require_admin(me)
+    return {"challenges": [Challenge.from_row(c).to_dict() for c in ops.challenges_for(target, direction)]}
+
+
+@v1.get("/challenges/{challenge_id}")
+def get_challenge(challenge_id: int, me: Principal = Depends(current_principal)):
+    return Challenge.from_row(_require_challenge(challenge_id, me)).to_dict()
+
+
+@v1.post("/challenges/{challenge_id}/accept", status_code=201)
+def accept_challenge(
+    challenge_id: int, body: ChallengeAccept | None = None, me: Principal = Depends(current_principal)
+):
+    challenge = _require_challenge(challenge_id, me)
+    player_id = body.player_id if body is not None else None
+    if player_id is None and me.is_admin and me.user_id not in (challenge["challenger_id"], challenge["challenged_id"]):
+        # Only the challenged player can accept, so that is who an admin acts as.
+        player_id = challenge["challenged_id"]
+    actor = acting_as(me, player_id)
+    return GameState.from_row(ops.challenge_accept(challenge_id, INITIAL_FEN, accepted_by=actor)).to_dict()
+
+
+@v1.delete("/challenges/{challenge_id}", status_code=204)
+def delete_challenge(challenge_id: int, me: Principal = Depends(current_principal)):
+    """Decline (as the challenged player) or withdraw (as the challenger)."""
+    _require_challenge(challenge_id, me)
+    if not ops.challenge_delete(challenge_id):
+        raise errors.ChallengeNotFoundError(f"No pending challenge {challenge_id}")
+    return Response(status_code=204)
 
 
 # --- Games ---
 
 
 @v1.post("/games")
-def create_game(body: GameCreate):
+def create_game(body: GameCreate, me: Principal = Depends(current_principal)):
+    """Admin-only: start (or fetch) a game directly, without a challenge."""
+    require_admin(me)
     row = ops.game_get_or_create(body.group_id, body.white_id, body.black_id, INITIAL_FEN)
     return GameState.from_row(row).to_dict()
 
 
 @v1.get("/games")
-def list_current_games(player_id: int, group_id: int | None = None):
-    return {"games": [GameState.from_row(row).to_dict() for row in ops.current_games(player_id, group_id)]}
+def list_current_games(
+    player_id: int | None = None, group_id: int | None = None, me: Principal = Depends(current_principal)
+):
+    games = ops.current_games(me.user_id if player_id is None else player_id, group_id)
+    return {"games": [GameState.from_row(row).to_dict() for row in games]}
 
 
-# One segment, so it cannot be confused with the three-segment triple routes or
-# the two-segment /games/{group_id}/exists and /record.
+# The literal routes are registered before /games/{game_id}, whose int parameter
+# would otherwise be tried against "between" and "record" first.
+@v1.get("/games/between")
+def games_between(
+    player1: int,
+    player2: int,
+    group_id: int = 0,
+    status: Literal["active", "finished", "all"] = "all",
+):
+    rows = ops.games_between(player1, player2, group_id, status)
+    return {"games": [GameState.from_row(row).to_dict() for row in rows]}
+
+
+@v1.get("/games/record")
+def game_record(player1: int, player2: int, group_id: int = 0):
+    return ops.game_record(player1, player2, group_id)
+
+
 @v1.get("/games/{game_id}")
-def get_game_by_id(game_id: int):
-    row = ops.game_get_by_id(game_id)
-    if row is None:
+def get_game(game_id: int):
+    return GameState.from_row(_require_game(game_id)).to_dict()
+
+
+@v1.delete("/games/{game_id}", status_code=204)
+def delete_game(game_id: int, me: Principal = Depends(current_principal)):
+    require_admin(me)
+    if not ops.game_delete(game_id):
         raise errors.GameNotFoundError(f"No game with id {game_id}")
-    return GameState.from_row(row).to_dict()
+    return Response(status_code=204)
 
 
-@v1.get("/games/{group_id}/{white_id}/{black_id}")
-def get_game(group_id: int, white_id: int, black_id: int, generation: int | None = None):
-    return GameState.from_row(_require_game(group_id, white_id, black_id, generation)).to_dict()
+@v1.post("/games/{game_id}/moves")
+def play_move(game_id: int, body: MoveBody, me: Principal = Depends(current_principal)):
+    actor = _game_actor(me, body.player_id, _require_game(game_id), require_actor=False)
 
-
-@v1.get("/games/{group_id}/{white_id}/{black_id}/archive")
-def game_archive(group_id: int, white_id: int, black_id: int):
-    return {"games": [GameState.from_row(row).to_dict() for row in ops.game_archive(group_id, white_id, black_id)]}
-
-
-@v1.post("/games/{group_id}/{white_id}/{black_id}/moves")
-def play_move(group_id: int, white_id: int, black_id: int, body: MoveBody):
     def mutate(row, history, now):
         game = _load_game(row, history)
-        if body.player_id is not None and not game.is_players_turn(body.player_id):
-            raise errors.NotYourTurnError(f"It is not player {body.player_id}'s turn to move")
+        # A finished game is "over" before it is anyone's turn: let the engine
+        # refuse with GameOverError rather than blaming the turn order.
+        if actor is not None and not game.is_over and not game.is_players_turn(actor):
+            raise errors.NotYourTurnError(f"It is not player {actor}'s turn to move")
         m = game.move(body.move)  # runs the engine; raises ChessError on illegal input
         san = game.move_history[-1]
-        ply = history["max_ply"] + 1
-        state, change = _change(game, row, now, new_moves=[(ply, san, game.position_history[-1])])
+        state, change = _change(game, row, now, new_moves=[(history["max_ply"] + 1, san, game.position_history[-1])])
         change.result = MoveResult(
             state=state,
             from_square=m.prev.c_notation,
@@ -346,110 +587,68 @@ def play_move(group_id: int, white_id: int, black_id: int, body: MoveBody):
         )
         return change
 
-    return ops.apply_game_change(group_id, white_id, black_id, mutate, body.expected_version, body.generation).to_dict()
+    return ops.apply_game_change(game_id, mutate, body.expected_version).to_dict()
 
 
-def _draw_or_resign(group_id, white_id, black_id, body, method):
+def _draw_or_resign(game_id, body, me, method):
+    actor = _game_actor(me, body.player_id, _require_game(game_id), require_actor=True)
+
     def mutate(row, history, now):
         game = _load_game(row, history)
-        if body.player_id not in (white_id, black_id):
-            raise errors.NotYourTurnError(f"Player {body.player_id} is not in this game")
-        getattr(game, method)(body.player_id)  # draw_offer / draw_accept / draw_decline / resign
+        getattr(game, method)(actor)  # draw_offer / draw_accept / draw_decline / resign
         return _change(game, row, now)[1]
 
-    return ops.apply_game_change(group_id, white_id, black_id, mutate, body.expected_version, body.generation).to_dict()
+    return ops.apply_game_change(game_id, mutate, body.expected_version).to_dict()
 
 
-@v1.post("/games/{group_id}/{white_id}/{black_id}/resign")
-def resign(group_id: int, white_id: int, black_id: int, body: ResignBody):
-    return _draw_or_resign(group_id, white_id, black_id, body, "resign")
+@v1.post("/games/{game_id}/resign")
+def resign(game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
+    return _draw_or_resign(game_id, body or ActionBody(), me, "resign")
 
 
-@v1.post("/games/{group_id}/{white_id}/{black_id}/draw/offer")
-def draw_offer(group_id: int, white_id: int, black_id: int, body: DrawBody):
-    return _draw_or_resign(group_id, white_id, black_id, body, "draw_offer")
+@v1.post("/games/{game_id}/draw/offer")
+def draw_offer(game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
+    return _draw_or_resign(game_id, body or ActionBody(), me, "draw_offer")
 
 
-@v1.post("/games/{group_id}/{white_id}/{black_id}/draw/accept")
-def draw_accept(group_id: int, white_id: int, black_id: int, body: DrawBody):
-    return _draw_or_resign(group_id, white_id, black_id, body, "draw_accept")
+@v1.post("/games/{game_id}/draw/accept")
+def draw_accept(game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
+    return _draw_or_resign(game_id, body or ActionBody(), me, "draw_accept")
 
 
-@v1.post("/games/{group_id}/{white_id}/{black_id}/draw/decline")
-def draw_decline(group_id: int, white_id: int, black_id: int, body: DrawBody):
-    return _draw_or_resign(group_id, white_id, black_id, body, "draw_decline")
+@v1.post("/games/{game_id}/draw/decline")
+def draw_decline(game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
+    return _draw_or_resign(game_id, body or ActionBody(), me, "draw_decline")
 
 
-@v1.get("/games/{group_id}/{white_id}/{black_id}/legal-moves")
-def legal_moves(group_id: int, white_id: int, black_id: int, generation: int | None = None):
-    row = _require_game(group_id, white_id, black_id, generation)
-    return {"moves": _load_game(row).legal_moves()}
+@v1.get("/games/{game_id}/legal-moves")
+def legal_moves(game_id: int):
+    return {"moves": _load_game(_require_game(game_id)).legal_moves()}
 
 
-@v1.get("/games/{group_id}/{white_id}/{black_id}/history")
-def history(group_id: int, white_id: int, black_id: int, generation: int | None = None):
-    row = _require_game(group_id, white_id, black_id, generation)
-    return {"moves": ops.game_history(int(row["id"]))}
+@v1.get("/games/{game_id}/history")
+def history(game_id: int):
+    _require_game(game_id)
+    return {"moves": ops.game_history(game_id)}
 
 
-@v1.get("/games/{group_id}/{white_id}/{black_id}/pgn")
-def pgn(group_id: int, white_id: int, black_id: int, generation: int | None = None):
-    row = _require_game(group_id, white_id, black_id, generation)
-    game = _load_game(row)
-    game.move_history = [m["san"] for m in ops.game_history(int(row["id"]))]
+@v1.get("/games/{game_id}/pgn")
+def pgn(game_id: int):
+    game = _load_game(_require_game(game_id))
+    game.move_history = [m["san"] for m in ops.game_history(game_id)]
     return PlainTextResponse(game.pgn())
 
 
-@v1.get("/games/{group_id}/{white_id}/{black_id}/fen")
-def fen(group_id: int, white_id: int, black_id: int, generation: int | None = None):
-    return PlainTextResponse(GameState.from_row(_require_game(group_id, white_id, black_id, generation)).fen)
+@v1.get("/games/{game_id}/fen")
+def fen(game_id: int):
+    return PlainTextResponse(_require_game(game_id)["fen"])
 
 
-@v1.get("/games/{group_id}/{white_id}/{black_id}/image")
-def game_image(
-    group_id: int,
-    white_id: int,
-    black_id: int,
-    generation: int | None = None,
-    perspective: Literal["white", "black"] | None = None,
-):
-    row = _require_game(group_id, white_id, black_id, generation)
+@v1.get("/games/{game_id}/image")
+def game_image(game_id: int, perspective: Literal["white", "black"] | None = None):
     buffer = io.BytesIO()
-    _load_game(row).render(perspective=perspective).save(buffer, format="PNG")
+    _load_game(_require_game(game_id)).render(perspective=perspective).save(buffer, format="PNG")
     return Response(content=buffer.getvalue(), media_type="image/png")
-
-
-@v1.delete("/games/{group_id}/{white_id}/{black_id}")
-def delete_game(group_id: int, white_id: int, black_id: int, generation: int | None = None):
-    ops.game_delete(group_id, white_id, black_id, generation)
-    return {"status": "ok"}
-
-
-@v1.get("/games/{group_id}/exists")
-def game_exists(group_id: int, player1: int, player2: int):
-    row = ops.game_exists(player1, player2, group_id)
-    return {"game": GameState.from_row(row).to_dict() if row is not None else None}
-
-
-@v1.get("/games/{group_id}/record")
-def game_record(group_id: int, player1: int, player2: int):
-    return ops.game_record(player1, player2, group_id)
-
-
-@v1.post("/challenges")
-def post_challenge(body: ChallengeBody):
-    return {"accepted": ops.challenge(body.challenger, body.challenged, body.group_id)}
-
-
-@v1.get("/challenges/{group_id}/exists")
-def challenge_exists(group_id: int, player1: int, player2: int):
-    return {"challenge": ops.challenge_exists(player1, player2, group_id)}
-
-
-@v1.delete("/challenges")
-def delete_challenge(body: ChallengeBody):
-    ops.challenge_delete(body.challenger, body.challenged, body.group_id)
-    return {"status": "ok"}
 
 
 # --- Application factory ---------------------------------------------------
@@ -477,12 +676,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         owns_engine = db_engine.current_engine() is None
         if owns_engine:
             # An in-memory database gets a StaticPool, which hands the SAME
-            # connection to every caller without serializing it. That was
-            # survivable while every request ran on the event loop; now that the
-            # routes run in a threadpool, two requests would issue BEGIN on one
-            # connection and sqlite3 raises "cannot start a transaction within a
-            # transaction". It is not worth supporting either way: an in-memory
-            # database loses every game when the process restarts.
+            # connection to every caller without serializing it. Two requests
+            # would issue BEGIN on one connection, and the database is lost when
+            # the process exits anyway, so it is refused outright.
             if db_engine.is_memory_url(db_engine.parse_url(settings.database.url)):
                 raise errors.SQLError(
                     "An in-memory SQLite database cannot be served: it is discarded when the "
@@ -498,6 +694,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 pool_max_size=settings.database.pool_max_size,
                 sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
             )
+            # Refuse to serve a database from an older chesssnake rather than
+            # failing on the first request that touches a changed table: there are
+            # no migrations before 1.0, and create_all never alters a table.
+            stale = schema.stale_tables(engine)
+            if stale:
+                db_engine.dispose_engine()
+                raise errors.SQLError(
+                    "This database was created by an older chesssnake and its schema has changed "
+                    f"(tables: {', '.join(stale)}). There are no migrations before 1.0.0: recreate it with "
+                    "`chesssnake init-db --drop`, which deletes everything in it."
+                )
             if settings.database.init_schema:
                 schema.create_all(engine)
         try:
@@ -512,7 +719,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     _register_error_handlers(app)
     app.include_router(health_router)
-    app.include_router(v1, dependencies=[Depends(_api_key_dependency(settings))])
+    app.include_router(_public_router(settings))
+    app.include_router(v1)
     return app
 
 

@@ -1,35 +1,38 @@
 """
-Remote-capable ``Game`` and challenge helpers.
+Remote-capable ``Game``, and :func:`connect` for talking to an api-endpoint.
 
 Build games with the factory methods:
 
 - ``Game.local(white_name, black_name)`` — a pure in-memory game (no network, no
   extra dependencies), where the engine runs in-process.
-- ``Game.remote(white, black, group_id=..., api_url=..., player_id=...)`` — a game
-  persisted through a ``chesssnake api-endpoint``, between two users given by id or
-  username. For remote games the **server** runs the engine:
-  ``move``/``draw_*``/``resign`` send a request and the returned state is mirrored
-  locally (for rendering and the read accessors). Illegal moves raise the same
-  ``ChessError`` types you'd get locally.
+- ``Game.remote(game_id, client=...)`` — a game persisted on a ``chesssnake
+  api-endpoint``, by its id. The **server** runs the engine: ``move``/``draw_*``/
+  ``resign`` send a request and the returned state is mirrored locally (for
+  rendering and the read accessors). Illegal moves raise the same ``ChessError``
+  types you'd get locally.
 
-Players are accounts on the api-endpoint: create them with :func:`create_user`, or
-let an integration map its own ids onto them with :func:`user_for_identity`. Their
-usernames are what the board and PGN show.
+Everything remote happens as a logged-in user, through an
+:class:`~chesssnake.remote.client.ApiClient`. :func:`connect` builds one::
 
-If constructed with ``player_id=``, that player is sent (and validated server-side)
-on every action. Every action also carries the client's last-known ``version`` and
-``generation``, so a stale action is rejected (``VersionConflictError``, or
-``GenerationConflictError`` once the game it was aimed at is over) rather than
-silently racing or landing in a rematch.
+    client = connect("https://chess.example", username="alice", password="...")
+    challenge = client.challenge("bob")              # bob accepts it...
+    game = Game.remote(client.current_games()[0].id, client=client)
+    game.move("e4")
+
+Games are created by accepting a challenge (or by an administrator). Every action
+carries the client's last-known ``version``, so a stale action is rejected
+(``VersionConflictError``) rather than silently racing.
 """
 
 import os
 
-from ..dto import GameState, MoveResult, User
+from ..db import errors
+from ..dto import GameState, MoveResult
 from ..engine import Board, Square
 from ..engine.enums import Color
 from ..engine.game import Game as BaseGame
 from ..serialize import board_and_turn
+from . import credentials
 
 
 class _MoveMarker:
@@ -50,19 +53,42 @@ class _MoveMarker:
 # a library that read ./chesssnake.toml from the caller's working directory
 # would be surprising.
 API_URL_ENV = "CHESSSNAKE__CLIENT__API_URL"
-API_KEY_ENV = "CHESSSNAKE__CLIENT__API_KEY"
+TOKEN_ENV = "CHESSSNAKE__CLIENT__TOKEN"
 
 
-def _make_client(api_url=None, client=None, api_key=None):
-    """Build (or accept an injected) ApiClient for remote operations."""
-    if client is not None:
-        return client
+def connect(api_url=None, *, token=None, username=None, password=None, session=None):
+    """
+    An authenticated :class:`~chesssnake.remote.client.ApiClient`.
+
+    The endpoint is ``api_url``, else ``$CHESSSNAKE__CLIENT__API_URL``. The
+    credentials are, in order: ``username`` and ``password`` (logs in now), an
+    explicit ``token``, ``$CHESSSNAKE__CLIENT__TOKEN``, or the token
+    ``chesssnake login`` stored for that endpoint.
+
+    :param session: a ``requests``-style session to use (mainly for testing).
+    :raises ValueError: If no endpoint is given.
+    :raises chesssnake.db.errors.AuthError: If no credentials can be found, or the
+        login fails. Never prompts: this is a library.
+    """
     from .client import ApiClient
 
     url = api_url or os.getenv(API_URL_ENV)
     if not url:
-        raise ValueError(f"A remote game requires an api_url argument or the {API_URL_ENV} environment variable.")
-    return ApiClient(url, api_key=api_key or os.getenv(API_KEY_ENV))
+        raise ValueError(f"No api-endpoint: pass api_url or set {API_URL_ENV}.")
+    client = ApiClient(url, session=session)
+    if username is not None or password is not None:
+        if username is None or password is None:
+            raise ValueError("Pass both username and password, or neither.")
+        client.login(username, password)
+        return client
+    stored = credentials.load(url)
+    client.token = token or os.getenv(TOKEN_ENV) or (stored["token"] if stored else None)
+    if not client.token:
+        raise errors.AuthError(
+            f"Not logged in to {url}: run `chesssnake login --api-url {url}`, set {TOKEN_ENV}, "
+            "or pass token= or username= and password=."
+        )
+    return client
 
 
 class Game(BaseGame):
@@ -95,42 +121,32 @@ class Game(BaseGame):
     @classmethod
     def remote(
         cls,
-        white: "int | str",
-        black: "int | str",
-        group_id: int = 0,
+        game_id,
         *,
-        player_id: "int | str | None" = None,
-        generation: int | None = None,
-        api_url: str | None = None,
-        api_key: str | None = None,
         client=None,
+        api_url: str | None = None,
+        token: str | None = None,
+        player_id: "int | str | None" = None,
     ) -> "Game":
         """
-        Load-or-create a game on a chesssnake api-endpoint (the server runs the engine).
+        Open a game on a chesssnake api-endpoint by its id (the server runs the engine).
 
-        :param white: the white player, as a user id or a username.
-        :param black: the black player, as a user id or a username.
-        :param group_id: a namespace of your choosing; the same two players can
-            have one game in progress per group.
-        :param player_id: if given (an id or a username), this player is asserted
-            on every action (the server rejects out-of-turn / non-participant
-            actions with 403).
-        :param generation: load a specific past game (read-only) instead of the current
-            one; ``None`` (default) loads/creates the current game.
-        :param api_url: base URL of the api-endpoint (falls back to ``CHESSSNAKE__CLIENT__API_URL``).
-        :param api_key: optional API key sent with every request.
-        :param client: an injected ``ApiClient`` (mainly for testing).
-        :raises UserNotFoundError: if a player does not exist.
+        :param game_id: the game's id, or a ``GameState`` (e.g. from accepting a challenge).
+        :param client: an :class:`~chesssnake.remote.client.ApiClient`; otherwise one is
+            built with :func:`connect` from ``api_url``/``token`` or the environment.
+        :param player_id: administrators only: the player (id or username) to act as.
+            Everyone else always acts as themselves, which is the default.
+        :raises chesssnake.db.errors.GameNotFoundError: If there is no such game.
         """
-        client = _make_client(api_url, client, api_key)
-        white_id = _resolve_id(client, white)
-        black_id = _resolve_id(client, black)
+        client = client if client is not None else connect(api_url, token=token)
         if player_id is not None:
-            player_id = _resolve_id(client, player_id)
-        if generation is None:
-            state = client.get_or_create_game(group_id, white_id, black_id)
-        else:
-            state = client.get_state(group_id, white_id, black_id, generation)
+            player_id = client.resolve(player_id)
+        state = client.get_game(getattr(game_id, "id", game_id))
+        return cls.from_state(state, client=client, player_id=player_id)
+
+    @classmethod
+    def from_state(cls, state: GameState, *, client, player_id=None) -> "Game":
+        """A remote game mirroring a ``GameState`` the server returned."""
         board, turn = board_and_turn(state)
         return cls(
             client=client,
@@ -138,21 +154,15 @@ class Game(BaseGame):
             version=state.version,
             generation=state.generation,
             game_id=state.id,
-            white_id=white_id,
-            black_id=black_id,
-            group_id=group_id,
+            white_id=state.white_id,
+            black_id=state.black_id,
+            group_id=state.group_id,
             white_name=state.white_name,
             black_name=state.black_name,
             board=board,
             turn=turn,
             draw=state.draw,
         )
-
-    @classmethod
-    def archive(cls, white, black, group_id=0, *, api_url=None, api_key=None, client=None) -> list[GameState]:
-        """Every game (generation) between two players in a group, oldest first."""
-        client = _make_client(api_url, client, api_key)
-        return client.archive(group_id, _resolve_id(client, white), _resolve_id(client, black))
 
     @property
     def is_remote(self) -> bool:
@@ -192,36 +202,36 @@ class Game(BaseGame):
         if not self.is_remote:
             return self._move_result(super().move(move))
 
-        result = self._client.move(self.gid, self.wid, self.bid, move, self.player_id, self.version, self.generation)
+        result = self._client.move(self.id, move, self.player_id, self.version)
         self._apply_state(result.state)
         i1, j1 = Board.get_coords(result.from_square)
         i2, j2 = Board.get_coords(result.to_square)
         self.last_move = _MoveMarker(Square(i1, j1), Square(i2, j2))  # type: ignore[assignment]
         return result
 
-    def resign(self, player_id=None):
+    def _remote_action(self, method, player_id):
         pid = player_id if player_id is not None else self.player_id
+        self._apply_state(getattr(self._client, method)(self.id, pid, self.version))
+
+    def resign(self, player_id=None):
         if not self.is_remote:
-            return super().resign(pid)
-        self._apply_state(self._client.resign(self.gid, self.wid, self.bid, pid, self.version, self.generation))
+            return super().resign(player_id if player_id is not None else self.player_id)
+        self._remote_action("resign", player_id)
 
     def draw_offer(self, player_id=None):
-        pid = player_id if player_id is not None else self.player_id
         if not self.is_remote:
-            return super().draw_offer(pid)
-        self._apply_state(self._client.offer_draw(self.gid, self.wid, self.bid, pid, self.version, self.generation))
+            return super().draw_offer(player_id if player_id is not None else self.player_id)
+        self._remote_action("offer_draw", player_id)
 
     def draw_accept(self, player_id=None):
-        pid = player_id if player_id is not None else self.player_id
         if not self.is_remote:
-            return super().draw_accept(pid)
-        self._apply_state(self._client.accept_draw(self.gid, self.wid, self.bid, pid, self.version, self.generation))
+            return super().draw_accept(player_id if player_id is not None else self.player_id)
+        self._remote_action("accept_draw", player_id)
 
     def draw_decline(self, player_id=None):
-        pid = player_id if player_id is not None else self.player_id
         if not self.is_remote:
-            return super().draw_decline(pid)
-        self._apply_state(self._client.decline_draw(self.gid, self.wid, self.bid, pid, self.version, self.generation))
+            return super().draw_decline(player_id if player_id is not None else self.player_id)
+        self._remote_action("decline_draw", player_id)
 
     # --- reads -------------------------------------------------------------
 
@@ -229,97 +239,21 @@ class Game(BaseGame):
         """The legal moves in the current position (from the server if remote)."""
         if not self.is_remote:
             return super().legal_moves()
-        return self._client.legal_moves(self.gid, self.wid, self.bid, self.generation)
+        return self._client.legal_moves(self.id)
 
     def pgn(self):
         """The game's PGN (from the server if remote)."""
         if not self.is_remote:
             return super().pgn()
-        return self._client.pgn(self.gid, self.wid, self.bid, self.generation)
+        return self._client.pgn(self.id)
 
     def history(self):
-        """The played moves as ``[{ply, san}]`` (remote only; local: use move_history)."""
+        """The played moves as ``[{ply, san}]``."""
         if not self.is_remote:
             return [{"ply": i + 1, "san": san} for i, san in enumerate(self.move_history)]
-        return self._client.history(self.gid, self.wid, self.bid, self.generation)
+        return self._client.history(self.id)
 
     def refresh(self):
         """Re-fetch this game's latest state from the server (e.g. after the opponent moved)."""
         if self.is_remote:
-            self._apply_state(self._client.get_state(self.gid, self.wid, self.bid, self.generation))
-
-    def end(self):
-        """If the game is over, delete it from the remote database. Returns True if ended."""
-        if self.is_over:
-            if self.is_remote:
-                self._client.delete_game(self.gid, self.wid, self.bid, self.generation)
-            return True
-        return False
-
-
-def _resolve_id(client, who) -> int:
-    """A user id as given, or the id of the user with that username."""
-    if isinstance(who, bool):
-        raise TypeError(f"A player is a user id or a username, not {who!r}")
-    if isinstance(who, int):
-        return who
-    if isinstance(who, str):
-        return client.get_user_by_name(who).id
-    raise TypeError(f"A player is a user id or a username, not {who!r}")
-
-
-# --- user helpers (module-level functions) ---------------------------------
-
-
-def create_user(username, *, api_url=None, api_key=None, client=None) -> User:
-    """Create a user on the api-endpoint. The server assigns the id."""
-    return _make_client(api_url, client, api_key).create_user(username)
-
-
-def get_user(user, *, api_url=None, api_key=None, client=None) -> User:
-    """Look a user up by id (an int) or username (a str)."""
-    client = _make_client(api_url, client, api_key)
-    if isinstance(user, str):
-        return client.get_user_by_name(user)
-    return client.get_user(user)
-
-
-def user_for_identity(provider, external_id, username, *, api_url=None, api_key=None, client=None) -> User:
-    """
-    The user linked to an id from another system, created on first use.
-
-    This is the one call an integration needs: a Discord bot, say, passes
-    ``("discord", str(member.id), member.name)`` and gets back the same user
-    every time, with a chesssnake id to play games under. ``username`` is used
-    only when the user is created.
-    """
-    return _make_client(api_url, client, api_key).get_or_create_user_by_identity(provider, str(external_id), username)
-
-
-# --- challenge helpers (module-level functions) ----------------------------
-#
-# Players are user ids or usernames here too, like Game.remote.
-
-
-def challenge(challenger, opponent, group_id=0, *, api_url=None, api_key=None, client=None):
-    """Issue or accept a challenge. Returns ``True`` if an existing challenge was accepted."""
-    client = _make_client(api_url, client, api_key)
-    return client.challenge(_resolve_id(client, challenger), _resolve_id(client, opponent), group_id)
-
-
-def challenge_exists(player1, player2, group_id=0, *, api_url=None, api_key=None, client=None):
-    """Return the pending challenge between two players, or ``None``."""
-    client = _make_client(api_url, client, api_key)
-    return client.challenge_exists(_resolve_id(client, player1), _resolve_id(client, player2), group_id)
-
-
-def delete_challenge(challenger, challenged, group_id=0, *, api_url=None, api_key=None, client=None):
-    """Delete a pending challenge."""
-    client = _make_client(api_url, client, api_key)
-    client.delete_challenge(_resolve_id(client, challenger), _resolve_id(client, challenged), group_id)
-
-
-def record(player1, player2, group_id=0, *, api_url=None, api_key=None, client=None):
-    """Win/draw/loss record between two players across their finished games in a group."""
-    client = _make_client(api_url, client, api_key)
-    return client.record(_resolve_id(client, player1), _resolve_id(client, player2), group_id)
+            self._apply_state(self._client.get_game(self.id))

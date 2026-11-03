@@ -17,15 +17,15 @@ from chesssnake.config import ConfigError, Override, Settings, env_name, resolve
 EXPECTED_ENV_NAMES = {
     ("api", "host"): "CHESSSNAKE__API__HOST",
     ("api", "port"): "CHESSSNAKE__API__PORT",
-    ("api", "require_auth"): "CHESSSNAKE__API__REQUIRE_AUTH",
-    ("api", "api_key"): "CHESSSNAKE__API__API_KEY",
+    ("api", "registration"): "CHESSSNAKE__API__REGISTRATION",
+    ("api", "session_lifetime_days"): "CHESSSNAKE__API__SESSION_LIFETIME_DAYS",
     ("database", "url"): "CHESSSNAKE__DATABASE__URL",
     ("database", "pool_min_size"): "CHESSSNAKE__DATABASE__POOL_MIN_SIZE",
     ("database", "pool_max_size"): "CHESSSNAKE__DATABASE__POOL_MAX_SIZE",
     ("database", "init_schema"): "CHESSSNAKE__DATABASE__INIT_SCHEMA",
     ("database", "sqlite_busy_timeout"): "CHESSSNAKE__DATABASE__SQLITE_BUSY_TIMEOUT",
     ("client", "api_url"): "CHESSSNAKE__CLIENT__API_URL",
-    ("client", "api_key"): "CHESSSNAKE__CLIENT__API_KEY",
+    ("client", "token"): "CHESSSNAKE__CLIENT__TOKEN",
 }
 
 
@@ -52,7 +52,8 @@ def test_defaults():
     settings = resolve(environ={}, cwd="/nonexistent")
     assert settings.api.host == "127.0.0.1"
     assert settings.api.port == 8000
-    assert settings.api.require_auth is False
+    assert settings.api.registration == "closed"
+    assert settings.api.session_lifetime_days == 30
     assert settings.database.url is None
     assert settings.database.pool_min_size == 1
     assert settings.database.pool_max_size == 10
@@ -199,22 +200,29 @@ def test_pool_bounds_are_checked(tmp_path):
 # --- Auth ------------------------------------------------------------------
 
 
-def test_require_auth_without_a_key_fails_loudly(tmp_path):
-    with pytest.raises(ConfigError) as exc:
-        resolve(environ={"CHESSSNAKE__API__REQUIRE_AUTH": "1"}, cwd=tmp_path)
-    assert env_name("api", "api_key") in str(exc.value)
+def test_registration_is_closed_unless_opened(tmp_path):
+    assert resolve(environ={}, cwd=tmp_path).api.registration == "closed"
+    settings = resolve(environ={"CHESSSNAKE__API__REGISTRATION": "open"}, cwd=tmp_path)
+    assert settings.api.registration == "open"
+    with pytest.raises(ConfigError, match="registration"):
+        resolve(environ={"CHESSSNAKE__API__REGISTRATION": "anyone"}, cwd=tmp_path)
 
 
-def test_require_auth_with_a_key_is_accepted(tmp_path):
-    settings = resolve(environ={"CHESSSNAKE__API__REQUIRE_AUTH": "1", "CHESSSNAKE__API__API_KEY": "k"}, cwd=tmp_path)
-    assert settings.api.require_auth is True
-    assert settings.advisories() == []
+def test_session_lifetime_is_bounded(tmp_path):
+    for bad in ("0", "3651"):
+        with pytest.raises(ConfigError, match="session_lifetime_days"):
+            resolve(environ={"CHESSSNAKE__API__SESSION_LIFETIME_DAYS": bad}, cwd=tmp_path)
 
 
-def test_key_without_require_auth_is_advised_against(tmp_path):
-    """Upgrading from the old 'key set means auth on' behavior must not silently open the server."""
-    settings = resolve(environ={"CHESSSNAKE__API__API_KEY": "k"}, cwd=tmp_path)
-    assert any("require_auth" in note for note in settings.advisories())
+def test_the_retired_api_key_settings_are_refused_in_a_file(tmp_path):
+    """0.11's shared key is gone; a config file still naming it fails loudly instead of being ignored."""
+    write(tmp_path, '[api]\nrequire_auth = true\napi_key = "k"\n')
+    with pytest.raises(ConfigError, match="require_auth"):
+        resolve(environ={}, cwd=tmp_path)
+
+
+def test_there_are_no_advisories_by_default(tmp_path):
+    assert resolve(environ={}, cwd=tmp_path).advisories() == []
 
 
 # --- Redaction -------------------------------------------------------------
@@ -223,7 +231,7 @@ def test_key_without_require_auth_is_advised_against(tmp_path):
 def test_secrets_are_redacted_by_default(tmp_path):
     settings = resolve(
         environ={
-            "CHESSSNAKE__API__API_KEY": "sup3rsecret",
+            "CHESSSNAKE__CLIENT__TOKEN": "sup3rsecret",
             "CHESSSNAKE__DATABASE__URL": "postgresql://bob:hunter2@db:5432/chess",
         },
         cwd=tmp_path,
@@ -236,7 +244,7 @@ def test_secrets_are_redacted_by_default(tmp_path):
 
 
 def test_show_secrets_reveals_them(tmp_path):
-    settings = resolve(environ={"CHESSSNAKE__API__API_KEY": "sup3rsecret"}, cwd=tmp_path)
+    settings = resolve(environ={"CHESSSNAKE__CLIENT__TOKEN": "sup3rsecret"}, cwd=tmp_path)
     assert "sup3rsecret" in config.format_settings(settings, show_secrets=True)
 
 
@@ -298,7 +306,7 @@ def test_packaged_default_leaves_credentials_unset(tmp_path):
     """Shipping a default password or key would be worse than shipping nothing."""
     (tmp_path / config.CONFIG_FILENAME).write_text(config.default_config_text())
     settings = resolve(environ={}, cwd=tmp_path)
-    assert settings.api.api_key is None
+    assert settings.client.token is None
     assert settings.database.url is None
 
 
@@ -344,7 +352,14 @@ def test_client_env_constants_match_the_schema():
     from chesssnake.remote import game
 
     assert game.API_URL_ENV == env_name("client", "api_url")
-    assert game.API_KEY_ENV == env_name("client", "api_key")
+    assert game.TOKEN_ENV == env_name("client", "token")
+
+
+def test_the_credentials_file_honours_the_same_home_variable():
+    """remote/credentials.py hardcodes CHESSSNAKE_HOME for the same reason."""
+    from chesssnake.remote import credentials
+
+    assert credentials.HOME_ENV == config.HOME_ENV
 
 
 def test_sql_auth_error_names_the_current_env_var():

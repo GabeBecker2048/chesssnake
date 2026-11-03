@@ -15,7 +15,7 @@ streams, with no terminal, no server and no subprocess.
 import io
 import select
 
-from .db.errors import GameError, NotYourTurnError
+from .db.errors import AuthError, GameError, NotYourTurnError
 from .engine import Color, GameStatus, render_text
 from .engine.errors import ChessError
 
@@ -33,7 +33,7 @@ COMMANDS = [
     ("decline", "decline a draw offer"),
     ("resign", "resign the game"),
     ("refresh", "re-fetch from the server (see the opponent's move)"),
-    ("new", "start a rematch once the game is over"),
+    ("new", "once the game is over: challenge your opponent to a rematch, or accept theirs"),
     ("save PATH", "write a PNG of the board"),
     ("help", "this list"),
     ("quit", "leave (a remote game is saved; a local one is not)"),
@@ -62,10 +62,11 @@ class Session:
 
     :param game: the :class:`chesssnake.Game` to drive — local or remote; the
         loop does not care which, beyond labelling the header.
-    :param player_id: the id actions are sent as. When given, a remote server
-        enforces turn order against it. When ``None``, the session acts as
-        whichever side is to move, which is what a single player at one
-        keyboard wants.
+    :param player_id: the id actions are sent as. For a remote game this is the
+        logged-in user when they are one of the players, and the server enforces
+        turn order against it. When ``None``, the session acts as whichever side
+        is to move: one player at one keyboard locally, or an administrator
+        driving someone else's game remotely.
     :param stdin: stream read for commands.
     :param stdout: stream written to.
     :param color: emit ANSI colour. When false, **no** escape sequence is
@@ -94,8 +95,9 @@ class Session:
         self.color = color
         self.figurines = figurines
         self.refresh_seconds = refresh_seconds
-        #: Set by :meth:`sync` when a rematch has superseded this session's game.
-        self.stale_generation = None
+        #: Set by :meth:`sync` to the id of a newer game between the same two
+        #: players, once this session's game is over and a rematch has begun.
+        self.newer_game = None
         if perspective is not None:
             self.perspective = Color(perspective)
         elif player_id is not None and player_id == getattr(game, "bid", None):
@@ -149,7 +151,7 @@ class Session:
         black = game.bname or "black"
         bits = [f"{white} (white) vs {black} (black)"]
         if game.is_remote:
-            bits.append(f"gen {game.generation}")
+            bits.append(f"game {game.id}")
         if game.is_over:
             bits.append(self._style(_STATUS_TEXT[game.result].upper(), _BOLD))
             if game.termination is not None:
@@ -196,33 +198,31 @@ class Session:
         your last position while ``moves`` listed the legal moves of a position
         you cannot see.
 
-        Reads the **current** generation rather than this session's pinned one,
-        so a rematch started elsewhere is noticed instead of leaving the session
-        staring at a finished game forever. On drift it sets
-        :attr:`stale_generation` and does *not* move the mirror — joining a
-        rematch is the player's decision (``new``), not a surprise.
+        Once the game is over it also looks for a **newer game between the same
+        two players** in the same group: a rematch started from somewhere else.
+        Found, it sets :attr:`newer_game` and does *not* switch to it; joining is
+        the player's decision (``new``), not a surprise. Newer is decided by game
+        id, which only ever increases, not by generation, which is counted per
+        colour arrangement and so restarts when a rematch swaps colours.
 
         :return: whether the position moved on, so the caller can redraw and say
             so rather than silently changing the board.
         """
         if not self.game.is_remote:
             return False
-        # Private attribute use: play.py and remote/game.py ship together, and
-        # `generation=None` (the current game) is not reachable through the
-        # public Game, which pins the generation it was opened at.
-        state = self.game._client.get_state(self.game.gid, self.game.wid, self.game.bid, None)
-        if state.generation != self.game.generation:
-            self.stale_generation = state.generation
-            return False
-        self.stale_generation = None
         before = self.game.version
-        self.game._apply_state(state)
+        self.game.refresh()
+        if self.game.is_over and self.newer_game is None:
+            client = self.game._client  # play.py and remote/game.py ship together
+            active = client.games_between(self.game.wid, self.game.bid, self.game.gid, status="active")
+            newer = [state.id for state in active if state.id > self.game.id]
+            self.newer_game = max(newer) if newer else None
         return self.game.version != before
 
     def _sync_and_announce(self) -> None:
         """Sync, and redraw with a note if the opponent has been and gone."""
         changed = self.sync()
-        if self.stale_generation is not None:
+        if self.newer_game is not None:
             self.note(self._rematch_notice())
             return
         if changed:
@@ -231,17 +231,14 @@ class Session:
 
     def _rematch_notice(self) -> str:
         """Explain that this session is looking at a superseded game."""
-        return (
-            f"a rematch has started elsewhere (generation {self.stale_generation}); "
-            f"this session is on generation {self.game.generation}. `new` joins the current game."
-        )
+        return f"a rematch has started (game {self.newer_game}); this game is over. `new` joins it."
 
     def allow_action(self) -> bool:
         """
         Sync, then report whether an action may be sent.
 
-        Every action goes through here, so the cross-generation hazard described
-        in :meth:`blocked_reason` is checked once rather than at seven call sites.
+        Every action goes through here, so :meth:`blocked_reason` is checked once
+        rather than at seven call sites.
 
         :return: ``True`` when it is safe to act.
         """
@@ -256,24 +253,18 @@ class Session:
         """
         Why an action must not be sent, or ``None`` when it is safe.
 
-        Every action carries the session's ``generation`` and the server refuses
-        one aimed at a game that is over (``GenerationConflictError``), so a
-        session left on a superseded generation cannot play into the rematch.
-        This check is still made first because it says *why* in words the player
-        can act on (``new`` joins the current game), where the server's refusal
-        would only be an error. Before 0.11.0 the mutating routes ignored the
-        generation entirely and this guard was the only protection: a session
-        sitting in a finished generation 1 played ``d5`` and it landed in
-        generation 2's movetext.
+        A session addresses its game by id, so an action can never land in a
+        rematch (before 0.11.0 one could, and did). What this adds is a sentence
+        the player can act on, ``new``, in place of the server's ``GameOverError``.
 
         :return: a message to show, or ``None``.
         """
         if not self.game.is_remote:
             return None
-        if self.stale_generation is not None:
+        if self.newer_game is not None:
             return self._rematch_notice()
         if self.game.is_over:
-            return "this game is over - `new` starts a rematch"
+            return "this game is over - `new` challenges your opponent to a rematch"
         return None
 
     def do_moves(self, _arg):
@@ -340,7 +331,7 @@ class Session:
             self.note("local game - nothing to refresh")
             return
         changed = self.sync()
-        if self.stale_generation is not None:
+        if self.newer_game is not None:
             self.note(self._rematch_notice())
         elif changed:
             self.show()
@@ -356,24 +347,59 @@ class Session:
         self.note(f"wrote {arg}")
 
     def do_new(self, _arg):
-        """Start a rematch. Only meaningful once the current game is over."""
-        if not self.game.is_over:
+        """
+        After a game: join the rematch if one has started, else accept the
+        opponent's rematch challenge if they sent one, else send them one with
+        the colours swapped. Games are only ever created by an accepted challenge,
+        so a rematch takes both players' say-so.
+        """
+        if not self.game.is_remote:
+            if not self.game.is_over:
+                self.error("the current game is still in play - resign or finish it first")
+            else:
+                self.error("a local game cannot be restarted in place - rerun `chesssnake play --local`")
+            return
+        self.sync()
+        if self.newer_game is None and not self.game.is_over:
             self.error("the current game is still in play - resign or finish it first")
             return
-        if not self.game.is_remote:
-            self.error("a local game cannot be restarted in place - rerun `chesssnake play --local`")
+        if self.newer_game is not None:
+            self._switch_to(self.newer_game)
             return
-        # Re-opening a finished triple is what starts a new generation server-side.
+        me = self.player_id
+        if me not in (self.game.wid, self.game.bid):
+            self.error("only one of the players can start a rematch")
+            return
+        opponent = self.game.bid if me == self.game.wid else self.game.wid
+        client = self.game._client
+        for challenge in client.challenges("all"):
+            if challenge.group_id != self.game.gid or opponent not in (
+                challenge.challenger_id,
+                challenge.challenged_id,
+            ):
+                continue
+            if challenge.challenger_id == opponent:
+                self._switch_to(client.accept_challenge(challenge.id).id)
+            else:
+                self.note(f"rematch challenge {challenge.id} already sent - waiting for them to accept")
+            return
+        # Swap colours: whoever had white asks for black this time.
+        color = "black" if me == self.game.wid else "white"
+        challenge = client.challenge(opponent, self.game.gid, color)
+        self.note(
+            f"rematch challenge {challenge.id} sent to {challenge.challenged_name} (you play {color}); "
+            "when they accept, `new` joins the game"
+        )
+
+    def _switch_to(self, game_id):
+        """Point the session at another game (the rematch) and draw it."""
         from .remote.game import Game
 
-        self.game = Game.remote(
-            self.game.wid,
-            self.game.bid,
-            self.game.gid,
-            player_id=self.player_id,
-            client=self.game._client,
-        )
-        self.note(f"rematch - generation {self.game.generation}")
+        self.game = Game.remote(game_id, client=self.game._client, player_id=self.game.player_id)
+        self.newer_game = None
+        if self.player_id is not None:
+            self.perspective = Color.BLACK if self.player_id == self.game.bid else Color.WHITE
+        self.note(f"rematch - game {self.game.id}")
         self.show()
 
     def do_quit(self, _arg):
@@ -461,8 +487,9 @@ class Session:
                 return self.stdin.readline()
             if ready:
                 return self.stdin.readline()
+            had_newer = self.newer_game is not None
             changed = self.sync()
-            if self.stale_generation is not None:
+            if self.newer_game is not None and not had_newer:
                 self.write()
                 self.note(self._rematch_notice())
             elif changed:
@@ -492,6 +519,8 @@ class Session:
             self.stdout.flush()
             try:
                 line = self.wait_for_line()
+            except AuthError as e:
+                return self._logged_out(e)
             except KeyboardInterrupt:
                 # Ctrl+C at the prompt is how people leave a REPL. It is not a
                 # crash, and a traceback through select() tells the player
@@ -508,6 +537,10 @@ class Session:
                 self.dispatch(line)
             except Quit:
                 return 0
+            except AuthError as e:
+                # Not an input mistake: the token expired or was revoked, and every
+                # further line (and every poll) would fail the same way.
+                return self._logged_out(e)
             except KeyboardInterrupt:
                 # Ctrl+C part-way through a request: the action may or may not
                 # have reached the server, so say nothing about it and leave.
@@ -521,7 +554,13 @@ class Session:
             # Only on the transition. Printing it after every command — `pgn`
             # and `fen` included — turns the one line that matters into noise.
             if self.game.is_over and not was_over:
-                self.note("game over - `new` starts a rematch" if self.game.is_remote else "game over")
+                self.note("game over - `new` for a rematch" if self.game.is_remote else "game over")
+
+    def _logged_out(self, exc) -> int:
+        self.write()
+        self.error(f"{type(exc).__name__}: {exc}")
+        self.write("Log in again with `chesssnake login`, then rerun `chesssnake play`.")
+        return 1
 
 
 def run_session(game, **kwargs) -> int:

@@ -56,7 +56,7 @@ chesssnake runs as a Python package, or as a Docker container for the server.
 ```sh
 pip install chesssnake                  # local games and rendering
 pip install chesssnake[client]          # also play on a remote api-endpoint
-pip install chesssnake[api]             # also run the server (SQLite, no compiled deps)
+pip install chesssnake[api]             # also run the server (SQLite: no database server needed)
 pip install chesssnake[api,postgres]    # ... with PostgreSQL
 ```
 
@@ -96,9 +96,8 @@ services:
     environment:
       CHESSSNAKE__DATABASE__URL: sqlite:////data/chesssnake.db
       CHESSSNAKE__DATABASE__INIT_SCHEMA: "1"
-      # Auth is off unless you turn it on explicitly:
-      # CHESSSNAKE__API__REQUIRE_AUTH: "1"
-      # CHESSSNAKE__API__API_KEY: "<long random>"
+      # Anyone may make an account only if you open registration:
+      # CHESSSNAKE__API__REGISTRATION: "open"
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -112,6 +111,7 @@ Then, in that folder:
 mkdir data           # so it is yours, not root's
 docker compose up -d
 curl localhost:8000/health
+docker compose exec chesssnake chesssnake user create alice --admin   # the first account
 ```
 
 That is the whole server: SQLite in a file under `./data`, no database to
@@ -120,29 +120,31 @@ install. For PostgreSQL, hardening notes and what to do before exposing it, see
 
 ### Connect to it
 
-Players are accounts on the server, so create them first:
+Players are accounts, and a game starts when one challenges another. From a
+terminal, anywhere on the network:
+
+```sh
+chesssnake login --api-url http://localhost:8000     # once; the token is remembered
+chesssnake challenge bob                              # bob runs: chesssnake accept ID
+chesssnake play --vs bob
+```
+
+From Python:
 
 ```python
-from chesssnake import Game, create_user
+from chesssnake import Game, connect
 
-url = "http://localhost:8000"
-create_user("alice", api_url=url)
-create_user("bob", api_url=url)
-
-game = Game.remote("alice", "bob", api_url=url)
+client = connect("http://localhost:8000", username="alice", password="...")
+game = Game.remote(client.current_games()[0], client=client)
 game.move("e4")
 ```
 
-Or from a terminal, anywhere on the network:
+Or over plain HTTP, from any language:
 
 ```sh
-chesssnake play --api-url http://localhost:8000 --white alice --black bob --me alice
-```
-
-Or over plain HTTP, from any language (here alice is user 1 and bob user 2):
-
-```sh
-curl -X POST http://localhost:8000/v1/games/0/1/2/moves \
+TOKEN=$(curl -s localhost:8000/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"..."}' | jq -r .token)
+curl -X POST localhost:8000/v1/games/1/moves -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"move":"e4"}'
 ```
 

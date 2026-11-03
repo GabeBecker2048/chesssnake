@@ -298,6 +298,7 @@ class _FakeRemote:
         self.syncs_before_change = syncs_before_change
         self.generation = 1
         self.version = 1
+        self.id = 7
         self.wid, self.bid = 0, 1
         self.wname, self.bname = "W", "B"
         self.draw_offered_by = None
@@ -434,12 +435,12 @@ def test_ctrl_c_during_an_action_exits_quietly(monkeypatch):
     assert "KeyboardInterrupt" not in out.getvalue()
 
 
-def test_cli_api_key_env_name_matches_the_client():
+def test_cli_token_env_name_matches_the_client():
     """Same hardcode-with-a-test pattern as the URL variable."""
-    from chesssnake.cli import _API_KEY_ENV
-    from chesssnake.remote.game import API_KEY_ENV
+    from chesssnake.cli import _TOKEN_ENV
+    from chesssnake.remote.game import TOKEN_ENV
 
-    assert _API_KEY_ENV == API_KEY_ENV
+    assert _TOKEN_ENV == TOKEN_ENV
 
 
 def test_a_quiet_poll_prints_nothing(monkeypatch):
@@ -464,13 +465,13 @@ def test_a_quiet_poll_prints_nothing(monkeypatch):
 
 
 def test_idle_poll_announces_a_rematch_started_elsewhere(monkeypatch):
-    """The stale-generation case has to surface while idle too, not only on command."""
+    """A rematch begun elsewhere has to surface while idle too, not only on command."""
     game = _FakeRemote()
     session, writer, out = _session_over_pipe(game, 0.01, monkeypatch)
 
     def stale():
         game.syncs += 1
-        session.stale_generation = 2
+        session.newer_game = 9
         return False
 
     monkeypatch.setattr(session, "sync", stale)
@@ -486,4 +487,6 @@ def test_idle_poll_announces_a_rematch_started_elsewhere(monkeypatch):
     writer.flush()
     reader.join(timeout=5)
     writer.close()
-    assert "a rematch has started elsewhere (generation 2)" in out.getvalue()
+    printed = out.getvalue()
+    assert "a rematch has started (game 9)" in printed
+    assert printed.count("a rematch has started") == 1, "announced once, not on every poll"

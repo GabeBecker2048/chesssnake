@@ -1,32 +1,35 @@
 """
-Full-stack integration tests: remote Game client -> REST API -> database.
+Full-stack integration tests: the Python client -> REST API -> database.
 
 The server runs the engine; the client sends moves and mirrors the returned
-state. The client's ApiClient is wired to an in-process TestClient (see conftest's
-``remote_client``), so these exercise the real FastAPI app and database.
+state. Clients are wired to the in-process app through its TestClient, and act
+as real, logged-in plain users unless a test is about administrators.
 """
 
 import pytest
 
-from chesssnake import Color, GameState, GameStatus, MoveResult, Termination, User
+from chesssnake import Challenge, Color, Game, GameState, GameStatus, MoveResult, Termination, User, connect
 from chesssnake.db import errors as GameError
 from chesssnake.engine import errors as ChessError
-from chesssnake.remote.game import (
-    Game,
-    challenge,
-    challenge_exists,
-    create_user,
-    get_user,
-    record,
-    user_for_identity,
-)
+from tests.integration.conftest import TEST_PASSWORD
 
 pytestmark = pytest.mark.integration
 
 
-def make_game(remote_client, white, black, **kwargs):
-    kwargs.setdefault("group_id", 10)
-    return Game.remote(white, black, client=remote_client, **kwargs)
+@pytest.fixture
+def players(users, user_client):
+    """alice and bob, each with their own client: ``(alice_id, bob_id, alice, bob)``."""
+    alice, bob = users("alice", "bob")
+    return alice, bob, user_client(alice), user_client(bob)
+
+
+@pytest.fixture
+def match(players):
+    """A game made the normal way: alice challenges as white, bob accepts."""
+    alice_id, bob_id, alice, bob = players
+    challenge = alice.challenge("bob", color="white")
+    state = bob.accept_challenge(challenge.id)
+    return Game.remote(state, client=alice), Game.remote(state.id, client=bob)
 
 
 def piece_at(board, c_notation):
@@ -36,204 +39,192 @@ def piece_at(board, c_notation):
     return board[i, j].piece
 
 
-def _mate(game):
-    for m in ["f3", "e5", "g4", "Qh4"]:  # fool's mate -> black wins
-        game.move(m)
+def _mate(white, black):
+    for game, move in ((white, "f3"), (black, "e5"), (white, "g4"), (black, "Qh4")):
+        game.refresh()
+        game.move(move)
 
 
-# --- users -----------------------------------------------------------------
+# --- connecting --------------------------------------------------------------------
 
 
-def test_create_and_get_user(remote_client):
-    alice = create_user("Alice", client=remote_client)
-    assert isinstance(alice, User) and alice.role == "user"
-    assert get_user(alice.id, client=remote_client) == alice
-    assert get_user("alice", client=remote_client) == alice
-    with pytest.raises(GameError.UserExistsError):
-        create_user("ALICE", client=remote_client)
-    with pytest.raises(GameError.UserNotFoundError):
-        get_user("nobody", client=remote_client)
+def test_connect_with_a_password(api_client, users):
+    users("alice")
+    client = connect("http://testserver", username="alice", password=TEST_PASSWORD, session=api_client)
+    assert client.token.startswith("css_")
+    me = client.me()
+    assert isinstance(me, User) and me.username == "alice"
+    with pytest.raises(GameError.AuthError):
+        connect("http://testserver", username="alice", password="wrong-password", session=api_client)
 
 
-def test_user_for_identity_is_stable(remote_client):
-    """What a bot calls on every interaction: same external id, same user."""
-    first = user_for_identity("discord", 123456789012345678, "gabe", client=remote_client)
-    again = user_for_identity("discord", "123456789012345678", "renamed-meanwhile", client=remote_client)
-    assert again.id == first.id and again.username == "gabe"
-    assert first.identities == [{"provider": "discord", "external_id": "123456789012345678"}]
+def test_connect_finds_a_token_in_the_environment_or_the_stored_login(
+    api_client, users, as_user, monkeypatch, tmp_path
+):
+    from chesssnake.remote import credentials
+
+    (alice,) = users("alice")
+    token = as_user(alice)["Authorization"].split()[1]
+    monkeypatch.setenv("CHESSSNAKE_HOME", str(tmp_path))
+    monkeypatch.delenv("CHESSSNAKE__CLIENT__TOKEN", raising=False)
+    with pytest.raises(GameError.AuthError, match="chesssnake login"):
+        connect("http://testserver", session=api_client)
+
+    credentials.save("http://TESTSERVER/", token, "alice")
+    assert connect("http://testserver", session=api_client).me().id == alice
+
+    monkeypatch.setenv("CHESSSNAKE__CLIENT__TOKEN", "css_from-the-env-wins")
+    assert connect("http://testserver", session=api_client).token == "css_from-the-env-wins"
 
 
-def test_games_are_opened_by_username(remote_client, pair):
-    g = make_game(remote_client, "white", "BLACK", player_id="white")
-    assert (g.wid, g.bid, g.player_id) == (*pair, pair[0])
-    assert (g.wname, g.bname) == ("white", "black")
-    assert isinstance(g.id, int)
-    with pytest.raises(GameError.UserNotFoundError):
-        make_game(remote_client, "white", "nobody")
+def test_logout_revokes(api_client, users):
+    users("alice")
+    client = connect("http://testserver", username="alice", password=TEST_PASSWORD, session=api_client)
+    token = client.token
+    client.logout()
+    client.token = token
+    with pytest.raises(GameError.AuthError):
+        client.me()
 
 
-# --- games -----------------------------------------------------------------
+# --- the normal way to a game ----------------------------------------------------
 
 
-def test_move_returns_result_and_bumps_version(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    assert g.version == 1
-    result = g.move("e4")
-    assert isinstance(result, MoveResult)
-    assert (result.from_square, result.to_square, result.san) == ("e2", "e4", "e4")
-    assert result.state.id == g.id and result.state.white_name == "white"
-    assert g.to_move == Color.BLACK
-    assert g.version == 2
-    assert piece_at(g.board, "e4") is not None  # local mirror updated
-    assert g.last_move is not None
+def test_challenge_accept_play(players):
+    alice_id, bob_id, alice, bob = players
+    challenge = alice.challenge("bob", color="black")
+    assert isinstance(challenge, Challenge) and challenge.challenged_name == "bob"
+    assert [c.id for c in bob.challenges("incoming")] == [challenge.id]
+
+    state = bob.accept_challenge(challenge)
+    assert isinstance(state, GameState) and (state.white_id, state.black_id) == (bob_id, alice_id)
+    as_bob = Game.remote(state, client=bob)
+    as_alice = Game.remote(state.id, client=alice)
+    assert (as_bob.wname, as_bob.bname, as_bob.id) == ("bob", "alice", state.id)
+
+    result = as_bob.move("e4")
+    assert isinstance(result, MoveResult) and result.state.version == 2
+    as_alice.refresh()
+    assert as_alice.to_move == Color.BLACK and piece_at(as_alice.board, "e4") is not None
 
 
-def test_move_persists_across_clients(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    g.move("e4")
-    reloaded = make_game(remote_client, *pair)
-    assert reloaded.id == g.id
-    assert piece_at(reloaded.board, "e4") is not None
-    assert reloaded.to_move == Color.BLACK
+def test_declining(players):
+    _, _, alice, bob = players
+    challenge = alice.challenge("bob")
+    bob.decline_challenge(challenge)
+    assert alice.challenges() == []
+    with pytest.raises(GameError.ChallengeNotFoundError):
+        bob.accept_challenge(challenge)
 
 
-def test_fen_accessors_mirror_from_wire(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    assert g.castling_rights == "KQkq"
-    assert g.en_passant is None
-    assert g.fullmove_number == 1 and g.halfmove_clock == 0
-    g.move("e4")  # double push -> en-passant target mirrored from the server's FEN
-    assert g.en_passant == "e3"
-    assert g.fen.split()[3] == "e3"
+# --- playing ---------------------------------------------------------------------
 
 
-def test_refresh_picks_up_other_clients_move(remote_client, pair):
-    a = make_game(remote_client, *pair)
-    b = make_game(remote_client, *pair)
-    a.move("d4")
-    assert b.to_move == Color.WHITE  # not refreshed yet
-    b.refresh()
-    assert b.to_move == Color.BLACK and piece_at(b.board, "d4") is not None
-
-
-def test_player_authorization(remote_client, pair):
-    white_id, _ = pair
-    # The white player's client may not move on black's turn.
-    white = make_game(remote_client, *pair, player_id=white_id)
-    white.move("e4")  # ok, white's turn
+def test_a_player_cannot_move_for_their_opponent(match):
+    white, black = match
+    white.move("e4")
     with pytest.raises(GameError.NotYourTurnError):
-        white.move("e5")  # now black's turn, but this client is white
+        white.move("e5")  # black's turn, and this client is white
 
 
-def test_illegal_move_raises_chess_error(remote_client, pair):
-    g = make_game(remote_client, *pair)
+def test_illegal_move_raises_chess_error(match):
+    white, _ = match
     with pytest.raises(ChessError.InvalidNotationError):
-        g.move("not-a-move")
+        white.move("not-a-move")
     with pytest.raises(ChessError.PieceNotFoundError):
-        g.move("e5")
+        white.move("e5")
 
 
-def test_resign_and_winner(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    g.move("e4")
-    g.resign(pair[1])  # black resigns
-    assert g.result == GameStatus.WHITE_WON
-    assert g.winner == Color.WHITE
-    assert g.termination == Termination.RESIGNATION
+def test_fen_accessors_mirror_from_wire(match):
+    white, _ = match
+    assert white.castling_rights == "KQkq" and white.en_passant is None
+    white.move("e4")
+    assert white.en_passant == "e3" and white.fen.split()[3] == "e3"
 
 
-def test_legal_moves_and_pgn_over_the_wire(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    assert len(g.legal_moves()) == 20
-    g.move("e4")
-    g.move("e5")
-    assert "1. e4 e5" in g.pgn()
-    assert '[White "white"]' in g.pgn()
-    assert [m["san"] for m in g.history()] == ["e4", "e5"]
+def test_resign_and_winner(match):
+    white, black = match
+    white.move("e4")
+    black.refresh()
+    black.resign()
+    assert black.result == GameStatus.WHITE_WON and black.winner == Color.WHITE
+    assert black.termination == Termination.RESIGNATION
+    white.refresh()
+    with pytest.raises(ChessError.GameOverError):
+        white.move("d4")
 
 
-def test_render_works_from_mirror(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    g.move("e4")
-    assert g.render().size == (1190, 644)
+def test_draw_by_agreement(match):
+    white, black = match
+    white.draw_offer()
+    black.refresh()
+    assert black.draw_offered_by == Color.WHITE
+    black.draw_accept()
+    assert black.result == GameStatus.DRAW
 
 
-def test_draw_offer_persists(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    g.draw_offer(pair[0])
-    assert g.draw_offered_by == Color.WHITE
-    reloaded = make_game(remote_client, *pair)
-    assert reloaded.draw_offered_by == Color.WHITE
+def test_reads_over_the_wire(match):
+    white, black = match
+    assert len(white.legal_moves()) == 20
+    white.move("e4")
+    black.refresh()
+    black.move("e5")
+    assert "1. e4 e5" in white.pgn() and '[White "alice"]' in white.pgn()
+    assert [m["san"] for m in white.history()] == ["e4", "e5"]
+    assert white.render().size == (1190, 644)
 
 
-def test_challenge_lifecycle(remote_client, pair):
-    a, b = pair
-    assert challenge(a, b, group_id=10, client=remote_client) is False
-    assert challenge_exists("white", "black", group_id=10, client=remote_client) is not None
-    assert challenge("black", "white", group_id=10, client=remote_client) is True
+def test_lists_and_records(players, match):
+    alice_id, bob_id, alice, bob = players
+    white, black = match
+    assert [g.id for g in alice.current_games()] == [white.id]
+    _mate(white, black)
+    assert alice.current_games() == []
+    assert [g.id for g in bob.games_between("alice", "bob", status="finished")] == [white.id]
+    assert alice.record("alice", "bob") == {
+        "player1": alice_id,
+        "player2": bob_id,
+        "player1_wins": 0,
+        "player2_wins": 1,
+        "draws": 0,
+    }
 
 
-def test_self_challenge_raises(remote_client):
-    with pytest.raises(GameError.ChallengeError):
-        challenge(300, 300, group_id=10, client=remote_client)
+def test_a_finished_game_stays_readable_by_id(match):
+    white, black = match
+    _mate(white, black)
+    again = Game.remote(white.id, client=white._client)
+    assert again.is_over and again.result == GameStatus.BLACK_WON
+    assert "Qh4#" in again.pgn()
 
 
-def test_rematch_starts_new_generation(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    _mate(g)
-    assert g.generation == 1 and g.is_over
-    rematch = make_game(remote_client, *pair)
-    assert rematch.generation == 2 and not rematch.is_over
-    assert rematch.id != g.id
+def test_no_such_game(players):
+    _, _, alice, _ = players
+    with pytest.raises(GameError.GameNotFoundError):
+        Game.remote(999999, client=alice)
 
 
-def test_a_stale_client_is_refused_by_the_server(remote_client, pair):
-    """The server checks the generation itself: no session-side guard is involved here."""
-    stale = make_game(remote_client, *pair)
-    stale.resign(pair[0])
-    live = make_game(remote_client, *pair)  # generation 2
-    live.move("d4")
-    assert live.version == stale.version, "so a version check alone would let it through"
-    with pytest.raises(GameError.GenerationConflictError):
-        stale.move("d5")
-    assert [m["san"] for m in live.history()] == ["d4"]
+# --- administrators --------------------------------------------------------------
 
 
-def test_load_and_archive_past_games(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    _mate(g)
-    make_game(remote_client, *pair)  # start generation 2
-
-    old = Game.remote(*pair, 10, generation=1, client=remote_client)
-    assert old.generation == 1 and old.is_over and old.id == g.id
-    assert "Qh4#" in old.pgn()
-
-    archive = Game.archive("white", "black", 10, client=remote_client)
-    assert all(isinstance(a, GameState) for a in archive)
-    assert [a.generation for a in archive] == [1, 2]
-    assert archive[0].id == g.id
+def test_an_admin_creates_games_and_acts_for_players(remote_client, players):
+    alice_id, bob_id, alice, _ = players
+    state = remote_client.create_game("alice", "bob")
+    with pytest.raises(GameError.ForbiddenError):
+        alice.create_game("alice", "bob")
+    as_bob = Game.remote(state.id, client=remote_client, player_id="bob")
+    with pytest.raises(GameError.NotYourTurnError):
+        as_bob.move("e4")  # it is white's move, and the admin is acting as bob
+    as_alice = Game.remote(state.id, client=remote_client, player_id=alice_id)
+    as_alice.move("e4")
+    assert as_alice.version == 2
 
 
-def test_challenge_allowed_after_game_finishes(remote_client, pair):
-    # a *finished* game between two players must not block a fresh challenge
-    g = make_game(remote_client, *pair)
-    _mate(g)
-    assert challenge(*pair, group_id=10, client=remote_client) is False  # created, not blocked
-
-
-def test_record_helper(remote_client, pair):
-    w, b = pair
-    g = make_game(remote_client, w, b)
-    g.move("e4")
-    g.resign(b)  # black resigns -> white wins
-    rec = record("white", "black", group_id=10, client=remote_client)
-    assert rec == {"player1": w, "player2": b, "player1_wins": 1, "player2_wins": 0, "draws": 0}
-
-
-def test_current_games_and_exists_return_states(remote_client, pair):
-    g = make_game(remote_client, *pair)
-    current = remote_client.current_games(pair[0])
-    assert [state.id for state in current] == [g.id]
-    assert remote_client.game_exists(pair[1], pair[0], group_id=10).id == g.id
-    assert remote_client.game_exists(pair[1], pair[0], group_id=11) is None
-    assert remote_client.get_game(g.id).white_name == "white"
+def test_a_bot_maps_its_own_ids_onto_users(remote_client):
+    first = remote_client.get_or_create_user_by_identity("discord", "123456789012345678", "gabe")
+    again = remote_client.get_or_create_user_by_identity("discord", "123456789012345678", "renamed-meanwhile")
+    assert again.id == first.id and again.username == "gabe"
+    other = remote_client.get_or_create_user_by_identity("discord", "42", "friend")
+    challenge = remote_client.challenge(other.id, player_id=first.id)
+    state = remote_client.accept_challenge(challenge.id)
+    assert {state.white_id, state.black_id} == {first.id, other.id}
