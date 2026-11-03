@@ -17,6 +17,7 @@ lock up front with ``BEGIN IMMEDIATE``. See :func:`locked_transaction`.
 from __future__ import annotations
 
 import contextvars
+import importlib.util
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -79,6 +80,34 @@ def parse_url(url: str | None):
     if backend not in SUPPORTED_BACKENDS:
         supported = ", ".join(sorted(SUPPORTED_BACKENDS))
         raise errors.SQLError(f"Unsupported database backend {backend!r}. Supported backends: {supported}.")
+    return _pin_postgres_driver(parsed)
+
+
+def _pin_postgres_driver(parsed):
+    """
+    Name the PostgreSQL driver explicitly when the URL does not.
+
+    A bare ``postgresql://`` leaves the driver up to SQLAlchemy's default, and
+    that default changed: 2.0 picks psycopg2, 2.1 picks psycopg (v3). So the
+    same URL and the same ``chesssnake[api,postgres]`` install works or fails
+    depending on which SQLAlchemy got resolved, which is not a thing a user can
+    reasonably debug -- it surfaces as ``No module named 'psycopg'`` from a
+    package that installed psycopg2.
+
+    Choosing whichever driver is actually installed removes the dependency on
+    that default, and lets anyone opt into psycopg3 by installing it. A URL that
+    already names a driver (``postgresql+psycopg://``) is left alone.
+
+    :param parsed: the parsed SQLAlchemy URL.
+    :return: the URL, with a driver named if it is PostgreSQL and had none.
+    """
+    if parsed.drivername != "postgresql":
+        return parsed
+    for driver in ("psycopg2", "psycopg"):
+        if importlib.util.find_spec(driver) is not None:
+            return parsed.set(drivername=f"postgresql+{driver}")
+    # Neither is installed. Leave it as it was so create_engine raises the
+    # ModuleNotFoundError that carries the install hint.
     return parsed
 
 
