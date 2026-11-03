@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .assets import asset_path
 
@@ -144,6 +144,92 @@ class DatabaseSettings(_Section):
         return self
 
 
+class WebsocketSettings(_Section):
+    """
+    Real-time updates over a websocket at ``/v1/ws``. Off unless enabled.
+
+    The transport settings (pings, frame size, compression, shutdown) are applied
+    by ``chesssnake api-endpoint``, which runs uvicorn; another ASGI server is
+    configured its own way, although frame size is also enforced by the app.
+    """
+
+    enabled: bool = Field(default=False, description="Serve real-time updates at /v1/ws.")
+    max_connections: int = Field(
+        default=1000, ge=1, description="Open websockets allowed in total, counted from the moment one is accepted."
+    )
+    max_pending_auth: int = Field(
+        default=100, ge=1, description="Websockets allowed to be connected but not yet authenticated."
+    )
+    max_connections_per_user: int = Field(default=10, ge=1, description="Open websockets allowed per user.")
+    max_subscriptions: int = Field(default=64, ge=1, description="Games one websocket may follow at once.")
+    auth_timeout_seconds: float = Field(
+        default=10.0, gt=0, description="Seconds a new websocket has to send its token before it is closed."
+    )
+    reauth_interval_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="How often an open websocket's token is checked again (logouts close sockets at once anyway).",
+    )
+    send_queue_size: int = Field(
+        default=256, ge=1, description="Messages buffered per websocket before it is closed as unable to keep up."
+    )
+    ping_interval_seconds: float = Field(
+        default=20.0,
+        ge=0,
+        description="Seconds between protocol pings that keep proxies from idling a socket out; 0 disables.",
+    )
+    ping_timeout_seconds: float = Field(
+        default=20.0, ge=1, description="Close a websocket whose ping goes unanswered for this long."
+    )
+    max_message_bytes: int = Field(default=65536, ge=1024, description="Largest message accepted from a client.")
+    compression: bool = Field(
+        default=False, description="permessage-deflate compression (costs memory per socket; messages are small)."
+    )
+    worker_threads: int = Field(
+        default=4, ge=1, description="Threads for websocket database work, kept apart from the REST routes' threads."
+    )
+    shutdown_timeout_seconds: float = Field(
+        default=5.0, gt=0, description="On shutdown, how long open connections get before they are cut off."
+    )
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description='Browser origins allowed to connect, e.g. "https://chess.example"; "*" allows any. '
+        "Clients that send no Origin (anything but a browser) are always allowed; the token is what admits them.",
+    )
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value):
+        # The environment can only carry a string: accept a comma-separated list.
+        if isinstance(value, str):
+            value = value.split(",")
+        return value
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _normalize_origins(cls, value: list[str]) -> list[str]:
+        origins = [origin.strip().lower().rstrip("/") for origin in value if origin.strip()]
+        if not origins:
+            raise ValueError('list at least one origin, or "*" for any')
+        if "*" in origins and len(origins) > 1:
+            raise ValueError('"*" already allows every origin; list it alone')
+        return origins
+
+    @model_validator(mode="after")
+    def _check_limits(self) -> WebsocketSettings:
+        if self.max_connections_per_user > self.max_connections:
+            raise ValueError("max_connections_per_user cannot be larger than max_connections")
+        if self.max_pending_auth > self.max_connections:
+            raise ValueError("max_pending_auth cannot be larger than max_connections")
+        return self
+
+    def origin_allowed(self, origin: str | None) -> bool:
+        """Whether a websocket upgrade with this ``Origin`` header may connect."""
+        if origin is None or self.allowed_origins == ["*"]:
+            return True
+        return origin.strip().lower().rstrip("/") in self.allowed_origins
+
+
 class ClientSettings(_Section):
     """
     Fallbacks for remote :class:`chesssnake.Game` clients.
@@ -173,6 +259,7 @@ class Settings(BaseModel):
     # pydantic deep-copies model defaults per instance, so these are not shared.
     api: ApiSettings = ApiSettings()
     database: DatabaseSettings = DatabaseSettings()
+    websocket: WebsocketSettings = WebsocketSettings()
     client: ClientSettings = ClientSettings()
 
     def advisories(self) -> list[str]:
@@ -534,4 +621,7 @@ def _render(section: str, key: str, value: Any, show_secrets: bool) -> str:
     if _marker(section, key, "dsn"):
         # Keep the host and database visible; only the password is sensitive.
         return redact_dsn(str(value))
+    if isinstance(value, list):
+        # The form the environment variable takes, so it can be copied back in.
+        return ",".join(str(item) for item in value)
     return str(value)

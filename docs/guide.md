@@ -238,7 +238,7 @@ Type a move in algebraic notation, or one of:
 | `fen` / `pgn` | the position as FEN / the game as PGN |
 | `draw`, `accept`, `decline` | offer a draw, answer an offer |
 | `resign` | resign |
-| `refresh` | check the server now (it also polls on its own) |
+| `refresh` | check the server now (normally unnecessary; see below) |
 | `new` | after a game: challenge your opponent to a rematch, or accept theirs |
 | `save PATH` | write a PNG of the board |
 | `help`, `quit` | |
@@ -248,15 +248,20 @@ Notes:
 - **`--api-url` can be omitted** if `CHESSSNAKE__CLIENT__API_URL` is set.
 - **You play as the user you logged in as.** The server enforces turn order, and the
   board faces your side.
-- **Both players** run `play` on the same game. While you sit at the prompt the
-  session **polls every 10 seconds** and announces the opponent's move when it lands;
-  `--refresh SECONDS` changes the interval and `--refresh 0` turns it off. Every
-  command re-reads the server first too, so you are never shown a stale position.
-  (It is polling, not push; push arrives with websockets in 0.13.0.)
+- **Both players** run `play` on the same game, and each sees the other's move the
+  moment it is made, while sitting at the prompt. This uses the server's
+  [live updates](realtime-websockets.md) when it offers them. When it does not
+  (they are off by default), `play` says so on startup and instead **polls every 10
+  seconds**; `--refresh SECONDS` changes the interval and `--refresh 0` turns it
+  off. `--no-live` polls even when live updates are available. If the live
+  connection drops, the session says so, polls until it is back, and catches up.
+  Every command re-reads the server first too, so you are never shown a stale
+  position. On Windows, where a terminal cannot be waited on together with a
+  socket, live updates show when you next press Enter.
 - **Rematches are challenges.** `new` after a game sends your opponent a challenge
-  with the colours swapped, or accepts theirs if they sent one first. If a rematch
-  starts while you are still looking at the old game, the session says so and `new`
-  joins it.
+  with the colours swapped, or accepts theirs if they sent one first. If your
+  opponent challenges you, or a rematch starts while you are still looking at the
+  old game, the session says so and `new` accepts or joins it.
 - **An expired login ends the session** with a note to run `chesssnake login`, rather
   than failing on every line.
 - `--white-name`, `--black-name` and `--me` are for `--local` games only.
@@ -354,6 +359,8 @@ services:
       CHESSSNAKE__DATABASE__INIT_SCHEMA: "1"          # idempotent, safe to leave on
       # Every /v1 route needs a login. Uncomment to let people register themselves.
       # CHESSSNAKE__API__REGISTRATION: "open"
+      # Uncomment for live updates (chesssnake play shows moves as they happen).
+      # CHESSSNAKE__WEBSOCKET__ENABLED: "1"
     # The server only writes to /data.
     read_only: true
     tmpfs: [/tmp]
@@ -437,6 +444,11 @@ such as Caddy in front of it) if it is reachable from anywhere you do not trust;
 another machine. There is no rate limit on logins: each attempt is deliberately
 slow (Argon2), and at most four are checked at once, but a server open to the
 internet should also be behind something that limits requests.
+
+With `CHESSSNAKE__WEBSOCKET__ENABLED` on, the proxy must also pass websocket
+upgrades through to `/v1/ws`. Caddy's `reverse_proxy` does without any extra
+configuration; nginx needs the `Upgrade`/`Connection` headers. See
+[Running it](realtime-websockets.md#running-it).
 
 ### Building it yourself
 

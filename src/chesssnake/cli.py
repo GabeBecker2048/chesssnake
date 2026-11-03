@@ -111,7 +111,21 @@ def _run_api_endpoint(args):
     # what lets command-line flags reach the server at all. Note this rules out
     # uvicorn's --reload/--workers; those re-import in a fresh process, where only
     # the environment and config file survive.
-    uvicorn.run(create_app(settings), host=settings.api.host, port=settings.api.port)
+    ws = settings.websocket
+    uvicorn.run(
+        create_app(settings),
+        host=settings.api.host,
+        port=settings.api.port,
+        # Websocket transport, from [websocket]. uvicorn treats a ping interval of
+        # None as "never"; ws_max_queue is not passed because uvicorn's websocket
+        # implementation ignores it.
+        ws_ping_interval=ws.ping_interval_seconds or None,
+        ws_ping_timeout=ws.ping_timeout_seconds,
+        ws_max_size=ws.max_message_bytes,
+        ws_per_message_deflate=ws.compression,
+        # Bounds shutdown with sockets open, so `docker stop` is not left to SIGKILL.
+        timeout_graceful_shutdown=ws.shutdown_timeout_seconds,
+    )
 
 
 @contextmanager
@@ -439,6 +453,7 @@ def _run_play(args):
             sys.exit("With --local, --me is 0 (white) or 1 (black)")
         game = Game.local(white_name=args.white_name, black_name=args.black_name)
         player_id = args.me
+        events = None
     else:
         if args.white_name or args.black_name or args.me is not None:
             sys.exit(
@@ -465,10 +480,11 @@ def _run_play(args):
         # as whichever side is to move instead, sending that player's id.
         playing = me.id in (game.wid, game.bid)
         player_id = None if (me.is_admin and not playing) else me.id
+        events = None if args.no_live else _live_updates(client, game.id, args.refresh)
 
     color = not args.no_color and sys.stdout.isatty()
-    sys.exit(
-        run_session(
+    try:
+        status = run_session(
             game,
             player_id=player_id,
             stdin=sys.stdin,
@@ -477,8 +493,33 @@ def _run_play(args):
             figurines=not args.ascii,
             perspective=args.perspective,
             refresh_seconds=args.refresh,
+            events=events,
         )
-    )
+    finally:
+        # Every way out (quit, EOF, Ctrl+C's 130, a logged-out 1) closes the socket.
+        if events is not None:
+            events.close()
+    sys.exit(status)
+
+
+def _live_updates(client, game_id, refresh):
+    """
+    A live stream for this game, or ``None`` (with a note) to poll instead.
+
+    Live updates are opt-in on the server, so not having them is normal, not an
+    error: say why, and say what happens instead.
+    """
+    from .db.errors import AuthError
+    from .remote.realtime import RealtimeUnavailable
+
+    try:
+        return client.events(games=[game_id])
+    except RealtimeUnavailable as e:
+        polling = f"polling every {refresh:g} s" if refresh > 0 else "not refreshing (--refresh 0)"
+        print(f"note: no live updates: {e}; {polling}", file=sys.stderr)
+        return None
+    except AuthError as e:
+        sys.exit(f"{e}\nLog in again with `chesssnake login`.")
 
 
 def _run_config_show(args):
@@ -600,7 +641,13 @@ def main(argv=None):
         type=float,
         default=10.0,
         metavar="SECONDS",
-        help="while waiting at the prompt, re-read the server this often (default 10; 0 disables)",
+        help="without live updates, re-read the server this often while waiting (default 10; 0 disables)",
+    )
+    play.add_argument(
+        "--no-live",
+        dest="no_live",
+        action="store_true",
+        help="do not use the server's live updates; poll every --refresh seconds instead",
     )
     play.add_argument("--ascii", action="store_true", help="draw pieces as letters instead of figurines")
     play.add_argument("--no-color", dest="no_color", action="store_true", help="never emit ANSI colour")

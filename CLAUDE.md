@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.12.0 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1, published container images in 0.9.2, the threadpool in 0.10.0, users and the redesigned schema in 0.11.0, logins and challenge-created games in 0.12.0 — see `CHANGELOG.md`, with what is next in `ROADMAP.md`).
+`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.13.0 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1, published container images in 0.9.2, the threadpool in 0.10.0, users and the redesigned schema in 0.11.0, logins and challenge-created games in 0.12.0, websocket live updates in 0.13.0 — see `CHANGELOG.md`, with what is next in `ROADMAP.md`).
 
 The package uses a **`src/` layout**: all importable code lives under `src/chesssnake/` (tests import the installed package, not a repo-root package).
 
@@ -27,6 +27,7 @@ uv run python examples/example.py        # core (no-DB) smoke example
 
 # Run the api-endpoint server (needs the `api` extra + a configured database.url / docker compose Postgres)
 uv run chesssnake api-endpoint --host 0.0.0.0 --port 8000 --init-db
+uv run chesssnake api-endpoint --init-db -o websocket.enabled=true   # with live updates at /v1/ws
 uv run chesssnake init-db                # just create the schema, then exit
 uv run chesssnake init-db --drop         # drop every table first (pre-1.0 schema changes)
 uv run chesssnake user create alice --admin   # accounts, straight in the database; prompts for a password
@@ -47,6 +48,8 @@ uv run pytest                            # everything under tests/
 uv run pytest tests/unit                 # fast, pure-Python engine tests (no DB; incl. the play session + text board)
 uv run pytest tests/integration          # API + remote-Game stack, run against BOTH backends:
                                          # a temp SQLite file and a throwaway Postgres (pgserver)
+                                         # (the shared app has websockets ON, so every REST test also
+                                         # runs the publish path; test_play_live.py runs real uvicorn)
 CHESSSNAKE_TEST_BACKENDS=sqlite uv run pytest tests/integration   # SQLite only (no pgserver needed)
 uv run pytest tests/config               # config + CLI; needs pydantic but no database
 uv run pytest tests/unit/test_rules.py::test_en_passant_capture  # a single test
@@ -163,6 +166,8 @@ Every setting is declared **once**, as a field on a section model in `config.py`
 - Bootstrap vars `CHESSSNAKE_CONFIG` and `CHESSSNAKE_HOME` use a **single** underscore, so they can't collide with the `CHESSSNAKE__` setting prefix.
 - There is no auth on/off setting: every `/v1` route but login/register needs a token. `api.registration` (`closed`/`open`) and `api.session_lifetime_days` are the only auth settings. `Settings.advisories()` remains as a hook (currently empty). The 0.11 `api.require_auth`/`api.api_key` are gone, and `extra="forbid"` turns a stale one in a file into a startup error.
 
+- `[websocket]` (0.13) holds every live-update knob; `enabled` defaults to **false**. `allowed_origins` is the first list-valued setting: a TOML array in a file, **comma-separated** in `CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS`, normalized (lowercase, no trailing `/`), with `*` alone or not at all; `config show` prints it comma-joined. Cross-field limits are `model_validator`s. `cli.py` passes the transport keys (pings, `ws_max_size`, compression, `timeout_graceful_shutdown`) to `uvicorn.run`; `ws_max_queue` is not passed because uvicorn ignores it, and the app enforces `max_message_bytes` itself for `--factory` deployments that skip those flags.
+
 Full reference: `docs/configuration.md`. The commented default file shipped by `chesssnake config init` is `src/chesssnake/data/chesssnake.toml` (registered under `[tool.setuptools.package-data]`); tests assert it stays valid and documents every schema field, so **add a documented block there whenever you add a setting**.
 
 ### `engine/` — the chess engine (no external deps beyond Pillow, for rendering)
@@ -186,6 +191,7 @@ Full reference: `docs/configuration.md`. The commented default file shipped by `
 
 - `game.py` — `Game(BaseGame)` (built via `Game.local()`/`Game.remote()`/`Game.from_state()`) and `connect()`, which resolves a token from: `username`+`password` (logs in), `token=`, `$CHESSSNAKE__CLIENT__TOKEN`, then `credentials.load(url)`; as a library it raises `AuthError` rather than prompting. The low-level `Game.__init__(*args, client=None, player_id=None, version=None, generation=None, game_id=None, **kwargs)` is internal. For remote games, `move`/`resign`/`draw_*` call the client by game id (sending `player_id` + the tracked `version`) and pass the returned state to `_apply_state` (rebuilds the mirror board via `serialize.board_and_turn` from the FEN, updates `version`); `last_move` is a lightweight `_MoveMarker` for render highlighting. `legal_moves`/`pgn`/`history` proxy to the server when remote, or run the local engine otherwise.
   - The 0.11 module helpers (`create_user`, `challenge`, `record`, ...) are gone: every call needs the same authenticated client, so they are `ApiClient` methods now. Methods that take a player accept an id or a username (`ApiClient.resolve`).
+- `realtime.py` — `EventStream(client, games=())`, returned by `ApiClient.events()`; `websockets` (in the `client` extra) is imported **lazily**, only when a stream is made. The first connection either works or raises `RealtimeUnavailable` with the reason (HTTP 403 means websockets are off; a 4401 raises `AuthError`). After that a **daemon thread** reads the socket and only queues, writing one byte to a non-blocking self-pipe per event (`fileno()` for `select`; `drain()` empties the pipe *before* the queue so no wakeup is lost). On a drop it emits `disconnected`, reconnects with backoff (1 s doubling to 30 s), re-sends the whole wanted-games set (kept under a lock, so a `subscribe` racing a reconnect is not lost), then emits `reconnected`; 4400/4403, or an HTTP status on reconnect, emit `ended`; 4401 emits `auth_error`.
 - `client.py` — `ApiClient(base_url, session=None, token=None)`. Prefixes `/v1`, adds `Authorization: Bearer` when it has a token (`login()` sets it). `session` defaults to `requests.Session()` but can be **injected** (tests pass a FastAPI `TestClient`). `move()` → `dto.MoveResult`; `get_game`/`accept_challenge`/`create_game`/`resign`/draw → `dto.GameState`; `legal_moves`/`history` → lists; `pgn`/`fen` → text; `image()` → PNG bytes. **Error mapping** covers both `engine.errors` and `db.errors`: `_build_error_registry` maps class name→class, and `_raise` reconstructs via `cls.__new__(cls); exc.args=(detail,)` so `except PromotionError`/`except VersionConflictError` work.
 
 ### `play.py` — the terminal client (`chesssnake play`)
@@ -218,8 +224,7 @@ a local and a remote game**. Anything it does, the client could already do.
   **proxied to the server** while the board and `fen` come from the local mirror, so
   without it the two disagree the moment the opponent moves — `moves` would list the
   legal moves of a position not on screen. It returns whether the version actually moved
-  on, so the caller can redraw and say so instead of silently changing the board. There
-  is still **no polling**: nothing arrives while the prompt sits idle.
+  on, so the caller can redraw and say so instead of silently changing the board.
 - **The session follows one game id**, so an action can never land in a rematch (before
   0.11 one could, and did). Once the game is over, `sync()` also looks for a **newer
   game between the same two players** (by id, which only increases; *not* by
@@ -231,7 +236,20 @@ a local and a remote game**. Anything it does, the client could already do.
 - **An `AuthError` ends the session** (exit 1, "run `chesssnake login`"), from a command or
   from an idle poll. It is a `GameError`, so without this special case it would be
   printed and repeated on every line and every poll.
-- **`wait_for_line()` is the one thing the session does unasked**, polling every
+- **Live updates (0.13) arrive through `events`**, an optional stream with `fileno()`,
+  `drain()`, `subscribe()`, `unsubscribe()` (`remote.realtime.EventStream`; the unit tests
+  pass a fake over a real `os.pipe`). `cli.py` tries `client.events([game.id])` first and
+  falls back to polling with a note on `RealtimeUnavailable`; `--no-live` skips it.
+  While **connected**, `_wait_live` `select`s on stdin and the stream fd with **no
+  timeout**: nothing is polled. While **disconnected** (a `disconnected` event) it uses
+  the `--refresh` timeout and `sync()`s until `reconnected`. `handle_events()` runs on
+  the session's thread (the stream's reader thread only queues), version-checks every
+  state against the mirror, and is also called before each prompt, which is how
+  events reach a stdin that cannot be selected on (Windows, a `StringIO`). `auth_error`
+  raises `AuthError` (ends the session); `ended` drops to polling; `game_started` for
+  the same two players and group sets `newer_game`; `_switch_to` moves the
+  subscription to the rematch.
+- **Without a live stream, `wait_for_line()` is the one thing the session does unasked**, polling every
   `--refresh` seconds (default 10, `0` disables; one poll is a single small GET, measured
   at ~25 ms against a LAN deployment, so the interval is a feel decision not a load one). `select` rather than a thread, so one
   thread touches the game and the output stream and there is nothing to shut down. It
@@ -270,7 +288,9 @@ loop and blocks every other request for its whole duration. They were all `async
 with no `await` anywhere until 0.10.0, so the server handled one request at a time.
 `tests/integration/test_threadpool.py` fails if one goes back.
 
-**`/health` is the one `async def` route, also deliberately.** It touches nothing, so
+**`/health` and `/v1/ws` are the only `async def` routes, also deliberately** (the
+websocket is I/O-bound and offloads its blocking calls; see `realtime.py` below).
+**`/health`** It touches nothing, so
 leaving it on the loop means it answers immediately while every worker thread is busy,
 which is what keeps the container's two-second healthcheck honest under load. Note the
 asymmetry this buys: `/health` is a *liveness* probe and after this change it cannot
@@ -300,8 +320,18 @@ copies the context into the worker, so it is correct today precisely because not
 inside `apply_game_change` offloads to another thread. If anything ever does, SQLite
 silently falls back to a deferred `BEGIN` with no error, which is the bug class above.
 
-- `auth.py` — `authenticate(raw_token) -> Principal` (transport-agnostic: the HTTP dependency `current_principal` wraps it, and a 0.13 websocket will call it with the token from its first message); `acting_as(principal, player_id, participants=, require_actor=)` decides who an action is performed as (non-admins: always themselves; admins: the named `player_id`, else themselves if playing, else "side to move" for a move only; never a disabled user); `login()`; Argon2 hashing behind the semaphore. Database errors inside `authenticate` are **not** turned into 401: a saturated pool stays a 503.
-- `server.py` — `create_app(settings)` builds the FastAPI app (settings on `app.state.settings`); a module-level PEP 562 `__getattr__` still resolves `chesssnake.api.server:app` lazily for ASGI import strings. **The public router (`login`, `register`) is built per app by `_public_router(settings)` and included on the app, not into `v1`**: a router included into `v1` inherits its auth dependency. **38 routes in all**, pinned by `test_threadpool.py`, which walks them with `fastapi.routing.iter_route_contexts` (FastAPI 0.139 keeps included routers as wrappers, so `app.routes` alone misses them). Every route also has a row in `tests/integration/test_permissions.py`'s table (expected status for anonymous / outsider / player / admin), and a route without a row fails the suite. Game routes are by id; literal routes (`/games/between`, `/games/record`) are registered before `/games/{game_id}`. Mutating game routes resolve the actor **before** the transaction (it may read users), then `apply_game_change(game_id, mutate, expected_version)`; `mutate` checks the turn only for a game in progress, so a finished game answers `GameOverError`, not "not your turn". `_load_game` prepends the starting position's key; `_change` builds the `GameChange` and clears `draw` on a finished game. Handlers: `AuthError`→401 (with `WWW-Authenticate: Bearer`), `ForbiddenError`/`NotYourTurnError`→403, `*NotFoundError`→404, `ChallengeError`/`VersionConflictError`/`UserExistsError`→409, `SQLIdError`/`UserValidationError`→422, `SQLBusyError`→503, `SQLError`→500, `ChessError`/`GameError`→400. `lifespan` inits the pool and **refuses to start on a database whose existing tables differ from the schema** (`schema.stale_tables`), since `create_all` never alters a table and there are no migrations; its `current_engine() is None` guard lets a second app share an existing pool, which is how the tests build an open-registration app alongside the default one.
+- `auth.py` — `authenticate(raw_token) -> Principal` (transport-agnostic: the HTTP dependency `current_principal` wraps it, and the websocket calls it with the token from its first message, through the broker's own thread limiter); `acting_as(principal, player_id, participants=, require_actor=)` decides who an action is performed as (non-admins: always themselves; admins: the named `player_id`, else themselves if playing, else "side to move" for a move only; never a disabled user); `login()`; Argon2 hashing behind the semaphore. Database errors inside `authenticate` are **not** turned into 401: a saturated pool stays a 503.
+- `server.py` — `create_app(settings)` builds the FastAPI app (settings on `app.state.settings`); a module-level PEP 562 `__getattr__` still resolves `chesssnake.api.server:app` lazily for ASGI import strings. **The public router (`login`, `register`) is built per app by `_public_router(settings)` and included on the app, not into `v1`**: a router included into `v1` inherits its auth dependency. **38 HTTP routes in all** (plus `/v1/ws` when websockets are on, pinned separately), pinned by `test_threadpool.py`, which walks them with `fastapi.routing.iter_route_contexts` (FastAPI 0.139 keeps included routers as wrappers, so `app.routes` alone misses them). Every route also has a row in `tests/integration/test_permissions.py`'s table (expected status for anonymous / outsider / player / admin), and a route without a row fails the suite. Game routes are by id; literal routes (`/games/between`, `/games/record`) are registered before `/games/{game_id}`. Mutating game routes resolve the actor **before** the transaction (it may read users), then `apply_game_change(game_id, mutate, expected_version)`; `mutate` checks the turn only for a game in progress, so a finished game answers `GameOverError`, not "not your turn". `_load_game` prepends the starting position's key; `_change` builds the `GameChange` and clears `draw` on a finished game. Handlers: `AuthError`→401 (with `WWW-Authenticate: Bearer`), `ForbiddenError`/`NotYourTurnError`→403, `*NotFoundError`→404, `ChallengeError`/`VersionConflictError`/`UserExistsError`→409, `SQLIdError`/`UserValidationError`→422, `SQLBusyError`→503, `SQLError`→500, `ChessError`/`GameError`→400. `lifespan` inits the pool and **refuses to start on a database whose existing tables differ from the schema** (`schema.stale_tables`), since `create_all` never alters a table and there are no migrations; its `current_engine() is None` guard lets a second app share an existing pool, which is how the tests build an open-registration app alongside the default one.
+- `realtime.py` — live updates at `/v1/ws` (protocol: `docs/realtime-websockets.md`), registered by `create_app` **only when `websocket.enabled`**; off, the upgrade gets HTTP 403 and `app.state.broker` is the no-op base `Broker`, so publishing costs a REST request nothing. Load-bearing details:
+  - **One broker per app** on `app.state.broker`, reached by routes through `request` (`server._broker`). The `v1` router object is shared by every app in a process (the tests build several), so a module-level broker would cross their events.
+  - **Routes publish after `ops.*` returns**, i.e. after commit: moves/draws/resign → `game_changed`; accept and admin create → `game_started` (to both players' user topics); challenge create/delete → `challenge` (delete publishes from the challenge read *before* deleting); admin delete → `game_removed`; logout/revoke → `recheck_token`, password change/reset and disable → `recheck_user`, which close those sockets at once (the periodic `reauth_interval` check is the backstop, e.g. for `chesssnake user` run on the server's machine).
+  - **`_publish` runs in a worker thread and never raises**: the change is already committed, so an exception would turn a saved move into a 500. It serializes once and hands over with `loop.call_soon_threadsafe`; everything touching sockets, queues and topic tables runs on the loop thread. The loop (and the dedicated `CapacityLimiter`, `worker_threads`) is captured lazily in `admit()`, the first code sure to run on the loop.
+  - **Every refusal closes after `accept()`** (4401/4403/4408/4429/4400/1009/1013): a close before accepting reaches a real client as a bare HTTP 403, losing the code and reading as "websockets off".
+  - **Versions never go backwards per connection**: `Connection.seen` is a high-water mark per game, and `pending` holds events that arrive while a `subscribe` snapshot is being read (subscribe-before-read, then send the newer of snapshot and held state). Two worker threads can publish moves out of order; this is what hides it.
+  - One sender task is the only writer; `request_close()` is the only way to close (idempotent; cancels the connection's task group; the handler's `finally` unregisters and sends the close once). uvicorn's websocket implementation never applies send backpressure (its `writable` flag is never cleared), so a client that stops reading is bounded by the ping timeout, and `send_queue_size` only bounds the server's own buffering (overflow → 1013). uvicorn closes every socket with 1012 on shutdown, before the app's shutdown code runs.
+  - Blocking work (`authenticate`, snapshot reads) goes through `anyio.to_thread.run_sync` on the broker's **own** limiter, so a reconnect storm cannot take REST's threads. A `GameError` during reauth keeps the socket (only `AuthError` closes it).
+  - **In-process only**: several workers/replicas would each have their own broker. `Broker` is the seam for a PostgreSQL LISTEN/NOTIFY implementation (not built).
+  - Measured (0.13.0, local): ~56 KiB RSS per authenticated idle socket (500 sockets: 70 → 97 MiB); SIGTERM to exit with 500 open: 0.14 s; REST move to the other player's `play` screen: ~10 ms.
 
 ### `db/` — the database layer (tier 3, **engine-free**)
 

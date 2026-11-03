@@ -29,6 +29,8 @@ through a REST api-endpoint that many clients can share.
 - Standard formats in and out: FEN, PGN, SAN, legal-move listing.
 - **The server owns the rules**, so a client cannot cheat and a frontend in any
   language needs no chess logic of its own.
+- **Live updates** (opt-in): clients can follow games over a websocket and see
+  each move the moment it is made, instead of polling.
 - Pure Python. Pillow is the only dependency for a local game.
 
 Pronounced "chess-snake", after Python being a kind of snake. Not cheesecake.
@@ -98,6 +100,8 @@ services:
       CHESSSNAKE__DATABASE__INIT_SCHEMA: "1"
       # Anyone may make an account only if you open registration:
       # CHESSSNAKE__API__REGISTRATION: "open"
+      # Live updates: chesssnake play shows the opponent's move as it happens.
+      # CHESSSNAKE__WEBSOCKET__ENABLED: "1"
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -129,6 +133,10 @@ chesssnake challenge bob                              # bob runs: chesssnake acc
 chesssnake play --vs bob
 ```
 
+With live updates on (`CHESSSNAKE__WEBSOCKET__ENABLED`), each player's terminal
+shows the other's move the moment it is made; without them it checks every 10
+seconds.
+
 From Python:
 
 ```python
@@ -153,6 +161,8 @@ curl -X POST localhost:8000/v1/games/1/moves -H "Authorization: Bearer $TOKEN" \
 - [The guide](docs/guide.md): the Python API, running an api-endpoint, playing
   in a terminal, and deploying with Docker
 - [REST API reference](docs/rest-api.md): every endpoint, every error code
+- [Real-time updates](docs/realtime-websockets.md): the websocket protocol, for
+  frontends that want moves as they happen
 - [Configuration](docs/configuration.md): every setting and its environment variable
 - [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md): what changed, and what is next
 - [CLAUDE.md](CLAUDE.md): how the codebase fits together, useful to any contributor
