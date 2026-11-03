@@ -1,22 +1,64 @@
-![](https://github.com/GabeBecker2048/chesssnake/raw/main/logo/chesssnake_logo_250.png)
+<div align="center">
 
+<img src="https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/logo/chesssnake_logo_250.png" alt="chesssnake" width="200">
 
-# Chesssnake
+# chesssnake
 
-*chesssnake* is a feature-packed Python library for playing, visualizing, and storing chess games
+**Play, render and persist chess games in Python — from a library, a REST API, or your terminal.**
 
-Pronounced "chess - snake", in reference to Python being a type of snake. It is not pronounced cheesecake
+[![PyPI](https://img.shields.io/pypi/v/chesssnake)](https://pypi.org/project/chesssnake/)
+[![Python versions](https://img.shields.io/pypi/pyversions/chesssnake)](https://pypi.org/project/chesssnake/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/GabeBecker2048/chesssnake/blob/main/LICENSE)
+[![CI](https://github.com/GabeBecker2048/chesssnake/actions/workflows/ci.yml/badge.svg)](https://github.com/GabeBecker2048/chesssnake/actions/workflows/ci.yml)
 
-*Note: This library is in alpha. Updates will regularly contain breaking changes. Not recommended for production usage until version 1.0.0*
+</div>
+
+![A finished game of scholar's mate, rendered by chesssnake: the same position from both players' points of view, with the mating move highlighted](https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/board.png)
+
+<sub>Rendered by chesssnake itself — `game.save("board.png")` after `1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 4. Qxf7#`. The last move is highlighted, and each player sees the board from their own side.</sub>
+
+Pronounced "chess-snake", after Python being a kind of snake. Not cheesecake.
+
+> **Alpha.** Minor versions regularly contain breaking changes. Not recommended for
+> production until 1.0.0. See [VersionHistory.md](https://github.com/GabeBecker2048/chesssnake/blob/main/VersionHistory.md).
 
 ## Features
 
-- Play chess in Python with an easy-to-use and intuitive API
-- Store and retrieve chess games through a REST **api-endpoint** backed by SQLite or PostgreSQL. Many game clients can share one database, without writing any SQL!
-- Generate PNG or JPEG images files of your game
-- PIL image support for manipulating images of your chess games
-- Play from the terminal with `chesssnake play` — no code, and no server needed for a local game
-- Includes a highly optimized python-only chess library
+- **A complete chess engine in pure Python** — full rules, including castling, en
+  passant, promotion, checkmate and stalemate, plus draws by threefold repetition,
+  the fifty-move rule and insufficient material.
+- **Board images** — render any position to a PNG or JPEG, from one side or both,
+  with the last move highlighted. Returns a PIL image, so you can keep editing it.
+- **Standard formats** — FEN in and out, PGN export, SAN move lists, legal-move
+  enumeration.
+- **Persistence without SQL** — a REST **api-endpoint** stores games in SQLite or
+  PostgreSQL. Many clients share one database; nobody writes a query.
+- **The server owns the rules**, so a client cannot cheat and a frontend in any
+  language needs no chess logic of its own.
+- **Play in your terminal** — `chesssnake play`, with no server needed for a local game.
+- **Runs in Docker** — one image, either database, chosen at runtime.
+
+## Quick start
+
+```bash
+pip install chesssnake
+```
+
+```python
+from chesssnake import Game
+
+game = Game.local(white_name="Gabe", black_name="Claude")
+game.move("e4")
+game.move("e5")
+game.save("board.png")        # a PNG of the position
+print(game.fen)               # rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2
+```
+
+Or play it in the terminal, with nothing else installed and no server:
+
+```bash
+chesssnake play --local
+```
 
 ## Architecture
 
@@ -34,7 +76,7 @@ The same api-endpoint can be used three ways, in increasing order of how much it
 
 | | How | Needs | Good for |
 |---|---|---|---|
-| **1. REST** | Call the HTTP routes directly — see the [API reference](#rest-api-reference) | anything that speaks HTTP | a custom frontend, another language, a bot |
+| **1. REST** | Call the HTTP routes directly — see [docs/rest-api.md](docs/rest-api.md) | anything that speaks HTTP | a custom frontend, another language, a bot |
 | **2. Python client** | `Game.remote(...)` — an object that mirrors server state | `chesssnake[client]` | Python apps; the engine stays on the server |
 | **3. CLI** | `chesssnake play` — a board and a prompt | nothing extra | playing, and poking at a deployment by hand |
 
@@ -338,8 +380,30 @@ GET  /v1/games/789/record?player1=123&player2=456  -> head-to-head win/draw/loss
 Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`) and the
 head-to-head `record` helper are also importable from `chesssnake`.
 
-## REST API reference
+## Documentation
 
-Every endpoint — request/response shapes, all error codes, and how a client should
-interpret each response — is documented in **[docs/rest-api.md](docs/rest-api.md)**.
-Any HTTP client, in any language, can drive a full game with it.
+| | |
+|---|---|
+| [docs/rest-api.md](docs/rest-api.md) | Every REST endpoint: request and response shapes, all error codes, and how a client should interpret each one. Enough to drive a full game from any language. |
+| [docs/configuration.md](docs/configuration.md) | Every setting, its environment variable, and the four layers they resolve through. |
+| [docs/releasing.md](docs/releasing.md) | How a release reaches PyPI. |
+| [VersionHistory.md](VersionHistory.md) | What changed in each version, and what is planned. |
+| [CLAUDE.md](CLAUDE.md) | An orientation to the codebase — where each tier lives and why it is shaped that way. Useful to any contributor, not only to Claude. |
+
+## Contributing
+
+Issues and pull requests are welcome. The project is managed with
+[uv](https://docs.astral.sh/uv/):
+
+```bash
+uv sync --extra api --extra client --extra postgres   # the full stack
+uv run pytest                                         # both backends
+uv run ruff check && uv run ruff format --check && uv run mypy
+```
+
+CI runs the suite on Python 3.11–3.14, against both SQLite and PostgreSQL, with a
+coverage gate. `CLAUDE.md` is the fastest way into the codebase.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
