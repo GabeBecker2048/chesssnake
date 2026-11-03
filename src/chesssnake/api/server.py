@@ -114,6 +114,7 @@ _ERROR_STATUS = (
     (errors.VersionConflictError, 409),
     (errors.NotYourTurnError, 403),
     (errors.GameNotFoundError, 404),
+    (errors.SQLBusyError, 503),
     (errors.SQLError, 500),
     (errors.GameError, 400),
     (chess_errors.ChessError, 400),

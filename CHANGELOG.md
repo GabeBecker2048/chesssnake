@@ -17,6 +17,12 @@ documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md
   is busy. It went from 325 ms under load to 10 ms, which matters because the
   container healthcheck gives it a two second timeout.
 
+### Added
+- A `503` response when every database connection is in use, instead of waiting
+  thirty seconds and then reporting a generic server error. Nothing is wrong in
+  that case, the server is only saturated, and retrying shortly is the right
+  answer.
+
 ### Fixed
 - Creating or reopening a game no longer fails with `database is locked` on
   SQLite while a move is being applied. It read the latest generation and then

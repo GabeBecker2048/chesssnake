@@ -146,3 +146,57 @@ def test_an_in_memory_database_is_refused(api_client, monkeypatch):
     with pytest.raises(errors.SQLError, match="in-memory"):
         with TestClient(create_app(Settings(database={"url": "sqlite://"}))):
             pass  # pragma: no cover - the lifespan raises before the body runs
+
+
+def test_a_saturated_pool_answers_503_not_500(api_client, monkeypatch):
+    """
+    When every database connection is in use, the server says "busy", not "error".
+
+    Requests share a pool of connections (``pool_max_size``, default 10). Now
+    that they run concurrently they can all want one at once, and the one that
+    cannot get a connection used to wait 30 seconds and then surface
+    SQLAlchemy's internal timeout as a generic 500. That is both the wrong
+    status (nothing is broken, the server is just saturated) and far too long
+    to hold a request, since a worker thread running a sync route cannot be
+    cancelled when the client gives up.
+
+    Simulated by raising the timeout SQLAlchemy itself would raise, rather than
+    by actually exhausting the pool, which would need enough concurrency to
+    make the test slow and flaky.
+    """
+    from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+
+    from chesssnake.db import engine as db_engine
+
+    group, white, black = 73, 74, 75
+    assert (
+        api_client.post("/v1/games", json={"group_id": group, "white_id": white, "black_id": black}).status_code == 200
+    )
+
+    real_get_engine = db_engine.get_engine
+
+    def exhausted():
+        raise SQLAlchemyTimeoutError("QueuePool limit of size 1 overflow 9 reached, connection timed out")
+
+    monkeypatch.setattr(db_engine, "get_engine", exhausted)
+    try:
+        resp = api_client.get(f"/v1/games/{group}/{white}/{black}")
+    finally:
+        monkeypatch.setattr(db_engine, "get_engine", real_get_engine)
+
+    assert resp.status_code == 503, f"expected 503 Service Unavailable, got {resp.status_code}: {resp.text[:200]}"
+    body = resp.json()
+    assert body["error_type"] == "SQLBusyError"
+    assert "busy" in body["detail"].lower()
+
+
+def test_the_pool_gives_up_well_before_a_client_would():
+    """SQLAlchemy's 30 second default is longer than any caller will wait."""
+    from chesssnake.db import engine as db_engine
+
+    assert db_engine.POOL_TIMEOUT_SECONDS <= 15
+    engine = db_engine.create_engine("sqlite:////tmp/chesssnake-pool-timeout-check.db")
+    try:
+        assert engine.pool._timeout == db_engine.POOL_TIMEOUT_SECONDS
+    finally:
+        engine.dispose()
