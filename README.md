@@ -15,6 +15,7 @@ Pronounced "chess - snake", in reference to Python being a type of snake. It is 
 - Store and retrieve chess games through a REST **api-endpoint** backed by SQLite or PostgreSQL. Many game clients can share one database, without writing any SQL!
 - Generate PNG or JPEG images files of your game
 - PIL image support for manipulating images of your chess games
+- Play from the terminal with `chesssnake play` — no code, and no server needed for a local game
 - Includes a highly optimized python-only chess library
 
 ## Architecture
@@ -26,6 +27,18 @@ chesssnake is split into three tiers so that many lightweight game clients — i
 3. **Database** — the api-endpoint owns the database connection and does all SQL. SQLite needs no server; PostgreSQL is one config value away.
 
 Because the server owns the rules, any frontend (web, mobile, a chat bot, …) can use the chesssnake backend by speaking REST — no chess logic required on the client side. (A `Game.local(...)` game still runs the engine in-process, with no server needed.)
+
+### Three ways to drive it
+
+The same api-endpoint can be used three ways, in increasing order of how much it does for you:
+
+| | How | Needs | Good for |
+|---|---|---|---|
+| **1. REST** | Call the HTTP routes directly — see the [API reference](#rest-api-reference) | anything that speaks HTTP | a custom frontend, another language, a bot |
+| **2. Python client** | `Game.remote(...)` — an object that mirrors server state | `chesssnake[client]` | Python apps; the engine stays on the server |
+| **3. CLI** | `chesssnake play` — a board and a prompt | nothing extra | playing, and poking at a deployment by hand |
+
+All three hit the same routes and the same rules, so they interoperate: a game started in the CLI can be continued over REST, and vice versa.
 
 ## Installation
 
@@ -178,6 +191,66 @@ CHESSSNAKE__API__API_KEY='...' chesssnake api-endpoint --require-auth
 Then pass the same `api_key=` to `Game.remote(...)`. See
 [docs/configuration.md](docs/configuration.md) for the full list of settings, and
 `chesssnake config init` to write a fully commented starter config.
+
+### Playing from the terminal
+
+`chesssnake play` is the third way to use the backend: a board and a prompt, with
+no code to write.
+
+Against a running api-endpoint (the game is persisted, and the server runs the engine):
+
+```bash
+chesssnake play --api-url http://localhost:8000 --group 1 --white 10 --black 20 --me 10
+```
+
+Or offline, with no server and nothing but the core install:
+
+```bash
+chesssnake play --local
+```
+
+```
+8  ♜  ♞  ♝  ♛  ♚  ♝  ♞  ♜
+7  ♟  ♟  ♟  ♟  ♟  ♟  ♟  ♟
+6  ·  ·  ·  ·  ·  ·  ·  ·
+5  ·  ·  ·  ·  ·  ·  ·  ·
+4  ·  ·  ·  ·  ·  ·  ·  ·
+3  ·  ·  ·  ·  ·  ·  ·  ·
+2  ♙  ♙  ♙  ♙  ♙  ♙  ♙  ♙
+1  ♖  ♘  ♗  ♕  ♔  ♗  ♘  ♖
+   a  b  c  d  e  f  g  h
+
+Gabe (white) vs Claude (black)  |  gen 1  |  white to move
+
+> e4
+```
+
+Type a move in algebraic notation, or one of:
+
+| Command | |
+|---|---|
+| `moves` | list every legal move |
+| `board` / `flip` | redraw / view from the other side |
+| `fen` / `pgn` | the position as FEN / the game as PGN |
+| `draw`, `accept`, `decline` | offer a draw, answer an offer |
+| `resign` | resign |
+| `refresh` | re-fetch from the server (see the opponent's move) |
+| `new` | rematch, once the game is over |
+| `save PATH` | write a PNG of the board |
+| `help`, `quit` | |
+
+Notes:
+
+- **`--api-url` can be omitted** if `CHESSSNAKE__CLIENT__API_URL` is set. With neither,
+  `play` tells you so instead of hanging.
+- **`--me ID` is worth passing.** Turn order is then enforced, so you cannot
+  accidentally move for your opponent, and the board faces your side. Without it the
+  session acts as whoever is to move — which is what one person at one keyboard wants.
+- **Two players** each run `play` with the same `--group/--white/--black` and their own
+  `--me`. There is no push channel, so `refresh` is how the other side's move arrives.
+- `--ascii` draws pieces as letters, and `--no-color` emits no escape codes at all — both
+  useful over a flaky terminal or when piping to a file.
+- Add `--api-key` if the endpoint runs with `api.require_auth` on.
 
 ### Running in Docker
 
