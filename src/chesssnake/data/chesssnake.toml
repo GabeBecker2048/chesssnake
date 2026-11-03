@@ -126,9 +126,10 @@ pool_min_size = 1
 #: Values: integer >= 1, and no less than pool_min_size. Default 10.
 pool_max_size = 10
 
-#: Create the database schema when the api-endpoint starts. The schema script
-#: is idempotent, so leaving this on is safe, but it costs a connection and a
-#: few statements on every boot.
+#: Create the database schema when the api-endpoint starts. Only missing tables
+#: are created and existing ones are never altered, so leaving this on is safe,
+#: but it costs a connection and a few statements on every boot. It also means a
+#: release that changes the schema needs `chesssnake init-db --drop` first.
 #:
 #: Equivalent to passing --init-db. To create the schema once and exit instead,
 #: run `chesssnake init-db` (which also takes --create-database to create the

@@ -24,36 +24,31 @@ pytest.importorskip("sqlalchemy")
 
 pytestmark = pytest.mark.integration
 
-GROUP, WHITE, BLACK = 90, 91, 92
+GROUP = 90
 
 
 @pytest.fixture
-def game(api_client):
-    """A freshly created game to mutate."""
-    resp = api_client.post("/v1/games", json={"group_id": GROUP, "white_id": WHITE, "black_id": BLACK})
+def game(api_client, pair):
+    """A freshly created game to mutate; returns ``(group, white, black)``."""
+    white, black = pair
+    resp = api_client.post("/v1/games", json={"group_id": GROUP, "white_id": white, "black_id": black})
     assert resp.status_code == 200
-    return resp.json()
+    return GROUP, white, black
 
 
-def _bump(observed, errors_seen, hold):
+def _bump(game, observed, errors_seen, hold):
     """Run one no-op apply_game_change, recording the version it observed."""
     from chesssnake.db import operations as ops
 
-    def mutate(row, _history):
+    def mutate(row, _history, _now):
         observed.append(int(row["version"]))
         # Widen the window so an unserialized second caller would read the same
         # version before this one commits.
         time.sleep(hold)
-        columns = {
-            "fen": row["fen"],
-            "draw": row["draw"],
-            "status": row["status"],
-            "termination": row["termination"],
-        }
-        return columns, [], None
+        return ops.GameChange(fen=row["fen"], draw=row["draw"])
 
     try:
-        ops.apply_game_change(GROUP, WHITE, BLACK, mutate)
+        ops.apply_game_change(*game, mutate)
     except Exception as e:  # surfaced by the assertions below
         errors_seen.append(e)
 
@@ -62,7 +57,7 @@ def test_concurrent_changes_serialize(game):
     """Two simultaneous mutations must see different versions, not the same one."""
     observed: list[int] = []
     errors_seen: list[Exception] = []
-    threads = [threading.Thread(target=_bump, args=(observed, errors_seen, 0.15)) for _ in range(2)]
+    threads = [threading.Thread(target=_bump, args=(game, observed, errors_seen, 0.15)) for _ in range(2)]
 
     for thread in threads:
         thread.start()
@@ -79,7 +74,7 @@ def test_version_reflects_every_applied_change(game, api_client):
     """Each serialized mutation bumps the version exactly once."""
     observed: list[int] = []
     errors_seen: list[Exception] = []
-    threads = [threading.Thread(target=_bump, args=(observed, errors_seen, 0.05)) for _ in range(4)]
+    threads = [threading.Thread(target=_bump, args=(game, observed, errors_seen, 0.05)) for _ in range(4)]
 
     for thread in threads:
         thread.start()
@@ -89,14 +84,13 @@ def test_version_reflects_every_applied_change(game, api_client):
     assert not errors_seen, f"apply_game_change raised: {errors_seen}"
     assert sorted(observed) == [1, 2, 3, 4]
 
-    state = api_client.get(f"/v1/games/{GROUP}/{WHITE}/{BLACK}").json()
+    state = api_client.get("/v1/games/{}/{}/{}".format(*game)).json()
     assert state["version"] == 5
 
 
-def test_concurrent_moves_do_not_lose_a_ply(api_client):
+def test_concurrent_moves_do_not_lose_a_ply(api_client, game):
     """The same guarantee through the public HTTP surface, with the real engine."""
-    group, white, black = 93, 94, 95
-    api_client.post("/v1/games", json={"group_id": group, "white_id": white, "black_id": black})
+    group, white, black = game
 
     results: list[int] = []
     lock = threading.Lock()
@@ -140,7 +134,7 @@ def test_creating_a_game_while_a_move_is_in_flight(game, api_client):
     observed: list[int] = []
 
     # Hold the write lock on one game for long enough to overlap the creates.
-    holder = threading.Thread(target=_bump, args=(observed, errors_seen, 0.4))
+    holder = threading.Thread(target=_bump, args=(game, observed, errors_seen, 0.4))
     holder.start()
     time.sleep(0.1)
 
@@ -151,7 +145,8 @@ def test_creating_a_game_while_a_move_is_in_flight(game, api_client):
     def create(i):
         # A different triple each time, so this is not contending for the same
         # row: it is purely the lock-upgrade path being exercised.
-        resp = api_client.post("/v1/games", json={"group_id": 300 + i, "white_id": WHITE, "black_id": BLACK})
+        _, white, black = game
+        resp = api_client.post("/v1/games", json={"group_id": 300 + i, "white_id": white, "black_id": black})
         with lock:
             (created if resp.status_code == 200 else failed).append(
                 i if resp.status_code == 200 else (i, resp.status_code, resp.text[:120])
@@ -168,3 +163,52 @@ def test_creating_a_game_while_a_move_is_in_flight(game, api_client):
     assert not errors_seen, f"the in-flight move failed: {errors_seen}"
     assert not failed, f"creating a game failed while a move was in flight: {failed}"
     assert sorted(created) == [0, 1, 2, 3]
+
+
+def test_concurrent_user_creation_assigns_distinct_ids(api_client):
+    """
+    Server-assigned ids under contention: every create gets its own id.
+
+    SQLite serializes the inserts through BEGIN IMMEDIATE and hands out rowids;
+    PostgreSQL draws from the identity sequence. Either way no two concurrent
+    creates may collide or fail.
+    """
+    ids: list[int] = []
+    failed: list[str] = []
+    lock = threading.Lock()
+
+    def create(i):
+        resp = api_client.post("/v1/users", json={"username": f"racer{i}"})
+        with lock:
+            if resp.status_code == 201:
+                ids.append(resp.json()["id"])
+            else:
+                failed.append(resp.text[:200])
+
+    threads = [threading.Thread(target=create, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not failed, failed
+    assert len(set(ids)) == 8
+
+
+def test_concurrent_duplicate_usernames_create_exactly_one(api_client):
+    """The unique index is the guarantee; exactly one of the racers may win."""
+    statuses: list[int] = []
+    lock = threading.Lock()
+
+    def create():
+        resp = api_client.post("/v1/users", json={"username": "Popular"})
+        with lock:
+            statuses.append(resp.status_code)
+
+    threads = [threading.Thread(target=create) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert sorted(statuses) == [201] + [409] * 5

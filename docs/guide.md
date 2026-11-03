@@ -135,6 +135,40 @@ Then pass the same `api_key=` to `Game.remote(...)`. See
 [docs/configuration.md](configuration.md) for the full list of settings, and
 `chesssnake config init` to write a fully commented starter config.
 
+### Users
+
+Every player is a user account on the server, with an id the server assigns and a
+username that boards and PGN show. Create them over the API (below), or directly in
+the database from the server's own machine:
+
+```commandline
+chesssnake user create alice --admin
+chesssnake user create bob
+chesssnake user show bob
+```
+
+The `user` command also has `set-role`, `rename` and `link`. It talks to the
+database rather than the server, so it uses the same `--database-url` /
+`CHESSSNAKE__DATABASE__URL` as `init-db`; it is how the first administrator is made.
+
+An integration with ids of its own, a Discord bot say, does not need to keep a table
+mapping them to chesssnake users. Link them instead: `user_for_identity("discord",
+member.id, member.name)` returns the same user for that Discord id every time,
+creating it the first time it is seen. One user can be linked from any number of
+systems.
+
+### Upgrading the database
+
+Until 1.0.0 a release may change the database schema without a migration. When the
+changelog says the schema changed, recreate it:
+
+```commandline
+chesssnake init-db --drop
+```
+
+This deletes every user and game. `--init-db` on its own never alters existing
+tables, so it will not do this for you.
+
 ## Playing from the terminal
 
 `chesssnake play` is the third way to use the backend: a board and a prompt, with
@@ -143,8 +177,11 @@ no code to write.
 Against a running api-endpoint (the game is persisted, and the server runs the engine):
 
 ```bash
-chesssnake play --api-url http://localhost:8000 --group 1 --white 10 --black 20 --me 10
+chesssnake play --api-url http://localhost:8000 --white alice --black bob --me alice
 ```
+
+Players are usernames or user ids. `--group` (default `0`) keeps separate games
+between the same two players apart.
 
 Or offline, with no server and nothing but the core install:
 
@@ -186,10 +223,10 @@ Notes:
 
 - **`--api-url` can be omitted** if `CHESSSNAKE__CLIENT__API_URL` is set. With neither,
   `play` tells you so instead of hanging.
-- **`--me ID` is worth passing.** Turn order is then enforced, so you cannot
+- **`--me` is worth passing.** Turn order is then enforced, so you cannot
   accidentally move for your opponent, and the board faces your side. Without it the
   session acts as whoever is to move, which is what one person at one keyboard wants.
-- **Two players** each run `play` with the same `--group/--white/--black` and their own
+- **Two players** each run `play` with the same `--group`/`--white`/`--black` and their own
   `--me`. While you sit at the prompt the session **polls every 10 seconds** and announces
   the opponent's move when it lands; `--refresh SECONDS` changes the interval and
   `--refresh 0` turns it off. (One poll is a single small GET, measured at ~25 ms against
@@ -198,9 +235,11 @@ Notes:
   `docs/realtime-websockets.md` for the design that would make moves arrive instantly.)
 - **A rematch started elsewhere is noticed.** Re-opening a finished game starts a new
   generation, so if your opponent does that while you are still looking at the old one,
-  the session says so and refuses to act until you type `new`. That refusal is
-  load-bearing: the server's mutating routes act on whichever generation is *current*,
-  so a move sent from a superseded session would otherwise land in the new game.
+  the session says so and refuses to act until you type `new`. (The server would
+  refuse the move as well, since every action names the game it is for; the session
+  just says why first.)
+- **`--white-name`/`--black-name` are for `--local` only.** On a server, the board
+  shows each player's username.
 - `--ascii` draws pieces as letters, and `--no-color` emits no escape codes at all, both
   useful over a flaky terminal or when piping to a file.
 - **Auth**, if the endpoint runs with `api.require_auth` on: `--api-key KEY`, or set
@@ -216,19 +255,22 @@ stand one up: see [Deploying with Docker](#deploying-with-docker) below.
 **2. Connect game clients.** Any number of clients can share the one endpoint. Use `Game.remote(...)`, giving the endpoint URL via the `api_url` argument or the `CHESSSNAKE__CLIENT__API_URL` environment variable:
 
 ```Python3
-from chesssnake import Game
+from chesssnake import Game, create_user
 
-# If a game already exists for these ids it is loaded; otherwise a new one is created.
-# Games are unique per (white_id, black_id, group_id), all BIGINTs.
+url = "http://localhost:8000"
+create_user("Bob", api_url=url)    # once per player; the server assigns the id
+create_user("Alice", api_url=url)
+
+# If a game between these players is in progress it is loaded; otherwise a new one
+# is created. Players are user ids or usernames.
 game = Game.remote(
-  123,            # white_id
-  456,            # black_id
-  group_id=789,
-  white_name="Bob",
-  black_name="Alice",
-  api_url="http://localhost:8000",
+  "Bob",          # white
+  "Alice",        # black
+  group_id=789,   # optional: a namespace, so the same two can play elsewhere too
+  api_url=url,
   # api_key="...",  # if the server requires one
 )
+print(game.id)    # the game's id on the server: GET /v1/games/{id}
 
 # The server validates and applies each move, then persists it. move() returns a
 # MoveResult (from/to, check, castle/promotion/en) and raises the matching chess
@@ -243,16 +285,22 @@ game.render().show()  # render the board locally from the mirrored state
 Because the **server** does the chess computation, an illegal move is rejected by the server and surfaced as the usual exception (e.g. `chesssnake.engine.errors.MoveIntoCheckError`). A frontend in another language would instead read the JSON `{error_type, detail}` and the HTTP status.
 
 Optionally pass `player_id=` to `Game.remote(...)` so the server validates that this
-client only acts for its own side, and the client sends its last-seen `version` so a
-stale/duplicate action is rejected rather than double-applied.
+client only acts for its own side. The client always sends its last-seen `version`
+and `generation`, so a stale or duplicate action is rejected rather than
+double-applied, and can never land in a rematch.
 
 Once a game finishes, calling `POST /v1/games` (or `Game.remote(...)`) again starts a
 **rematch**, a new game between the same players, while the finished game is kept in
 the archive and stays readable via `?generation=`.
 
-Any REST client can drive a game without Python or a chess engine, for example:
+Any REST client can drive a game without Python or a chess engine, for example
+(with Bob as user 123 and Alice as 456):
 
 ```
+POST /v1/users                          {"username": "Bob"} -> the user, with its id
+POST /v1/users/discord/80351110224678912 {"username": "Bob"} -> get-or-create by an external id
+POST /v1/games       {"group_id": 789, "white_id": 123, "black_id": 456}  -> the game
+GET  /v1/games/{id}                     -> a game by id, in progress or finished
 POST /v1/games/789/123/456/moves        {"move": "e4"}      -> new state (+ move detail)
 POST /v1/games/789/123/456/resign       {"player_id": 123}
 POST /v1/games/789/123/456/draw/offer   {"player_id": 123}
@@ -266,8 +314,10 @@ GET  /v1/games/789/record?player1=123&player2=456  -> head-to-head win/draw/loss
 
 **The full REST API is documented in [docs/rest-api.md](rest-api.md).**
 
-Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`) and the
-head-to-head `record` helper are also importable from `chesssnake`.
+Matchmaking helpers (`challenge`, `challenge_exists`, `delete_challenge`), the
+head-to-head `record` helper and the user helpers (`create_user`, `get_user`,
+`user_for_identity`) are also importable from `chesssnake`, and take user ids or
+usernames.
 
 
 ## Deploying with Docker

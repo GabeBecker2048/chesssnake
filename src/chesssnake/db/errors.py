@@ -1,3 +1,31 @@
+"""
+Persistence-layer errors, shared by the api-endpoint and the remote client.
+
+This is the one ``db`` module the client imports (``remote/client.py`` maps the
+``error_type`` in an error response back to a class by name), so it must stay
+free of SQLAlchemy. That is also why the username and identity rules live here
+rather than in ``operations``: the api-endpoint's request validation, the CLI
+and the operations layer all share one definition without any of them having
+to import the others.
+"""
+
+import re
+
+#: What a username may look like: 2 to 32 characters of letters, digits, ``_``,
+#: ``.`` and ``-``, and not digits alone. Case is preserved for display but
+#: ignored for uniqueness. The not-all-digits rule is what lets every client
+#: (``chesssnake play --white 42``, ``Game.remote("alice", ...)``) accept either
+#: a user id or a username in the same place without ambiguity.
+USERNAME_RE = re.compile(r"^(?![0-9]+$)[A-Za-z0-9_.-]{2,32}$")
+USERNAME_RULE = "2 to 32 characters of letters, digits, '_', '.' and '-', and not only digits"
+
+#: An identity provider name (``discord``): short, lowercase, URL-safe.
+PROVIDER_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+#: An external id (a Discord snowflake, say): any non-blank token.
+EXTERNAL_ID_RE = re.compile(r"^\S{1,128}$")
+
+
 class GameError(Exception):
     def __init__(self, msg):
         super().__init__(msg)
@@ -23,12 +51,12 @@ class SQLBusyError(SQLError):
 
 
 class SQLIdError(SQLError):
-    def __init__(self, id_):
+    def __init__(self, id_, reason=None):
         msg = "\n".join(
             [
                 "One of the given ids is invalid:",
                 f"  id: {id_}",
-                "All ids must be integers that fit in a signed 64-bit integer (BIGINT).",
+                reason or "All ids must be integers that fit in a signed 64-bit integer (BIGINT).",
             ]
         )
         super().__init__(msg)
@@ -89,4 +117,37 @@ class VersionConflictError(GameError):
     """The game changed since the client's expected version (optimistic concurrency)."""
 
     def __init__(self, msg="The game has changed since your last read; refresh and retry"):
+        super().__init__(msg)
+
+
+class GenerationConflictError(VersionConflictError):
+    """
+    The action names a game that is no longer the one in progress.
+
+    Raised when a client acts with a stale ``generation`` (its game ended and a
+    rematch started), or when the last game between the players is over and
+    nobody has started the next one. A subclass of :class:`VersionConflictError`
+    so clients that already handle the general case handle this one too.
+    """
+
+    def __init__(self, msg="That game is over; re-open it to start the next one, then retry"):
+        super().__init__(msg)
+
+
+class UserNotFoundError(GameError):
+    def __init__(self, msg="No such user"):
+        super().__init__(msg)
+
+
+class UserExistsError(GameError):
+    """A username, or an external id, is already taken by another user."""
+
+    def __init__(self, msg="That username or external id is already taken"):
+        super().__init__(msg)
+
+
+class UserValidationError(GameError):
+    """A username, provider or external id does not fit the rules above."""
+
+    def __init__(self, msg):
         super().__init__(msg)

@@ -12,10 +12,14 @@ come from :mod:`chesssnake.config` — the config file, ``CHESSSNAKE__*``
 environment variables, and command-line flags, in that order of precedence. Run
 ``chesssnake config show`` to see the effective values and where each came from.
 
-Game/challenge routes are versioned under ``/v1``. Set ``api.require_auth`` to
-require an ``X-API-Key`` header on those routes (``/health`` stays open).
-Mutating routes accept an optional ``player_id`` (validated → 403) and an optional
-``expected_version`` (optimistic concurrency → 409).
+User, game and challenge routes are versioned under ``/v1``. Set
+``api.require_auth`` to require an ``X-API-Key`` header on those routes
+(``/health`` stays open). Players are users: create them with ``POST /v1/users``
+(or get-or-create one by an external id with ``POST /v1/users/{provider}/{id}``)
+before starting a game between them. Mutating game routes accept an optional
+``player_id`` (validated → 403), ``expected_version`` (optimistic concurrency →
+409) and ``generation`` (the game the client thinks it is in → 409 when that game
+is over).
 """
 
 import io
@@ -25,13 +29,13 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ..config import Settings, resolve
 from ..db import engine as db_engine
 from ..db import errors, schema
 from ..db import operations as ops
-from ..dto import GameState, MoveResult
+from ..dto import GameState, MoveResult, User
 from ..engine import INITIAL_FEN, from_fen, position_key
 from ..engine import errors as chess_errors
 from ..serialize import game_from_state, state_from_game
@@ -70,32 +74,46 @@ def _api_key_dependency(settings: Settings):
 
 class GameCreate(BaseModel):
     group_id: int = 0
-    white_id: int = 0
-    black_id: int = 1
-    white_name: str = ""
-    black_name: str = ""
+    white_id: int
+    black_id: int
+
+    @model_validator(mode="after")
+    def _distinct_players(self):
+        if self.white_id == self.black_id:
+            raise ValueError("white_id and black_id must be different users")
+        return self
 
 
 class MoveBody(BaseModel):
     move: str
     player_id: int | None = None
     expected_version: int | None = None
+    generation: int | None = None
 
 
 class DrawBody(BaseModel):
     player_id: int
     expected_version: int | None = None
+    generation: int | None = None
 
 
 class ResignBody(BaseModel):
     player_id: int
     expected_version: int | None = None
+    generation: int | None = None
 
 
 class ChallengeBody(BaseModel):
     group_id: int = 0
     challenger: int
     challenged: int
+
+
+class UsernameBody(BaseModel):
+    # Validated by the database layer against USERNAME_RE, so a bad name is a
+    # UserValidationError in the usual {error_type, detail} envelope rather
+    # than pydantic's list-shaped 422.
+    username: str
 
 
 # --- Exception handlers ----------------------------------------------------
@@ -110,10 +128,14 @@ def _error(status_code, exc):
 # before the bases they refine (SQLIdError before SQLError before GameError).
 _ERROR_STATUS = (
     (errors.SQLIdError, 422),
+    (errors.UserValidationError, 422),
     (errors.ChallengeError, 409),
+    (errors.GenerationConflictError, 409),
     (errors.VersionConflictError, 409),
+    (errors.UserExistsError, 409),
     (errors.NotYourTurnError, 403),
     (errors.GameNotFoundError, 404),
+    (errors.UserNotFoundError, 404),
     (errors.SQLBusyError, 503),
     (errors.SQLError, 500),
     (errors.GameError, 400),
@@ -143,17 +165,25 @@ def _register_error_handlers(app: FastAPI) -> None:
 # --- Helpers ---------------------------------------------------------------
 
 
-def _load_game(group_id, white_id, black_id, row, history=None):
-    """Reconstruct an engine game from a stored row (+ optional loaded history)."""
+def _load_game(row, history=None):
+    """
+    Reconstruct an engine game from a stored game dict (+ optional loaded history).
+
+    The database stores only the plies actually played, so the starting
+    position's key is prepended here, where the engine that knows it lives.
+    """
     state = GameState.from_row(row)
-    kwargs = {}
-    if history is not None:
-        kwargs = {"position_history": history["position_keys"], "move_history": history["move_sans"]}
-    return game_from_state(state, group_id, white_id, black_id, **kwargs)
+    if history is None:
+        return game_from_state(state)
+    return game_from_state(
+        state,
+        position_history=[_INITIAL_KEY, *history["position_keys"]],
+        move_history=history["move_sans"],
+    )
 
 
 def _require_game(group_id, white_id, black_id, generation=None):
-    """Fetch a game row (current, or a specific ``generation``) or raise 404."""
+    """Fetch a game dict (current, or a specific ``generation``) or raise 404."""
     row = ops.game_get(group_id, white_id, black_id, generation)
     if row is None:
         detail = f"No game for group {group_id} between {white_id} and {black_id}"
@@ -163,8 +193,40 @@ def _require_game(group_id, white_id, black_id, generation=None):
     return row
 
 
-def _columns(state: GameState) -> dict:
-    return {"fen": state.fen, "draw": state.draw, "status": state.status, "termination": state.termination}
+def _change(game, row, now, new_moves=(), result=None):
+    """
+    Describe what to persist after an engine action, and the state to return.
+
+    A finished game carries an ``outcome``, which is what makes the database
+    layer move it to the archive rather than update it in place.
+    """
+    state = state_from_game(
+        game,
+        int(row["version"]) + 1,
+        int(row["generation"]),
+        id=int(row["id"]),
+        started_at=row["started_at"].isoformat(),
+        updated_at=now.isoformat(),
+    )
+    outcome = None
+    if game.is_over and game.termination is not None:
+        outcome = (int(game.result), game.termination.value)
+        # A finished game has no open draw offer (the engine leaves an accepted
+        # one set), and the archive does not store one: return what is stored.
+        state.draw = None
+    return state, ops.GameChange(
+        fen=state.fen,
+        draw=state.draw,
+        new_moves=list(new_moves),
+        result=state if result is None else result,
+        outcome=outcome,
+    )
+
+
+def _user(row, detail):
+    if row is None:
+        raise errors.UserNotFoundError(detail)
+    return User.from_row(row).to_dict()
 
 
 # --- Routes ----------------------------------------------------------------
@@ -189,11 +251,66 @@ async def health():
 v1 = APIRouter(prefix="/v1")
 
 
+# --- Users ---
+
+
+@v1.post("/users", status_code=201)
+def create_user(body: UsernameBody):
+    return User.from_row(ops.user_create(body.username)).to_dict()
+
+
+@v1.get("/users")
+def find_user(username: str):
+    return _user(ops.user_get_by_name(username), f"No user named {username!r}")
+
+
+@v1.get("/users/{user_id}")
+def get_user(user_id: int):
+    return _user(ops.user_get(user_id), f"No user with id {user_id}")
+
+
+@v1.patch("/users/{user_id}")
+def rename_user(user_id: int, body: UsernameBody):
+    return User.from_row(ops.user_rename(user_id, body.username)).to_dict()
+
+
+@v1.get("/users/{provider}/{external_id}")
+def get_user_by_identity(provider: str, external_id: str):
+    return _user(ops.identity_get(provider, external_id), f"No user is linked to {provider} id {external_id!r}")
+
+
+# 200, not 201, like POST /v1/games: this is get-or-create, and most calls get.
+@v1.post("/users/{provider}/{external_id}")
+def get_or_create_user_by_identity(provider: str, external_id: str, body: UsernameBody):
+    return User.from_row(ops.user_get_or_create_by_identity(provider, external_id, body.username)).to_dict()
+
+
+@v1.put("/users/{user_id}/identities/{provider}/{external_id}")
+def link_identity(user_id: int, provider: str, external_id: str):
+    return User.from_row(ops.identity_link(user_id, provider, external_id)).to_dict()
+
+
+# --- Games ---
+
+
 @v1.post("/games")
 def create_game(body: GameCreate):
-    row = ops.game_get_or_create(
-        body.group_id, body.white_id, body.black_id, INITIAL_FEN, _INITIAL_KEY, body.white_name, body.black_name
-    )
+    row = ops.game_get_or_create(body.group_id, body.white_id, body.black_id, INITIAL_FEN)
+    return GameState.from_row(row).to_dict()
+
+
+@v1.get("/games")
+def list_current_games(player_id: int, group_id: int | None = None):
+    return {"games": [GameState.from_row(row).to_dict() for row in ops.current_games(player_id, group_id)]}
+
+
+# One segment, so it cannot be confused with the three-segment triple routes or
+# the two-segment /games/{group_id}/exists and /record.
+@v1.get("/games/{game_id}")
+def get_game_by_id(game_id: int):
+    row = ops.game_get_by_id(game_id)
+    if row is None:
+        raise errors.GameNotFoundError(f"No game with id {game_id}")
     return GameState.from_row(row).to_dict()
 
 
@@ -204,20 +321,21 @@ def get_game(group_id: int, white_id: int, black_id: int, generation: int | None
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/archive")
 def game_archive(group_id: int, white_id: int, black_id: int):
-    return {"games": ops.game_archive(group_id, white_id, black_id)}
+    return {"games": [GameState.from_row(row).to_dict() for row in ops.game_archive(group_id, white_id, black_id)]}
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/moves")
 def play_move(group_id: int, white_id: int, black_id: int, body: MoveBody):
-    def mutate(row, history):
-        game = _load_game(group_id, white_id, black_id, row, history)
+    def mutate(row, history, now):
+        game = _load_game(row, history)
         if body.player_id is not None and not game.is_players_turn(body.player_id):
             raise errors.NotYourTurnError(f"It is not player {body.player_id}'s turn to move")
         m = game.move(body.move)  # runs the engine; raises ChessError on illegal input
-        new_state = state_from_game(game, int(row["version"]) + 1, int(row["generation"]))
         san = game.move_history[-1]
-        result = MoveResult(
-            state=new_state,
+        ply = history["max_ply"] + 1
+        state, change = _change(game, row, now, new_moves=[(ply, san, game.position_history[-1])])
+        change.result = MoveResult(
+            state=state,
             from_square=m.prev.c_notation,
             to_square=m.to.c_notation,
             san=san,
@@ -226,61 +344,59 @@ def play_move(group_id: int, white_id: int, black_id: int, body: MoveBody):
             promotion=m.promotion,
             en=m.en,
         )
-        new_move_rows = [{"ply": history["max_ply"] + 1, "san": san, "position_key": game.position_history[-1]}]
-        return _columns(new_state), new_move_rows, result
+        return change
 
-    return ops.apply_game_change(group_id, white_id, black_id, mutate, body.expected_version).to_dict()
+    return ops.apply_game_change(group_id, white_id, black_id, mutate, body.expected_version, body.generation).to_dict()
 
 
-def _draw_or_resign(group_id, white_id, black_id, player_id, expected_version, method):
-    def mutate(row, history):
-        game = _load_game(group_id, white_id, black_id, row, history)
-        if player_id not in (white_id, black_id):
-            raise errors.NotYourTurnError(f"Player {player_id} is not in this game")
-        getattr(game, method)(player_id)  # draw_offer / draw_accept / draw_decline / resign
-        new_state = state_from_game(game, int(row["version"]) + 1, int(row["generation"]))
-        return _columns(new_state), [], new_state
+def _draw_or_resign(group_id, white_id, black_id, body, method):
+    def mutate(row, history, now):
+        game = _load_game(row, history)
+        if body.player_id not in (white_id, black_id):
+            raise errors.NotYourTurnError(f"Player {body.player_id} is not in this game")
+        getattr(game, method)(body.player_id)  # draw_offer / draw_accept / draw_decline / resign
+        return _change(game, row, now)[1]
 
-    return ops.apply_game_change(group_id, white_id, black_id, mutate, expected_version).to_dict()
+    return ops.apply_game_change(group_id, white_id, black_id, mutate, body.expected_version, body.generation).to_dict()
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/resign")
 def resign(group_id: int, white_id: int, black_id: int, body: ResignBody):
-    return _draw_or_resign(group_id, white_id, black_id, body.player_id, body.expected_version, "resign")
+    return _draw_or_resign(group_id, white_id, black_id, body, "resign")
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/draw/offer")
 def draw_offer(group_id: int, white_id: int, black_id: int, body: DrawBody):
-    return _draw_or_resign(group_id, white_id, black_id, body.player_id, body.expected_version, "draw_offer")
+    return _draw_or_resign(group_id, white_id, black_id, body, "draw_offer")
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/draw/accept")
 def draw_accept(group_id: int, white_id: int, black_id: int, body: DrawBody):
-    return _draw_or_resign(group_id, white_id, black_id, body.player_id, body.expected_version, "draw_accept")
+    return _draw_or_resign(group_id, white_id, black_id, body, "draw_accept")
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/draw/decline")
 def draw_decline(group_id: int, white_id: int, black_id: int, body: DrawBody):
-    return _draw_or_resign(group_id, white_id, black_id, body.player_id, body.expected_version, "draw_decline")
+    return _draw_or_resign(group_id, white_id, black_id, body, "draw_decline")
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/legal-moves")
 def legal_moves(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     row = _require_game(group_id, white_id, black_id, generation)
-    return {"moves": _load_game(group_id, white_id, black_id, row).legal_moves()}
+    return {"moves": _load_game(row).legal_moves()}
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/history")
 def history(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     row = _require_game(group_id, white_id, black_id, generation)
-    return {"moves": ops.game_history(group_id, white_id, black_id, int(row["generation"]))}
+    return {"moves": ops.game_history(int(row["id"]))}
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/pgn")
 def pgn(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     row = _require_game(group_id, white_id, black_id, generation)
-    game = _load_game(group_id, white_id, black_id, row)
-    game.move_history = [m["san"] for m in ops.game_history(group_id, white_id, black_id, int(row["generation"]))]
+    game = _load_game(row)
+    game.move_history = [m["san"] for m in ops.game_history(int(row["id"]))]
     return PlainTextResponse(game.pgn())
 
 
@@ -299,7 +415,7 @@ def game_image(
 ):
     row = _require_game(group_id, white_id, black_id, generation)
     buffer = io.BytesIO()
-    _load_game(group_id, white_id, black_id, row).render(perspective=perspective).save(buffer, format="PNG")
+    _load_game(row).render(perspective=perspective).save(buffer, format="PNG")
     return Response(content=buffer.getvalue(), media_type="image/png")
 
 
@@ -309,14 +425,10 @@ def delete_game(group_id: int, white_id: int, black_id: int, generation: int | N
     return {"status": "ok"}
 
 
-@v1.get("/games")
-def list_current_games(player_id: int, group_id: int = 0):
-    return {"opponents": ops.current_games(player_id, group_id)}
-
-
 @v1.get("/games/{group_id}/exists")
 def game_exists(group_id: int, player1: int, player2: int):
-    return {"game": ops.game_exists(player1, player2, group_id)}
+    row = ops.game_exists(player1, player2, group_id)
+    return {"game": GameState.from_row(row).to_dict() if row is not None else None}
 
 
 @v1.get("/games/{group_id}/record")

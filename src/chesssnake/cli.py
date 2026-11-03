@@ -5,6 +5,7 @@ Subcommands:
   chesssnake play           Play a game at the terminal (local, or on an api-endpoint).
   chesssnake api-endpoint   Run the REST API server (FastAPI + uvicorn).
   chesssnake init-db        Initialize the database schema, then exit.
+  chesssnake user           Create, inspect and manage user accounts in the database.
   chesssnake config init    Write a commented default config file.
   chesssnake config show    Print the effective configuration and where it came from.
 
@@ -14,8 +15,10 @@ defaults, in that order of precedence.
 """
 
 import argparse
+import json
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 # Mirrors remote.game.API_URL_ENV. Hardcoded rather than imported because
@@ -99,31 +102,93 @@ def _run_api_endpoint(args):
     uvicorn.run(create_app(settings), host=settings.api.host, port=settings.api.port)
 
 
+@contextmanager
+def _database(settings):
+    """
+    Open the process-wide engine for a one-shot command, and always close it.
+
+    :raises chesssnake.db.errors.GameError: If the engine cannot be created.
+    """
+    from .db import engine as db_engine
+
+    engine = db_engine.initialize_engine(
+        settings.database.url,
+        pool_min_size=settings.database.pool_min_size,
+        pool_max_size=settings.database.pool_max_size,
+        sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
+    )
+    try:
+        yield engine
+    finally:
+        db_engine.dispose_engine()
+
+
 def _run_init_db(args):
     settings = _resolve(args)
     from .db import engine as db_engine
     from .db import errors, schema
 
     try:
-        url = settings.database.url
         if args.create_database:
-            parsed = db_engine.parse_url(url)
+            parsed = db_engine.parse_url(settings.database.url)
             # For SQLite this only ensures the parent directory exists; the file
             # itself is created on first connection.
             print(db_engine.backend_module(parsed.get_backend_name()).create_database(parsed))
-        engine = db_engine.initialize_engine(
-            url,
-            pool_min_size=settings.database.pool_min_size,
-            pool_max_size=settings.database.pool_max_size,
-            sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
-        )
-        try:
+        with _database(settings) as engine:
+            if args.drop:
+                # Pre-1.0 there are no migrations: a schema change is applied by
+                # dropping everything and creating it again.
+                schema.drop_all(engine)
+                print("Dropped every chesssnake table.")
             schema.create_all(engine)
             print("Database schema initialized successfully.")
-        finally:
-            db_engine.dispose_engine()
     except errors.GameError as e:
         sys.exit(str(e))
+
+
+def _player(value):
+    """
+    An argparse type for a player: a user id (digits) or a username.
+
+    Usernames cannot be all digits, which is what makes this unambiguous.
+    """
+    if value.isdigit():
+        return int(value)
+    from .db.errors import USERNAME_RE, USERNAME_RULE
+
+    if not USERNAME_RE.match(value):
+        raise argparse.ArgumentTypeError(f"{value!r} is neither a user id nor a username ({USERNAME_RULE})")
+    return value
+
+
+def _run_user(args):
+    """``chesssnake user ...``: account administration straight against the database."""
+    settings = _resolve(args)
+    from .db import errors
+    from .db import operations as ops
+    from .dto import ROLES, User
+
+    def lookup(who):
+        user = ops.user_get(who) if isinstance(who, int) else ops.user_get_by_name(who)
+        if user is None:
+            raise errors.UserNotFoundError(f"No user {who!r}")
+        return user
+
+    try:
+        with _database(settings):
+            if args.action == "create":
+                user = ops.user_create(args.username, ROLES["admin"] if args.admin else ROLES["user"])
+            elif args.action == "show":
+                user = lookup(args.user)
+            elif args.action == "set-role":
+                user = ops.user_set_role(lookup(args.user)["id"], ROLES[args.role])
+            elif args.action == "rename":
+                user = ops.user_rename(lookup(args.user)["id"], args.username)
+            else:  # link
+                user = ops.identity_link(lookup(args.user)["id"], args.provider, args.external_id)
+    except errors.GameError as e:
+        sys.exit(str(e))
+    print(json.dumps(User.from_row(user).to_dict(), indent=2))
 
 
 def _run_play(args):
@@ -139,8 +204,20 @@ def _run_play(args):
     from .remote.game import API_URL_ENV, Game
 
     if args.local:
+        if any(isinstance(who, str) for who in (args.white, args.black, args.me)):
+            sys.exit(
+                "A local game has no accounts: --me is 0 (white) or 1 (black), and names come from --white-name/--black-name"
+            )
         game = Game.local(white_name=args.white_name, black_name=args.black_name)
+        player_id = args.me
     else:
+        if args.white_name or args.black_name:
+            sys.exit(
+                "--white-name and --black-name are only for --local games.\n"
+                "On an api-endpoint the board shows each player's username."
+            )
+        if args.white is None or args.black is None:
+            sys.exit("A remote game needs both players: --white and --black, each a user id or a username.")
         if not (args.api_url or os.getenv(API_URL_ENV)):
             sys.exit(
                 "A remote game needs an api-endpoint URL.\n"
@@ -155,8 +232,6 @@ def _run_play(args):
                 args.white,
                 args.black,
                 args.group,
-                white_name=args.white_name,
-                black_name=args.black_name,
                 player_id=args.me,
                 api_url=args.api_url,
                 api_key=args.api_key,
@@ -165,6 +240,8 @@ def _run_play(args):
             # Reaching the endpoint is setup, not gameplay: fail now with the
             # URL in the message rather than dropping into a prompt that cannot work.
             sys.exit(f"Could not open the game: {e}")
+        # --me may have been a username; the game resolved it to the id.
+        player_id = game.player_id
 
     if args.refresh < 0:
         sys.exit("--refresh takes a number of seconds, or 0 to disable; it cannot be negative")
@@ -173,7 +250,7 @@ def _run_play(args):
     sys.exit(
         run_session(
             game,
-            player_id=args.me,
+            player_id=player_id,
             stdin=sys.stdin,
             stdout=sys.stdout,
             color=color,
@@ -261,7 +338,35 @@ def main(argv=None):
         action="store_true",
         help="create the database first if it does not exist (PostgreSQL: requires permission; SQLite: creates the directory)",
     )
+    init_db.add_argument(
+        "--drop",
+        action="store_true",
+        help="drop every chesssnake table first, deleting all users and games (how a schema change is applied before 1.0)",
+    )
     init_db.set_defaults(func=_run_init_db)
+
+    user = subparsers.add_parser("user", help="manage user accounts directly in the database")
+    user_actions = user.add_subparsers(dest="action", required=True)
+    user_common = argparse.ArgumentParser(add_help=False, parents=[common])
+    user_common.add_argument("--database-url", dest="database_url", help="database connection string")
+    create = user_actions.add_parser("create", help="create a user (the id is assigned)", parents=[user_common])
+    create.add_argument("username")
+    create.add_argument("--admin", action="store_true", help="make the user an administrator")
+    show_user = user_actions.add_parser("show", help="print a user and their linked ids", parents=[user_common])
+    show_user.add_argument("user", type=_player, metavar="ID_OR_USERNAME")
+    set_role = user_actions.add_parser("set-role", help="make a user an admin, or not", parents=[user_common])
+    set_role.add_argument("user", type=_player, metavar="ID_OR_USERNAME")
+    set_role.add_argument("role", choices=("user", "admin"))
+    rename = user_actions.add_parser("rename", help="change a user's username", parents=[user_common])
+    rename.add_argument("user", type=_player, metavar="ID_OR_USERNAME")
+    rename.add_argument("username")
+    link = user_actions.add_parser(
+        "link", help="link an id from another system (e.g. discord) to a user", parents=[user_common]
+    )
+    link.add_argument("user", type=_player, metavar="ID_OR_USERNAME")
+    link.add_argument("provider", help="the other system's name, e.g. discord")
+    link.add_argument("external_id", help="the user's id in that system")
+    user.set_defaults(func=_run_user)
 
     # No `parents=[common]`: play resolves nothing through chesssnake.config, so
     # --config and -o would be accepted and then silently ignored.
@@ -274,15 +379,15 @@ def main(argv=None):
         help=f"key sent as X-API-Key, if the endpoint requires one (env: {_API_KEY_ENV})",
     )
     play.add_argument("--group", type=int, default=0, help="group id (default 0)")
-    play.add_argument("--white", type=int, default=0, help="white player id (default 0)")
-    play.add_argument("--black", type=int, default=1, help="black player id (default 1)")
+    play.add_argument("--white", type=_player, help="white player: a user id or username (required unless --local)")
+    play.add_argument("--black", type=_player, help="black player: a user id or username (required unless --local)")
     play.add_argument(
         "--me",
-        type=int,
-        help="your player id; the server then enforces turn order and the board faces your side",
+        type=_player,
+        help="you (a user id or username; 0 or 1 with --local); turn order is then enforced and the board faces your side",
     )
-    play.add_argument("--white-name", dest="white_name", default="", help="display name for white")
-    play.add_argument("--black-name", dest="black_name", default="", help="display name for black")
+    play.add_argument("--white-name", dest="white_name", default="", help="display name for white (--local only)")
+    play.add_argument("--black-name", dest="black_name", default="", help="display name for black (--local only)")
     play.add_argument(
         "--perspective",
         choices=("white", "black"),
