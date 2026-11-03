@@ -107,3 +107,8 @@ def test_legacy_database_is_usable_without_migration(backend, database_url):
     finally:
         db_engine.dispose_engine()
         old.dispose()
+        # Put the session's engine back. `api_client` is session-scoped and
+        # already cached, so it will not rebuild the engine for later tests;
+        # leaving `_engine` as None here breaks the next test that uses the app,
+        # in a different file, with a confusing "engine is not initialized".
+        db_engine.initialize_engine(database_url)

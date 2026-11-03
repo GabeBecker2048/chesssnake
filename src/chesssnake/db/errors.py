@@ -8,6 +8,20 @@ class SQLError(GameError):
         super().__init__(msg)
 
 
+class SQLBusyError(SQLError):
+    """
+    Every pooled database connection is in use and none came free in time.
+
+    Distinct from :class:`SQLError` because nothing is wrong: the server is
+    simply saturated, the request was never attempted, and retrying shortly is
+    the right response. The api-endpoint maps it to ``503`` rather than ``500``
+    so a client can tell "come back in a moment" from "something is broken".
+    """
+
+    def __init__(self, msg="The server is busy: no database connection became free in time. Retry shortly."):
+        super().__init__(msg)
+
+
 class SQLIdError(SQLError):
     def __init__(self, id_):
         msg = "\n".join(

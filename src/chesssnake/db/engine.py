@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import create_engine as _sa_create_engine
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.pool import StaticPool
 
 from . import errors
@@ -38,6 +39,11 @@ SUPPORTED_BACKENDS = {"postgresql": "postgres", "sqlite": None}
 #: ``INSERT … ON CONFLICT`` (``game_get_or_create``, ``challenge_create``) needs
 #: 3.24. Do not lower this past 3.24 without replacing both.
 MIN_SQLITE_VERSION = (3, 30, 0)
+
+#: How long a request waits for a free pooled connection before giving up.
+#: SQLAlchemy's own default is 30 seconds, which is longer than any client will
+#: wait and longer than a parked worker thread should be held.
+POOL_TIMEOUT_SECONDS = 10
 
 #: True while a :func:`locked_transaction` is open. The SQLite backend reads this
 #: in its ``begin`` hook to choose ``BEGIN IMMEDIATE`` over a deferred ``BEGIN``.
@@ -144,6 +150,12 @@ def _engine_kwargs(parsed, pool_min_size: int, pool_max_size: int) -> dict[str, 
     kwargs: dict[str, Any] = {
         "pool_size": pool_min_size,
         "max_overflow": max(0, pool_max_size - pool_min_size),
+        # SQLAlchemy would wait 30 seconds for a free connection and then raise.
+        # That is far too long to hold a request, and a worker thread running a
+        # sync route cannot be cancelled when the client gives up, so the thread
+        # stays parked for the whole wait. Fail fast instead; transaction()
+        # turns the timeout into SQLBusyError and the api-endpoint into a 503.
+        "pool_timeout": POOL_TIMEOUT_SECONDS,
     }
     if parsed.get_backend_name() == "sqlite":
         # SQLAlchemy sets this itself for a file database, but the failure mode if
@@ -185,10 +197,12 @@ def create_engine(
     except SQLAlchemyError as e:
         raise errors.SQLError(f"Could not create the database engine: {e}") from e
 
-    if backend == "sqlite":
-        from . import sqlite as backend_module
-
-        backend_module.configure_engine(engine, busy_timeout=sqlite_busy_timeout)
+    # Import the dialect shim for BOTH backends, not just SQLite. backend() is
+    # called on every query and would otherwise import postgres.py (and psycopg2)
+    # lazily on the first write -- which, now that requests run concurrently,
+    # means several threads importing a driver at once and a driver problem
+    # surfacing as a 500 mid-traffic instead of a clear failure at startup.
+    backend_module(backend).configure_engine(engine, busy_timeout=sqlite_busy_timeout)
     check_capabilities(engine)
     return engine
 
@@ -280,6 +294,13 @@ def transaction() -> Iterator[Any]:
         # Already one of ours (raised by a mutate callback or a guard); don't
         # rewrap it as a generic SQL failure.
         raise
+    except SQLAlchemyTimeoutError as e:
+        # Pool exhaustion, not a failure: every connection is checked out and
+        # none came free within POOL_TIMEOUT. Must be caught before the generic
+        # SQLAlchemyError below, which it subclasses. Reachable only since the
+        # routes started running concurrently; before that one request held at
+        # most one connection.
+        raise errors.SQLBusyError() from e
     except SQLAlchemyError as e:
         raise errors.SQLError(f"SQL execution error: {e}") from e
 

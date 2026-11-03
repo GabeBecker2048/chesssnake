@@ -6,6 +6,37 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.10.0 - 2026-11-03
+
+### Changed
+- The server now handles requests in parallel. Database and rendering routes
+  run in a worker threadpool instead of on the event loop, where each one
+  blocked every other request for its whole duration. Measured locally: eight
+  concurrent board renders went from 376 ms to 122 ms.
+- `/health` still answers on the event loop, so it stays fast when every worker
+  is busy. It went from 325 ms under load to 10 ms, which matters because the
+  container healthcheck gives it a two second timeout.
+
+### Added
+- A `503` response when every database connection is in use, instead of waiting
+  thirty seconds and then reporting a generic server error. Nothing is wrong in
+  that case, the server is only saturated, and retrying shortly is the right
+  answer.
+
+### Fixed
+- Creating or reopening a game no longer fails with `database is locked` on
+  SQLite while a move is being applied. It read the latest generation and then
+  inserted under a deferred transaction, which SQLite refuses to upgrade to a
+  writer while another writer holds the lock.
+- The PostgreSQL driver is now imported when the engine is built rather than on
+  the first write, so a missing or broken driver fails at startup instead of
+  part way through serving traffic.
+
+### Removed
+- Serving an in-memory SQLite database (`sqlite://`) is refused at startup. It
+  cannot be used safely from more than one thread, and it is discarded when the
+  process exits. Use a file path.
+
 ## 0.9.2 - 2026-11-03
 
 ### Added

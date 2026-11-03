@@ -118,3 +118,53 @@ def test_concurrent_moves_do_not_lose_a_ply(api_client):
 
     history = api_client.get(f"/v1/games/{group}/{white}/{black}/history").json()
     assert len(history["moves"]) == 1
+
+
+def test_creating_a_game_while_a_move_is_in_flight(game, api_client):
+    """
+    ``POST /v1/games`` must not fail while another request holds the write lock.
+
+    Regression. ``game_get_or_create`` reads the latest generation and then
+    inserts based on what it read, but it used to run under a plain (deferred)
+    ``BEGIN``. On SQLite that starts the connection as a reader which must
+    upgrade to a writer for the INSERT, and SQLite refuses that upgrade with
+    SQLITE_BUSY *immediately* when another writer holds the lock, because
+    ``busy_timeout`` does not apply to the upgrade path. The result was a 500
+    ``database is locked`` from a perfectly ordinary request.
+
+    It was invisible while every route ran on the event loop, because two
+    requests could never be in the database at once. Moving the routes to the
+    threadpool made it reachable, and deterministic: four out of four.
+    """
+    errors_seen: list[Exception] = []
+    observed: list[int] = []
+
+    # Hold the write lock on one game for long enough to overlap the creates.
+    holder = threading.Thread(target=_bump, args=(observed, errors_seen, 0.4))
+    holder.start()
+    time.sleep(0.1)
+
+    created: list[int] = []
+    failed: list[tuple[int, int, str]] = []
+    lock = threading.Lock()
+
+    def create(i):
+        # A different triple each time, so this is not contending for the same
+        # row: it is purely the lock-upgrade path being exercised.
+        resp = api_client.post("/v1/games", json={"group_id": 300 + i, "white_id": WHITE, "black_id": BLACK})
+        with lock:
+            (created if resp.status_code == 200 else failed).append(
+                i if resp.status_code == 200 else (i, resp.status_code, resp.text[:120])
+            )
+
+    threads = [threading.Thread(target=create, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    holder.join(timeout=30)
+
+    assert not any(t.is_alive() for t in threads), "a create thread never finished"
+    assert not errors_seen, f"the in-flight move failed: {errors_seen}"
+    assert not failed, f"creating a game failed while a move was in flight: {failed}"
+    assert sorted(created) == [0, 1, 2, 3]
