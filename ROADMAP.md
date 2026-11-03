@@ -40,9 +40,3 @@ contents of a version may change before it ships. Shipped versions are in
 ## 0.11.0 - planned
 
 - Database refactor: add `users` and `finished_games` tables.
-
-## 0.10.0 - planned
-
-- Move the database-touching API routes off `async def` so they run in the
-  threadpool. They currently block the event loop, so the server handles one
-  database operation at a time.

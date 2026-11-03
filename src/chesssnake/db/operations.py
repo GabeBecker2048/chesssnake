@@ -113,7 +113,16 @@ def game_get_or_create(group_id, white_id, black_id, initial_fen, initial_key, w
     validate_ids(white_id, black_id, group_id)
     insert = backend().insert
 
-    with transaction() as conn:
+    # locked_transaction, not transaction: this reads the latest generation and
+    # then writes based on what it read, so it is a read-modify-write like
+    # apply_game_change. Under a plain (deferred) BEGIN, SQLite starts this as a
+    # reader and has to upgrade to a writer for the INSERT; if another writer
+    # holds the lock, SQLite fails that upgrade with SQLITE_BUSY *immediately*,
+    # because busy_timeout does not apply to the upgrade path. The result was a
+    # 500 "database is locked" from POST /v1/games whenever a move was in flight.
+    # Taking the write lock up front removes the upgrade entirely. On PostgreSQL
+    # this only sets the WRITE_TRANSACTION flag; no FOR UPDATE is issued here.
+    with locked_transaction() as conn:
         latest = (
             conn.execute(_current_game_select(group_id, white_id, black_id, games.c.generation, games.c.status))
             .mappings()

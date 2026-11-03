@@ -172,6 +172,12 @@ def _columns(state: GameState) -> dict:
 health_router = APIRouter()
 
 
+# Deliberately the one `async def` route. Everything else here does blocking work
+# and runs in the threadpool, but this touches nothing, so leaving it on the event
+# loop means it answers immediately even when every worker thread is busy. That is
+# what stops a merely-busy server from being declared unhealthy: the container's
+# HEALTHCHECK gives it a 2 second timeout, and before the threadpool move this
+# route was measured at 325 ms while only eight board renders were in flight.
 @health_router.get("/health")
 async def health():
     return {"status": "ok"}
@@ -183,7 +189,7 @@ v1 = APIRouter(prefix="/v1")
 
 
 @v1.post("/games")
-async def create_game(body: GameCreate):
+def create_game(body: GameCreate):
     row = ops.game_get_or_create(
         body.group_id, body.white_id, body.black_id, INITIAL_FEN, _INITIAL_KEY, body.white_name, body.black_name
     )
@@ -191,17 +197,17 @@ async def create_game(body: GameCreate):
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}")
-async def get_game(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+def get_game(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     return GameState.from_row(_require_game(group_id, white_id, black_id, generation)).to_dict()
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/archive")
-async def game_archive(group_id: int, white_id: int, black_id: int):
+def game_archive(group_id: int, white_id: int, black_id: int):
     return {"games": ops.game_archive(group_id, white_id, black_id)}
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/moves")
-async def play_move(group_id: int, white_id: int, black_id: int, body: MoveBody):
+def play_move(group_id: int, white_id: int, black_id: int, body: MoveBody):
     def mutate(row, history):
         game = _load_game(group_id, white_id, black_id, row, history)
         if body.player_id is not None and not game.is_players_turn(body.player_id):
@@ -238,39 +244,39 @@ def _draw_or_resign(group_id, white_id, black_id, player_id, expected_version, m
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/resign")
-async def resign(group_id: int, white_id: int, black_id: int, body: ResignBody):
+def resign(group_id: int, white_id: int, black_id: int, body: ResignBody):
     return _draw_or_resign(group_id, white_id, black_id, body.player_id, body.expected_version, "resign")
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/draw/offer")
-async def draw_offer(group_id: int, white_id: int, black_id: int, body: DrawBody):
+def draw_offer(group_id: int, white_id: int, black_id: int, body: DrawBody):
     return _draw_or_resign(group_id, white_id, black_id, body.player_id, body.expected_version, "draw_offer")
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/draw/accept")
-async def draw_accept(group_id: int, white_id: int, black_id: int, body: DrawBody):
+def draw_accept(group_id: int, white_id: int, black_id: int, body: DrawBody):
     return _draw_or_resign(group_id, white_id, black_id, body.player_id, body.expected_version, "draw_accept")
 
 
 @v1.post("/games/{group_id}/{white_id}/{black_id}/draw/decline")
-async def draw_decline(group_id: int, white_id: int, black_id: int, body: DrawBody):
+def draw_decline(group_id: int, white_id: int, black_id: int, body: DrawBody):
     return _draw_or_resign(group_id, white_id, black_id, body.player_id, body.expected_version, "draw_decline")
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/legal-moves")
-async def legal_moves(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+def legal_moves(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     row = _require_game(group_id, white_id, black_id, generation)
     return {"moves": _load_game(group_id, white_id, black_id, row).legal_moves()}
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/history")
-async def history(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+def history(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     row = _require_game(group_id, white_id, black_id, generation)
     return {"moves": ops.game_history(group_id, white_id, black_id, int(row["generation"]))}
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/pgn")
-async def pgn(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+def pgn(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     row = _require_game(group_id, white_id, black_id, generation)
     game = _load_game(group_id, white_id, black_id, row)
     game.move_history = [m["san"] for m in ops.game_history(group_id, white_id, black_id, int(row["generation"]))]
@@ -278,12 +284,12 @@ async def pgn(group_id: int, white_id: int, black_id: int, generation: int | Non
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/fen")
-async def fen(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+def fen(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     return PlainTextResponse(GameState.from_row(_require_game(group_id, white_id, black_id, generation)).fen)
 
 
 @v1.get("/games/{group_id}/{white_id}/{black_id}/image")
-async def game_image(
+def game_image(
     group_id: int,
     white_id: int,
     black_id: int,
@@ -297,38 +303,38 @@ async def game_image(
 
 
 @v1.delete("/games/{group_id}/{white_id}/{black_id}")
-async def delete_game(group_id: int, white_id: int, black_id: int, generation: int | None = None):
+def delete_game(group_id: int, white_id: int, black_id: int, generation: int | None = None):
     ops.game_delete(group_id, white_id, black_id, generation)
     return {"status": "ok"}
 
 
 @v1.get("/games")
-async def list_current_games(player_id: int, group_id: int = 0):
+def list_current_games(player_id: int, group_id: int = 0):
     return {"opponents": ops.current_games(player_id, group_id)}
 
 
 @v1.get("/games/{group_id}/exists")
-async def game_exists(group_id: int, player1: int, player2: int):
+def game_exists(group_id: int, player1: int, player2: int):
     return {"game": ops.game_exists(player1, player2, group_id)}
 
 
 @v1.get("/games/{group_id}/record")
-async def game_record(group_id: int, player1: int, player2: int):
+def game_record(group_id: int, player1: int, player2: int):
     return ops.game_record(player1, player2, group_id)
 
 
 @v1.post("/challenges")
-async def post_challenge(body: ChallengeBody):
+def post_challenge(body: ChallengeBody):
     return {"accepted": ops.challenge(body.challenger, body.challenged, body.group_id)}
 
 
 @v1.get("/challenges/{group_id}/exists")
-async def challenge_exists(group_id: int, player1: int, player2: int):
+def challenge_exists(group_id: int, player1: int, player2: int):
     return {"challenge": ops.challenge_exists(player1, player2, group_id)}
 
 
 @v1.delete("/challenges")
-async def delete_challenge(body: ChallengeBody):
+def delete_challenge(body: ChallengeBody):
     ops.challenge_delete(body.challenger, body.challenged, body.group_id)
     return {"status": "ok"}
 
@@ -357,6 +363,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # from replacing a working engine; its database settings are ignored.
         owns_engine = db_engine.current_engine() is None
         if owns_engine:
+            # An in-memory database gets a StaticPool, which hands the SAME
+            # connection to every caller without serializing it. That was
+            # survivable while every request ran on the event loop; now that the
+            # routes run in a threadpool, two requests would issue BEGIN on one
+            # connection and sqlite3 raises "cannot start a transaction within a
+            # transaction". It is not worth supporting either way: an in-memory
+            # database loses every game when the process restarts.
+            if db_engine.is_memory_url(db_engine.parse_url(settings.database.url)):
+                raise errors.SQLError(
+                    "An in-memory SQLite database cannot be served: it is discarded when the "
+                    "process exits, and it cannot handle concurrent requests.\n"
+                    "  got:      "
+                    f"{settings.database.url}\n"
+                    "  expected: sqlite:///chesssnake.db          (a file, relative)\n"
+                    "            sqlite:////var/lib/chesssnake/chesssnake.db   (a file, absolute)"
+                )
             engine = db_engine.initialize_engine(
                 settings.database.url,
                 pool_min_size=settings.database.pool_min_size,
