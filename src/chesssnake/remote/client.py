@@ -146,6 +146,20 @@ class ApiClient:
     def revoke_token(self, token_id):
         self._request("DELETE", f"/auth/tokens/{token_id}")
 
+    # --- live updates --------------------------------------------------------
+
+    def events(self, games=()):
+        """
+        Live updates over the server's websocket, as an
+        :class:`~chesssnake.remote.realtime.EventStream` following ``games``.
+
+        :raises chesssnake.remote.realtime.RealtimeUnavailable: if the server does
+            not offer them (they are off by default); poll instead.
+        """
+        from .realtime import EventStream
+
+        return EventStream(self, games=[_id(g) for g in games])
+
     # --- users -------------------------------------------------------------
 
     def get_user(self, user_id) -> User:

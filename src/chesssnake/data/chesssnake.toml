@@ -141,6 +141,100 @@ sqlite_busy_timeout = 5000
 
 
 #: ===========================================================================
+#: [websocket] - real-time updates at /v1/ws (off by default)
+#: ===========================================================================
+#: With this on, a client can hold one websocket open and be told the moment a
+#: game it follows changes, instead of polling. `chesssnake play` uses it when
+#: the server offers it. It is served on the same host and port as everything
+#: else, so there is nothing new to expose; a reverse proxy has to pass websocket
+#: upgrades through (Caddy does by default, nginx needs the Upgrade headers).
+#: The protocol is in docs/realtime-websockets.md. REST clients are unaffected
+#: either way.
+#:
+#: Updates are delivered within one api-endpoint process. Running several
+#: workers or replicas, a socket only hears of changes made through its own.
+[websocket]
+
+#: Serve /v1/ws at all. Off, the upgrade is refused (HTTP 403) and clients poll.
+#: Values: true, false. Default false.
+enabled = false
+
+#: Open websockets allowed in total, counted from the moment one is accepted
+#: (before it has authenticated). Each idle socket costs a little memory.
+#: Values: integer >= 1. Default 1000.
+max_connections = 1000
+
+#: Of those, how many may be connected but not yet authenticated. This is what
+#: stops anonymous connections from holding every slot.
+#: Values: integer >= 1, and no greater than max_connections. Default 100.
+max_pending_auth = 100
+
+#: Open websockets allowed per user (a browser tab, a terminal, a phone...).
+#: Values: integer >= 1, and no greater than max_connections. Default 10.
+max_connections_per_user = 10
+
+#: Games one websocket may follow at once.
+#: Values: integer >= 1. Default 64.
+max_subscriptions = 64
+
+#: Seconds a new websocket has to send its token before it is closed (4408).
+#: Values: number > 0. Default 10.
+auth_timeout_seconds = 10.0
+
+#: How often an open websocket's token is checked again, with +/-10% jitter.
+#: Logging out, revoking a token, a password reset and disabling a user close
+#: the affected sockets at once anyway; this is the backstop for anything else
+#: that removes a token, such as `chesssnake user` run on the server's machine.
+#: Values: number > 0. Default 60.
+reauth_interval_seconds = 60.0
+
+#: Messages buffered per websocket. A socket whose buffer fills is closed (1013)
+#: and the client reconnects; a client that simply stops reading is caught by
+#: the ping timeout below instead.
+#: Values: integer >= 1. Default 256.
+send_queue_size = 256
+
+#: Seconds between protocol-level pings. They keep proxies and NAT from idling a
+#: quiet socket out, and find dead peers. 0 disables them.
+#: Values: number >= 0. Default 20.
+ping_interval_seconds = 20.0
+
+#: Close a websocket whose ping goes unanswered for this long.
+#: Values: number >= 1. Default 20.
+ping_timeout_seconds = 20.0
+
+#: Largest message accepted from a client. Clients only ever send small control
+#: messages, so this mostly bounds what a misbehaving one can make the server read.
+#: Values: integer bytes >= 1024. Default 65536.
+max_message_bytes = 65536
+
+#: permessage-deflate compression. Messages are a few hundred bytes, so it saves
+#: little, and it costs tens of kilobytes of memory per socket.
+#: Values: true, false. Default false.
+compression = false
+
+#: Threads for the websocket side's database work (checking tokens, reading the
+#: snapshot sent on subscribe). Kept apart from the REST routes' threads, so a
+#: burst of reconnects cannot slow ordinary requests down.
+#: Values: integer >= 1. Default 4.
+worker_threads = 4
+
+#: When the server shuts down, how long open connections get before they are cut
+#: off. Keeps `docker stop` from waiting for its own kill timeout.
+#: Values: number > 0. Default 5.
+shutdown_timeout_seconds = 5.0
+
+#: Browser origins allowed to connect, e.g. ["https://chess.example"]. Browsers
+#: send an Origin header; anything else (chesssnake play, a bot) sends none and is
+#: always allowed, since the token is what really guards a socket. Restrict this
+#: when a web frontend is served from a known address. Entries are compared
+#: without case or a trailing slash. In the environment, separate them with
+#: commas: CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS=https://a.example,https://b.example
+#: Values: a list of origins, or ["*"] for any. Default ["*"].
+allowed_origins = ["*"]
+
+
+#: ===========================================================================
 #: [client] — intentionally absent
 #: ===========================================================================
 #: Remote Game clients read only the environment, never this file:

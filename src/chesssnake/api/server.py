@@ -25,7 +25,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, FastAPI, Response
+from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, model_validator
 
@@ -47,6 +47,7 @@ from .auth import (
     require_admin,
     validate_password,
 )
+from .realtime import Broker, InProcessBroker, websocket_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,18 @@ def _require_challenge(challenge_id: int, me: Principal):
     return challenge
 
 
+def _broker(request: Request) -> Broker:
+    """
+    This app's broker. Publishing goes through the request rather than a module
+    global because the router is shared by every app built in a process.
+    """
+    return getattr(request.app.state, "broker", None) or Broker()
+
+
+def _move_summary(result: MoveResult) -> dict:
+    return {"san": result.san, "from": result.from_square, "to": result.to_square, "check": result.check}
+
+
 def _login_result(raw, token, user=None):
     return LoginResult(
         token=raw,
@@ -335,8 +348,9 @@ v1 = APIRouter(prefix="/v1", dependencies=[Depends(current_principal)])
 
 
 @v1.post("/auth/logout", status_code=204)
-def log_out(me: Principal = Depends(current_principal)):
+def log_out(request: Request, me: Principal = Depends(current_principal)):
     ops.token_delete(me.token_id)
+    _broker(request).recheck_token(me.token_id)  # its websockets close now, not at the next re-check
     return Response(status_code=204)
 
 
@@ -346,7 +360,7 @@ def whoami(me: Principal = Depends(current_principal)):
 
 
 @v1.post("/auth/password", status_code=204)
-def change_password(body: PasswordChange, me: Principal = Depends(current_principal)):
+def change_password(request: Request, body: PasswordChange, me: Principal = Depends(current_principal)):
     validate_password(body.new_password)
     stored = check_current_password(me, body.current_password)
     new_hash = hash_password(body.new_password)
@@ -354,6 +368,7 @@ def change_password(body: PasswordChange, me: Principal = Depends(current_princi
     # tokens: those are separate credentials, and a bot should not die because
     # its owner changed a password.
     ops.user_set_password(me.user_id, new_hash, revoke="sessions", keep_token_id=me.token_id, expected_hash=stored)
+    _broker(request).recheck_user(me.user_id)
     return Response(status_code=204)
 
 
@@ -381,11 +396,12 @@ def list_tokens(user_id: int | None = None, me: Principal = Depends(current_prin
 
 
 @v1.delete("/auth/tokens/{token_id}", status_code=204)
-def revoke_token(token_id: int, me: Principal = Depends(current_principal)):
+def revoke_token(request: Request, token_id: int, me: Principal = Depends(current_principal)):
     # Someone else's token is "not found" rather than "forbidden": a user should
     # not learn which token ids exist.
     if not ops.token_delete(token_id, None if me.is_admin else me.user_id):
         raise errors.TokenNotFoundError(f"No token {token_id}")
+    _broker(request).recheck_token(token_id)
     return Response(status_code=204)
 
 
@@ -411,7 +427,7 @@ def get_user(user_id: int, me: Principal = Depends(current_principal)):
 
 
 @v1.patch("/users/{user_id}")
-def update_user(user_id: int, body: UserPatch, me: Principal = Depends(current_principal)):
+def update_user(request: Request, user_id: int, body: UserPatch, me: Principal = Depends(current_principal)):
     """A user may rename themselves; everything else, and other accounts, is admin-only."""
     if not me.is_admin:
         if user_id != me.user_id:
@@ -432,6 +448,8 @@ def update_user(user_id: int, body: UserPatch, me: Principal = Depends(current_p
     if new_hash is not None:
         # An admin reset: assume the old password leaked, so every token goes.
         ops.user_set_password(user_id, new_hash, revoke="all")
+    if body.disabled or new_hash is not None:
+        _broker(request).recheck_user(user_id)
     return _user_out(ops.user_get(user_id), me)
 
 
@@ -467,10 +485,13 @@ def unlink_identity(user_id: int, provider: str, external_id: str, me: Principal
 
 
 @v1.post("/challenges", status_code=201)
-def create_challenge(body: ChallengeCreate, me: Principal = Depends(current_principal)):
+def create_challenge(request: Request, body: ChallengeCreate, me: Principal = Depends(current_principal)):
     challenger = acting_as(me, body.player_id)
-    challenge = ops.challenge_create(challenger, body.opponent_id, body.group_id, COLORS[body.color])
-    return Challenge.from_row(challenge).to_dict()
+    challenge = Challenge.from_row(
+        ops.challenge_create(challenger, body.opponent_id, body.group_id, COLORS[body.color])
+    ).to_dict()
+    _broker(request).challenge("created", challenge)
+    return challenge
 
 
 @v1.get("/challenges")
@@ -492,7 +513,10 @@ def get_challenge(challenge_id: int, me: Principal = Depends(current_principal))
 
 @v1.post("/challenges/{challenge_id}/accept", status_code=201)
 def accept_challenge(
-    challenge_id: int, body: ChallengeAccept | None = None, me: Principal = Depends(current_principal)
+    request: Request,
+    challenge_id: int,
+    body: ChallengeAccept | None = None,
+    me: Principal = Depends(current_principal),
 ):
     challenge = _require_challenge(challenge_id, me)
     player_id = body.player_id if body is not None else None
@@ -500,15 +524,21 @@ def accept_challenge(
         # Only the challenged player can accept, so that is who an admin acts as.
         player_id = challenge["challenged_id"]
     actor = acting_as(me, player_id)
-    return GameState.from_row(ops.challenge_accept(challenge_id, INITIAL_FEN, accepted_by=actor)).to_dict()
+    state = GameState.from_row(ops.challenge_accept(challenge_id, INITIAL_FEN, accepted_by=actor)).to_dict()
+    # From the challenge read before accepting: accepting deletes the row.
+    broker = _broker(request)
+    broker.challenge("removed", Challenge.from_row(challenge).to_dict())
+    broker.game_started(state)
+    return state
 
 
 @v1.delete("/challenges/{challenge_id}", status_code=204)
-def delete_challenge(challenge_id: int, me: Principal = Depends(current_principal)):
+def delete_challenge(request: Request, challenge_id: int, me: Principal = Depends(current_principal)):
     """Decline (as the challenged player) or withdraw (as the challenger)."""
-    _require_challenge(challenge_id, me)
+    challenge = _require_challenge(challenge_id, me)
     if not ops.challenge_delete(challenge_id):
         raise errors.ChallengeNotFoundError(f"No pending challenge {challenge_id}")
+    _broker(request).challenge("removed", Challenge.from_row(challenge).to_dict())
     return Response(status_code=204)
 
 
@@ -516,11 +546,15 @@ def delete_challenge(challenge_id: int, me: Principal = Depends(current_principa
 
 
 @v1.post("/games")
-def create_game(body: GameCreate, me: Principal = Depends(current_principal)):
+def create_game(request: Request, body: GameCreate, me: Principal = Depends(current_principal)):
     """Admin-only: start (or fetch) a game directly, without a challenge."""
     require_admin(me)
-    row = ops.game_get_or_create(body.group_id, body.white_id, body.black_id, INITIAL_FEN)
-    return GameState.from_row(row).to_dict()
+    state = GameState.from_row(ops.game_get_or_create(body.group_id, body.white_id, body.black_id, INITIAL_FEN))
+    if state.version == 1:
+        # Published even when this fetched a game nobody has moved in yet: the
+        # players cannot know its id in advance, and a repeat is harmless.
+        _broker(request).game_started(state.to_dict())
+    return state.to_dict()
 
 
 @v1.get("/games")
@@ -555,15 +589,16 @@ def get_game(game_id: int):
 
 
 @v1.delete("/games/{game_id}", status_code=204)
-def delete_game(game_id: int, me: Principal = Depends(current_principal)):
+def delete_game(request: Request, game_id: int, me: Principal = Depends(current_principal)):
     require_admin(me)
     if not ops.game_delete(game_id):
         raise errors.GameNotFoundError(f"No game with id {game_id}")
+    _broker(request).game_removed(game_id)
     return Response(status_code=204)
 
 
 @v1.post("/games/{game_id}/moves")
-def play_move(game_id: int, body: MoveBody, me: Principal = Depends(current_principal)):
+def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = Depends(current_principal)):
     actor = _game_actor(me, body.player_id, _require_game(game_id), require_actor=False)
 
     def mutate(row, history, now):
@@ -587,10 +622,13 @@ def play_move(game_id: int, body: MoveBody, me: Principal = Depends(current_prin
         )
         return change
 
-    return ops.apply_game_change(game_id, mutate, body.expected_version).to_dict()
+    result = ops.apply_game_change(game_id, mutate, body.expected_version)
+    # After the commit: a socket must never hear of a move the database refused.
+    _broker(request).game_changed(result.state.to_dict(), _move_summary(result))
+    return result.to_dict()
 
 
-def _draw_or_resign(game_id, body, me, method):
+def _draw_or_resign(request, game_id, body, me, method):
     actor = _game_actor(me, body.player_id, _require_game(game_id), require_actor=True)
 
     def mutate(row, history, now):
@@ -598,27 +636,35 @@ def _draw_or_resign(game_id, body, me, method):
         getattr(game, method)(actor)  # draw_offer / draw_accept / draw_decline / resign
         return _change(game, row, now)[1]
 
-    return ops.apply_game_change(game_id, mutate, body.expected_version).to_dict()
+    state = ops.apply_game_change(game_id, mutate, body.expected_version).to_dict()
+    _broker(request).game_changed(state)
+    return state
 
 
 @v1.post("/games/{game_id}/resign")
-def resign(game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
-    return _draw_or_resign(game_id, body or ActionBody(), me, "resign")
+def resign(request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "resign")
 
 
 @v1.post("/games/{game_id}/draw/offer")
-def draw_offer(game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
-    return _draw_or_resign(game_id, body or ActionBody(), me, "draw_offer")
+def draw_offer(
+    request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
+):
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_offer")
 
 
 @v1.post("/games/{game_id}/draw/accept")
-def draw_accept(game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
-    return _draw_or_resign(game_id, body or ActionBody(), me, "draw_accept")
+def draw_accept(
+    request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
+):
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_accept")
 
 
 @v1.post("/games/{game_id}/draw/decline")
-def draw_decline(game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)):
-    return _draw_or_resign(game_id, body or ActionBody(), me, "draw_decline")
+def draw_decline(
+    request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
+):
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_decline")
 
 
 @v1.get("/games/{game_id}/legal-moves")
@@ -717,10 +763,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="chesssnake api-endpoint", lifespan=lifespan)
     app.state.settings = settings
+    # One broker per app (see realtime.py); a do-nothing one when websockets are off.
+    app.state.broker = InProcessBroker(settings.websocket) if settings.websocket.enabled else Broker()
     _register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(_public_router(settings))
     app.include_router(v1)
+    if settings.websocket.enabled:
+        # Not on `v1`: its HTTP auth dependency cannot be satisfied by a websocket,
+        # which authenticates with its first message instead.
+        app.add_api_websocket_route("/v1/ws", websocket_endpoint)
     return app
 
 
