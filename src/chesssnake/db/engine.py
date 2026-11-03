@@ -185,10 +185,12 @@ def create_engine(
     except SQLAlchemyError as e:
         raise errors.SQLError(f"Could not create the database engine: {e}") from e
 
-    if backend == "sqlite":
-        from . import sqlite as backend_module
-
-        backend_module.configure_engine(engine, busy_timeout=sqlite_busy_timeout)
+    # Import the dialect shim for BOTH backends, not just SQLite. backend() is
+    # called on every query and would otherwise import postgres.py (and psycopg2)
+    # lazily on the first write -- which, now that requests run concurrently,
+    # means several threads importing a driver at once and a driver problem
+    # surfacing as a 500 mid-traffic instead of a clear failure at startup.
+    backend_module(backend).configure_engine(engine, busy_timeout=sqlite_busy_timeout)
     check_capabilities(engine)
     return engine
 

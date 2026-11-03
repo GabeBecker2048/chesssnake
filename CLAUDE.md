@@ -250,7 +250,29 @@ a local and a remote game**. Anything it does, the client could already do.
 
 ### `api/` — the server (tier 2, **owns the engine**)
 
-- `server.py` — `create_app(settings)` builds the FastAPI app (settings on `app.state.settings`); a module-level PEP 562 `__getattr__` still resolves `chesssnake.api.server:app` lazily for ASGI import strings. `/health` is unversioned/open; `/v1` routes gated by the per-app api-key dependency. Mutating routes (`POST .../moves` `{move, player_id?, expected_version?}`, `POST .../resign`, `POST .../draw/{offer|accept|decline}` `{player_id, expected_version?}`) build an `engine.Game` from the stored row + `Moves` history and apply the action inside `apply_game_change` (one locked transaction). Read routes: `GET .../` (state), `.../archive` (all generations), `.../legal-moves`, `.../history`, `.../pgn` + `.../fen` (`PlainTextResponse`), `.../image` (PNG). Read routes take an optional `?generation=` (a past game; default = current); `/image` also takes `?perspective=white|black`. Group-level reads: `GET .../{g}/exists` and `GET .../{g}/record` (head-to-head win/draw/loss). Request bodies are pydantic; responses are `dto` dataclasses as dicts. Handlers: `ChessError`→400, `NotYourTurnError`→403, `GameNotFoundError`→404, `ChallengeError`/`VersionConflictError`→409, `SQLIdError`→422, `SQLError`→500, `GameError`→400. `lifespan` inits the pool from `settings.database` (schema init if `database.init_schema`); its `connection_pool is None` guard lets a second app share an existing pool, which is how the tests build an auth-requiring app alongside the open one.
+**Every `/v1` route is a plain `def`, deliberately.** The bodies are blocking:
+synchronous SQLAlchemy, engine computation, PIL rendering. FastAPI only dispatches a
+route to its worker threadpool when it is `def`; an `async def` route runs on the event
+loop and blocks every other request for its whole duration. They were all `async def`
+with no `await` anywhere until 0.10.0, so the server handled one request at a time.
+`tests/integration/test_threadpool.py` fails if one goes back.
+
+**`/health` is the one `async def` route, also deliberately.** It touches nothing, so
+leaving it on the loop means it answers immediately while every worker thread is busy,
+which is what keeps the container's two-second healthcheck honest under load. Note the
+asymmetry this buys: `/health` is a *liveness* probe and after this change it cannot
+report a wedged threadpool. That is the intended trade; a readiness probe would be a
+separate feature. `require_api_key`, the exception handlers and `lifespan` stay async
+too, since they do no blocking work and keeping auth on the loop avoids spending a
+thread per request to compare a header.
+
+Anything that runs in a worker thread must not assume request-scoped context survives a
+further thread hop: `WRITE_TRANSACTION` (`db/engine.py`) is a `ContextVar`, and anyio
+copies the context into the worker, so it is correct today precisely because nothing
+inside `apply_game_change` offloads to another thread. If anything ever does, SQLite
+silently falls back to a deferred `BEGIN` with no error, which is the bug class above.
+
+- `server.py` — `create_app(settings)` builds the FastAPI app (settings on `app.state.settings`); a module-level PEP 562 `__getattr__` still resolves `chesssnake.api.server:app` lazily for ASGI import strings. `/health` is unversioned/open; `/v1` routes gated by the per-app api-key dependency. Mutating routes (`POST .../moves` `{move, player_id?, expected_version?}`, `POST .../resign`, `POST .../draw/{offer|accept|decline}` `{player_id, expected_version?}`) build an `engine.Game` from the stored row + `Moves` history and apply the action inside `apply_game_change` (one locked transaction). Read routes: `GET .../` (state), `.../archive` (all generations), `.../legal-moves`, `.../history`, `.../pgn` + `.../fen` (`PlainTextResponse`), `.../image` (PNG). Read routes take an optional `?generation=` (a past game; default = current); `/image` also takes `?perspective=white|black`. Group-level reads: `GET .../{g}/exists` and `GET .../{g}/record` (head-to-head win/draw/loss). Request bodies are pydantic; responses are `dto` dataclasses as dicts. Handlers: `ChessError`→400, `NotYourTurnError`→403, `GameNotFoundError`→404, `ChallengeError`/`VersionConflictError`→409, `SQLIdError`→422, `SQLError`→500, `GameError`→400. `lifespan` inits the pool from `settings.database` (schema init if `database.init_schema`); its `current_engine() is None` guard lets a second app share an existing pool, which is how the tests build an auth-requiring app alongside the open one.
 
 ### `db/` — the database layer (tier 3, **engine-free**)
 
@@ -262,6 +284,16 @@ Backend-agnostic SQLAlchemy Core. The `database.url` scheme picks the backend; t
 - `operations.py` — all fourteen query functions as Core expressions. Public functions open their own transaction; the `_`-prefixed variants take a connection so `challenge()` can run its check-and-mutate atomically. Still **no `engine` import** — the chess logic arrives as `apply_game_change`'s `mutate` callback.
 - `postgres.py` / `sqlite.py` — only what genuinely differs: the locking strategy, the dialect's `insert()` for `ON CONFLICT`, and creating a database.
 - `errors.py` — SQL/challenge exception hierarchy rooted at `GameError` (separate from the engine's `ChessError`; shared by client and server for error mapping).
+
+**Any read-then-write must use `locked_transaction()`, not `transaction()`.** This is
+the rule that the `game_get_or_create` bug in 0.10.0 broke. Under a plain deferred
+`BEGIN`, SQLite starts the connection as a reader and must upgrade to a writer for the
+write; if another writer holds the lock it refuses that upgrade with SQLITE_BUSY
+**immediately**, because `sqlite_busy_timeout` does not apply to the upgrade path. The
+symptom is a 500 `database is locked` on an ordinary request. `apply_game_change`,
+`game_delete`, `challenge` and `game_get_or_create` are the read-modify-writes; every
+other public function in `operations.py` is a plain read or a write-first statement and
+may use `transaction()`.
 
 **Locking is the thing to be careful about.** `apply_game_change` is a read-modify-write with the engine running in the middle. PostgreSQL serializes it with `SELECT … FOR UPDATE`; SQLite has no row locks, and **SQLAlchemy compiles `FOR UPDATE` away on SQLite silently rather than raising** — so a naive port looks correct and loses moves. SQLite instead takes the write lock as the transaction opens, via `BEGIN IMMEDIATE`, which is why write paths must use `locked_transaction()` and not `transaction()`. `require_write_transaction()` enforces that; `tests/integration/test_concurrency.py` proves it on both backends (and fails if the lock is removed).
 
