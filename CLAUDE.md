@@ -154,6 +154,13 @@ a local and a remote game**. Anything it does, the client could already do.
   a **local** game there is no server to ask and `engine.Game.move()` takes no player id,
   so `dispatch()` checks `is_players_turn` itself and raises `NotYourTurnError` —
   otherwise `--me` would silently mean nothing offline.
+- **`sync()` runs before every informational command** (`board`, `fen`, `moves`, `pgn`),
+  and this is load-bearing rather than belt-and-braces: `legal_moves`/`pgn`/`history` are
+  **proxied to the server** while the board and `fen` come from the local mirror, so
+  without it the two disagree the moment the opponent moves — `moves` would list the
+  legal moves of a position not on screen. It returns whether the version actually moved
+  on, so the caller can redraw and say so instead of silently changing the board. There
+  is still **no polling**: nothing arrives while the prompt sits idle.
 - **Errors are normal input.** `ChessError`, `GameError` and `ValueError` are caught per
   line and printed; only a failure to *reach* the endpoint escapes, and `cli.py` turns
   that into an exit with the URL in the message rather than a prompt that cannot work.

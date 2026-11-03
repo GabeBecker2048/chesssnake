@@ -178,8 +178,35 @@ class Session:
         for name, blurb in COMMANDS:
             self.write(f"  {name.ljust(width)}  {blurb}")
 
+    def sync(self) -> bool:
+        """
+        Pull the latest server state into the mirror, for a remote game.
+
+        Called before every informational command, because several of them
+        (``legal_moves``, ``pgn``, ``history``) are *proxied to the server* while
+        the board and ``fen`` come from the local mirror. Without this the two
+        disagree the moment the opponent moves: the board would show your last
+        position while ``moves`` listed the legal moves of a position you cannot
+        see. One GET is a cheap price for the board and the data always agreeing.
+
+        :return: whether the position actually moved on (so the caller can
+            redraw and say so, rather than silently changing the board).
+        """
+        if not self.game.is_remote:
+            return False
+        before = self.game.version
+        self.game.refresh()
+        return self.game.version != before
+
+    def _sync_and_announce(self) -> None:
+        """Sync, and redraw with a note if the opponent has been and gone."""
+        if self.sync():
+            self.note("the position changed on the server")
+            self.show()
+
     def do_moves(self, _arg):
         """List the legal moves for the side to move."""
+        self._sync_and_announce()
         moves = self.game.legal_moves()
         if not moves:
             self.write("(none)")
@@ -188,7 +215,8 @@ class Session:
         self.note(f"{len(moves)} legal moves")
 
     def do_board(self, _arg):
-        """Redraw the board."""
+        """Redraw the board, from current server state when remote."""
+        self.sync()
         self.show()
 
     def do_flip(self, _arg):
@@ -198,10 +226,12 @@ class Session:
 
     def do_fen(self, _arg):
         """Print the position as FEN."""
+        self._sync_and_announce()
         self.write(self.game.fen)
 
     def do_pgn(self, _arg):
         """Print the game so far as PGN."""
+        self._sync_and_announce()
         self.write(self.game.pgn().strip())
 
     def do_draw(self, _arg):
@@ -229,8 +259,10 @@ class Session:
         if not self.game.is_remote:
             self.note("local game - nothing to refresh")
             return
-        self.game.refresh()
-        self.show()
+        if self.sync():
+            self.show()
+        else:
+            self.note("nothing new")
 
     def do_save(self, arg):
         """Write a PNG of the current board to ``arg``."""
