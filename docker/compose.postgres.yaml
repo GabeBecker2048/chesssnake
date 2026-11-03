@@ -53,9 +53,9 @@ services:
       # Unlike SQLite, PostgreSQL locks per row, so the pool is worth sizing.
       CHESSSNAKE__DATABASE__POOL_MIN_SIZE: "1"
       CHESSSNAKE__DATABASE__POOL_MAX_SIZE: "10"
-      # Uncomment both to require an X-API-Key header on every /v1 route.
-      # CHESSSNAKE__API__REQUIRE_AUTH: "1"
-      # CHESSSNAKE__API__API_KEY: "change-me"
+      # Every /v1 route needs a login. Make the first administrator with:
+      #   docker compose -f docker/compose.postgres.yaml exec api chesssnake user create NAME --admin
+      # CHESSSNAKE__API__REGISTRATION: "open"
     ports:
       - "8000:8000"
 

@@ -43,7 +43,7 @@ import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -111,11 +111,13 @@ class ApiSettings(_Section):
 
     host: str = Field(default="127.0.0.1", description="Address the api-endpoint binds to.")
     port: int = Field(default=8000, ge=1, le=65535, description="Port the api-endpoint binds to.")
-    require_auth: bool = Field(
-        default=False,
-        description="Require a matching X-API-Key header on all /v1 routes. When true, api_key must be set.",
+    registration: Literal["closed", "open"] = Field(
+        default="closed",
+        description="Who can create accounts: closed means only administrators; open lets anyone register.",
     )
-    api_key: str | None = _secret(None, "The key clients must send as X-API-Key. Only used when require_auth is true.")
+    session_lifetime_days: int = Field(
+        default=30, ge=1, le=3650, description="Days a login stays valid before the user must log in again."
+    )
 
 
 class DatabaseSettings(_Section):
@@ -158,7 +160,9 @@ class ClientSettings(_Section):
         description="Base URL of the api-endpoint to connect to.",
         json_schema_extra={"env_only": True},
     )
-    api_key: str | None = _secret(None, "API key sent as X-API-Key when talking to the api-endpoint.", env_only=True)
+    token: str | None = _secret(
+        None, "Bearer token sent to the api-endpoint (from `chesssnake login`, or an api token).", env_only=True
+    )
 
 
 class Settings(BaseModel):
@@ -171,17 +175,6 @@ class Settings(BaseModel):
     database: DatabaseSettings = DatabaseSettings()
     client: ClientSettings = ClientSettings()
 
-    @model_validator(mode="after")
-    def _check_auth_is_usable(self) -> Settings:
-        """Fail loudly rather than coming up unauthenticated by accident."""
-        if self.api.require_auth and not self.api.api_key:
-            raise ValueError(
-                "api.require_auth is enabled but no api.api_key is set, so no request could ever "
-                "authenticate. Set a key with --api-key, "
-                f"{env_name('api', 'api_key')}, or `api_key` under [api] in the config file."
-            )
-        return self
-
     def advisories(self) -> list[str]:
         """
         Return non-fatal warnings about the effective configuration.
@@ -190,13 +183,7 @@ class Settings(BaseModel):
         startup. They are deliberately not Python warnings, which are easy to
         filter out of exactly the production logs where they matter most.
         """
-        notes = []
-        if self.api.api_key and not self.api.require_auth:
-            notes.append(
-                f"{env_name('api', 'api_key')} is set but api.require_auth is false, so the key is "
-                "ignored and every /v1 route accepts unauthenticated requests. Set api.require_auth "
-                "to enforce it."
-            )
+        notes: list[str] = []
         return notes
 
 

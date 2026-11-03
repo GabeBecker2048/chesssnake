@@ -29,11 +29,11 @@ GROUP = 90
 
 @pytest.fixture
 def game(api_client, pair):
-    """A freshly created game to mutate; returns ``(group, white, black)``."""
+    """A freshly created game to mutate; returns its id."""
     white, black = pair
     resp = api_client.post("/v1/games", json={"group_id": GROUP, "white_id": white, "black_id": black})
     assert resp.status_code == 200
-    return GROUP, white, black
+    return resp.json()["id"]
 
 
 def _bump(game, observed, errors_seen, hold):
@@ -48,7 +48,7 @@ def _bump(game, observed, errors_seen, hold):
         return ops.GameChange(fen=row["fen"], draw=row["draw"])
 
     try:
-        ops.apply_game_change(*game, mutate)
+        ops.apply_game_change(game, mutate)
     except Exception as e:  # surfaced by the assertions below
         errors_seen.append(e)
 
@@ -84,19 +84,18 @@ def test_version_reflects_every_applied_change(game, api_client):
     assert not errors_seen, f"apply_game_change raised: {errors_seen}"
     assert sorted(observed) == [1, 2, 3, 4]
 
-    state = api_client.get("/v1/games/{}/{}/{}".format(*game)).json()
+    state = api_client.get(f"/v1/games/{game}").json()
     assert state["version"] == 5
 
 
 def test_concurrent_moves_do_not_lose_a_ply(api_client, game):
     """The same guarantee through the public HTTP surface, with the real engine."""
-    group, white, black = game
 
     results: list[int] = []
     lock = threading.Lock()
 
     def play(move):
-        resp = api_client.post(f"/v1/games/{group}/{white}/{black}/moves", json={"move": move})
+        resp = api_client.post(f"/v1/games/{game}/moves", json={"move": move})
         with lock:
             results.append(resp.status_code)
 
@@ -110,11 +109,11 @@ def test_concurrent_moves_do_not_lose_a_ply(api_client, game):
 
     assert sorted(results) == [200, 400], f"expected one applied and one rejected, got {sorted(results)}"
 
-    history = api_client.get(f"/v1/games/{group}/{white}/{black}/history").json()
+    history = api_client.get(f"/v1/games/{game}/history").json()
     assert len(history["moves"]) == 1
 
 
-def test_creating_a_game_while_a_move_is_in_flight(game, api_client):
+def test_creating_a_game_while_a_move_is_in_flight(game, api_client, pair):
     """
     ``POST /v1/games`` must not fail while another request holds the write lock.
 
@@ -145,7 +144,7 @@ def test_creating_a_game_while_a_move_is_in_flight(game, api_client):
     def create(i):
         # A different triple each time, so this is not contending for the same
         # row: it is purely the lock-upgrade path being exercised.
-        _, white, black = game
+        white, black = pair
         resp = api_client.post("/v1/games", json={"group_id": 300 + i, "white_id": white, "black_id": black})
         with lock:
             (created if resp.status_code == 200 else failed).append(

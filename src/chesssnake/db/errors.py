@@ -25,6 +25,11 @@ PROVIDER_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 #: An external id (a Discord snowflake, say): any non-blank token.
 EXTERNAL_ID_RE = re.compile(r"^\S{1,128}$")
 
+#: Password length bounds. The upper one only stops absurd inputs: Argon2 hashes
+#: any length in the same time.
+PASSWORD_MIN = 8
+PASSWORD_MAX = 256
+
 
 class GameError(Exception):
     def __init__(self, msg):
@@ -101,6 +106,20 @@ class ChallengeError(GameError):
         super().__init__(msg)
 
 
+class ChallengeNotFoundError(GameError):
+    """No such pending challenge: never made, or already accepted, declined or withdrawn."""
+
+    def __init__(self, msg="No such pending challenge"):
+        super().__init__(msg)
+
+
+class TokenNotFoundError(GameError):
+    """No such token, or not one of the caller's."""
+
+    def __init__(self, msg="No such token"):
+        super().__init__(msg)
+
+
 class GameNotFoundError(GameError):
     def __init__(self, msg="No such game"):
         super().__init__(msg)
@@ -120,20 +139,6 @@ class VersionConflictError(GameError):
         super().__init__(msg)
 
 
-class GenerationConflictError(VersionConflictError):
-    """
-    The action names a game that is no longer the one in progress.
-
-    Raised when a client acts with a stale ``generation`` (its game ended and a
-    rematch started), or when the last game between the players is over and
-    nobody has started the next one. A subclass of :class:`VersionConflictError`
-    so clients that already handle the general case handle this one too.
-    """
-
-    def __init__(self, msg="That game is over; re-open it to start the next one, then retry"):
-        super().__init__(msg)
-
-
 class UserNotFoundError(GameError):
     def __init__(self, msg="No such user"):
         super().__init__(msg)
@@ -150,4 +155,24 @@ class UserValidationError(GameError):
     """A username, provider or external id does not fit the rules above."""
 
     def __init__(self, msg):
+        super().__init__(msg)
+
+
+class AuthError(GameError):
+    """
+    The request is not authenticated: no token, an unknown, expired or revoked one,
+    or a failed login. The api-endpoint answers ``401``.
+
+    Login failures deliberately share one message, so it never says whether the
+    username exists.
+    """
+
+    def __init__(self, msg="Authentication required: send Authorization: Bearer <token>"):
+        super().__init__(msg)
+
+
+class ForbiddenError(GameError):
+    """Authenticated, but not allowed to do this. The api-endpoint answers ``403``."""
+
+    def __init__(self, msg="You are not allowed to do that"):
         super().__init__(msg)

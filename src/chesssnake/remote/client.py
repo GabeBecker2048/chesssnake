@@ -11,19 +11,18 @@ state (or a structured error). Non-2xx responses are translated back into the
 matching engine (``ChessError``) or persistence (``GameError``) exception types so
 callers see the same exceptions they would from a local game.
 
-All routes are served under the versioned ``/v1`` prefix. If the server is
-configured with an API key, pass ``api_key=`` and it is sent as ``X-API-Key``.
+All routes are served under the versioned ``/v1`` prefix, and all but logging in
+and registering need a token, sent as ``Authorization: Bearer <token>``. Get one
+with :meth:`ApiClient.login`, or use :func:`chesssnake.connect`, which also finds
+a token stored by ``chesssnake login`` or set in the environment.
 """
 
 from ..db import errors as db_errors
-from ..dto import GameState, MoveResult, User
+from ..dto import Challenge, GameState, LoginResult, MoveResult, TokenInfo, User
 from ..engine import errors as chess_errors
 
 # All endpoints live under this version prefix.
 API_PREFIX = "/v1"
-
-# Header carrying the optional API key.
-API_KEY_HEADER = "X-API-Key"
 
 
 def _build_error_registry():
@@ -40,17 +39,23 @@ def _build_error_registry():
 _ERROR_REGISTRY = _build_error_registry()
 
 
-def _gen(generation):
-    """Query params for an optional ``generation`` selector (empty when current)."""
-    return {"generation": generation} if generation is not None else {}
+def _id(value):
+    """An id from an int or from something that has one (a ``User``, ``GameState``, ``Challenge``)."""
+    return getattr(value, "id", value)
 
 
 class ApiClient:
-    """Talks to a chesssnake api-endpoint over REST."""
+    """
+    Talks to a chesssnake api-endpoint over REST, as one user.
 
-    def __init__(self, base_url, session=None, api_key=None):
+    :param base_url: The endpoint, e.g. ``https://chess.example``.
+    :param session: A ``requests``-style session (default: a new ``requests.Session``).
+    :param token: A bearer token; set later by :meth:`login`.
+    """
+
+    def __init__(self, base_url, session=None, token=None):
         self.base_url = base_url.rstrip("/") if base_url else ""
-        self.api_key = api_key
+        self.token = token
         if session is None:
             try:
                 import requests
@@ -65,17 +70,19 @@ class ApiClient:
     # --- transport ---------------------------------------------------------
 
     def _headers(self):
-        return {API_KEY_HEADER: self.api_key} if self.api_key else None
+        return {"Authorization": f"Bearer {self.token}"} if self.token else None
 
-    def _request(self, method, path, *, params=None, json=None):
+    def _send(self, method, path, *, params=None, json=None):
         resp = self._session.request(
             method, f"{self.base_url}{API_PREFIX}{path}", params=params, json=json, headers=self._headers()
         )
         if resp.status_code >= 400:
             self._raise(resp)
-        if resp.content:
-            return resp.json()
-        return None
+        return resp
+
+    def _request(self, method, path, *, params=None, json=None):
+        resp = self._send(method, path, params=params, json=json)
+        return resp.json() if resp.content else None
 
     @staticmethod
     def _raise(resp):
@@ -96,21 +103,86 @@ class ApiClient:
         exc.args = (detail,)
         raise exc
 
+    # --- account -----------------------------------------------------------
+
+    def login(self, username, password) -> LoginResult:
+        """Log in; the session token is kept on this client for every later call."""
+        data = self._request("POST", "/auth/login", json={"username": username, "password": password})
+        result = LoginResult.from_dict(data)
+        self.token = result.token
+        return result
+
+    def register(self, username, password) -> LoginResult:
+        """Create an account (only when the server allows registration) and log in as it."""
+        data = self._request("POST", "/auth/register", json={"username": username, "password": password})
+        result = LoginResult.from_dict(data)
+        self.token = result.token
+        return result
+
+    def logout(self):
+        """Revoke this client's token on the server and forget it."""
+        self._request("POST", "/auth/logout")
+        self.token = None
+
+    def me(self) -> User:
+        """The user this client is logged in as."""
+        return User.from_dict(self._request("GET", "/auth/me"))
+
+    def change_password(self, current_password, new_password):
+        """Change your password; your other login sessions end, this one and api tokens stay."""
+        self._request(
+            "POST", "/auth/password", json={"current_password": current_password, "new_password": new_password}
+        )
+
+    def create_token(self, name, current_password, expires_in_days=None) -> LoginResult:
+        """Create a named api token (for a script or bot). Its secret is only ever shown here."""
+        body = {"name": name, "current_password": current_password, "expires_in_days": expires_in_days}
+        return LoginResult.from_dict(self._request("POST", "/auth/tokens", json=body))
+
+    def tokens(self, user_id=None) -> list[TokenInfo]:
+        params = {"user_id": user_id} if user_id is not None else None
+        return [TokenInfo.from_dict(t) for t in self._request("GET", "/auth/tokens", params=params)["tokens"]]
+
+    def revoke_token(self, token_id):
+        self._request("DELETE", f"/auth/tokens/{token_id}")
+
     # --- users -------------------------------------------------------------
 
-    def create_user(self, username) -> User:
-        """Create a user; the server assigns the id."""
-        return User.from_dict(self._request("POST", "/users", json={"username": username}))
-
     def get_user(self, user_id) -> User:
-        return User.from_dict(self._request("GET", f"/users/{user_id}"))
+        return User.from_dict(self._request("GET", f"/users/{_id(user_id)}"))
 
     def get_user_by_name(self, username) -> User:
         """Look a user up by username (case does not matter)."""
         return User.from_dict(self._request("GET", "/users", params={"username": username}))
 
-    def rename_user(self, user_id, username) -> User:
-        return User.from_dict(self._request("PATCH", f"/users/{user_id}", json={"username": username}))
+    def user(self, who) -> User:
+        """A user by id (an int) or username (a str)."""
+        return self.get_user_by_name(who) if isinstance(who, str) else self.get_user(who)
+
+    def resolve(self, who) -> int:
+        """A user id from an id, a username, or a ``User``."""
+        if isinstance(who, bool):
+            raise TypeError(f"A player is a user id or a username, not {who!r}")
+        if isinstance(who, str):
+            return self.get_user_by_name(who).id
+        return int(_id(who))
+
+    def rename(self, user_id, username) -> User:
+        return User.from_dict(self._request("PATCH", f"/users/{_id(user_id)}", json={"username": username}))
+
+    # Administrator only:
+
+    def create_user(self, username, password=None, role="user") -> User:
+        body = {"username": username, "password": password, "role": role}
+        return User.from_dict(self._request("POST", "/users", json=body))
+
+    def update_user(self, user_id, *, username=None, role=None, disabled=None, password=None) -> User:
+        body = {
+            key: value
+            for key, value in (("username", username), ("role", role), ("disabled", disabled), ("password", password))
+            if value is not None
+        }
+        return User.from_dict(self._request("PATCH", f"/users/{_id(user_id)}", json=body))
 
     def get_user_by_identity(self, provider, external_id) -> User:
         """The user linked to an external id, e.g. ``("discord", "1234")``."""
@@ -122,135 +194,114 @@ class ApiClient:
         return User.from_dict(data)
 
     def link_identity(self, user_id, provider, external_id) -> User:
-        """Link an external id to an existing user."""
-        return User.from_dict(self._request("PUT", f"/users/{user_id}/identities/{provider}/{external_id}"))
+        return User.from_dict(self._request("PUT", f"/users/{_id(user_id)}/identities/{provider}/{external_id}"))
 
-    # --- games -------------------------------------------------------------
-
-    def get_or_create_game(self, group_id, white_id, black_id) -> GameState:
-        data = self._request("POST", "/games", json={"group_id": group_id, "white_id": white_id, "black_id": black_id})
-        return GameState.from_dict(data)
-
-    def get_game(self, game_id) -> GameState:
-        """A game by its id, in progress or finished."""
-        return GameState.from_dict(self._request("GET", f"/games/{game_id}"))
-
-    def get_state(self, group_id, white_id, black_id, generation=None) -> GameState:
-        data = self._request("GET", f"/games/{group_id}/{white_id}/{black_id}", params=_gen(generation))
-        return GameState.from_dict(data)
-
-    def archive(self, group_id, white_id, black_id) -> list[GameState]:
-        """Every game (generation) for a triple, oldest first."""
-        data = self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/archive")
-        return [GameState.from_dict(game) for game in data["games"]]
-
-    def move(
-        self, group_id, white_id, black_id, move, player_id=None, expected_version=None, generation=None
-    ) -> MoveResult:
-        data = self._request(
-            "POST",
-            f"/games/{group_id}/{white_id}/{black_id}/moves",
-            json={"move": move, "player_id": player_id, "expected_version": expected_version, "generation": generation},
-        )
-        return MoveResult.from_dict(data)
-
-    def resign(self, group_id, white_id, black_id, player_id, expected_version=None, generation=None) -> GameState:
-        return self._action(group_id, white_id, black_id, "resign", player_id, expected_version, generation)
-
-    def offer_draw(self, group_id, white_id, black_id, player_id, expected_version=None, generation=None) -> GameState:
-        return self._action(group_id, white_id, black_id, "draw/offer", player_id, expected_version, generation)
-
-    def accept_draw(self, group_id, white_id, black_id, player_id, expected_version=None, generation=None) -> GameState:
-        return self._action(group_id, white_id, black_id, "draw/accept", player_id, expected_version, generation)
-
-    def decline_draw(
-        self, group_id, white_id, black_id, player_id, expected_version=None, generation=None
-    ) -> GameState:
-        return self._action(group_id, white_id, black_id, "draw/decline", player_id, expected_version, generation)
-
-    def _action(self, group_id, white_id, black_id, action, player_id, expected_version, generation) -> GameState:
-        data = self._request(
-            "POST",
-            f"/games/{group_id}/{white_id}/{black_id}/{action}",
-            json={"player_id": player_id, "expected_version": expected_version, "generation": generation},
-        )
-        return GameState.from_dict(data)
-
-    def legal_moves(self, group_id, white_id, black_id, generation=None):
-        return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/legal-moves", params=_gen(generation))[
-            "moves"
-        ]
-
-    def history(self, group_id, white_id, black_id, generation=None):
-        return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/history", params=_gen(generation))[
-            "moves"
-        ]
-
-    def pgn(self, group_id, white_id, black_id, generation=None) -> str:
-        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/pgn", params=_gen(generation)).text
-
-    def fen(self, group_id, white_id, black_id, generation=None) -> str:
-        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/fen", params=_gen(generation)).text
-
-    def image(self, group_id, white_id, black_id, perspective=None, generation=None) -> bytes:
-        params = _gen(generation)
-        if perspective is not None:
-            params["perspective"] = perspective
-        return self._raw("GET", f"/games/{group_id}/{white_id}/{black_id}/image", params=params).content
-
-    def _raw(self, method, path, params=None):
-        """A request that returns the raw response (for non-JSON bodies: image/pgn/fen)."""
-        resp = self._session.request(
-            method, f"{self.base_url}{API_PREFIX}{path}", params=params, headers=self._headers()
-        )
-        if resp.status_code >= 400:
-            self._raise(resp)
-        return resp
-
-    def delete_game(self, group_id, white_id, black_id, generation=None):
-        return self._request("DELETE", f"/games/{group_id}/{white_id}/{black_id}", params=_gen(generation))
-
-    def current_games(self, player_id, group_id=None) -> list[GameState]:
-        """The games in progress that a player is in; every group when ``group_id`` is ``None``."""
-        params = {"player_id": player_id}
-        if group_id is not None:
-            params["group_id"] = group_id
-        return [GameState.from_dict(game) for game in self._request("GET", "/games", params=params)["games"]]
-
-    def game_exists(self, player1, player2, group_id=0) -> GameState | None:
-        """The game in progress between two players (either colour), or ``None``."""
-        data = self._request("GET", f"/games/{group_id}/exists", params={"player1": player1, "player2": player2})
-        return GameState.from_dict(data["game"]) if data["game"] is not None else None
-
-    def record(self, player1, player2, group_id=0):
-        """Win/draw/loss record between two players in a group (finished games)."""
-        return self._request("GET", f"/games/{group_id}/record", params={"player1": player1, "player2": player2})
+    def unlink_identity(self, user_id, provider, external_id) -> User:
+        return User.from_dict(self._request("DELETE", f"/users/{_id(user_id)}/identities/{provider}/{external_id}"))
 
     # --- challenges --------------------------------------------------------
 
-    def challenge(self, challenger, challenged, group_id=0):
-        data = self._request(
-            "POST",
-            "/challenges",
-            json={
-                "group_id": group_id,
-                "challenger": challenger,
-                "challenged": challenged,
-            },
-        )
-        return data["accepted"]
+    def challenge(self, opponent, group_id=0, color="random", *, player_id=None) -> Challenge:
+        """
+        Challenge another user. ``opponent`` is an id or a username; ``color`` is the
+        colour you want: ``"white"``, ``"black"`` or ``"random"``. Administrators may
+        challenge on someone's behalf with ``player_id``.
+        """
+        body = {"opponent_id": self.resolve(opponent), "group_id": group_id, "color": color, "player_id": player_id}
+        return Challenge.from_dict(self._request("POST", "/challenges", json=body))
 
-    def challenge_exists(self, player1, player2, group_id=0):
-        data = self._request("GET", f"/challenges/{group_id}/exists", params={"player1": player1, "player2": player2})
-        return data["challenge"]
+    def challenges(self, direction="all", user_id=None) -> list[Challenge]:
+        """Your pending challenges: ``"incoming"``, ``"outgoing"`` or ``"all"``."""
+        params = {"direction": direction}
+        if user_id is not None:
+            params["user_id"] = user_id
+        return [Challenge.from_dict(c) for c in self._request("GET", "/challenges", params=params)["challenges"]]
 
-    def delete_challenge(self, challenger, challenged, group_id=0):
-        return self._request(
-            "DELETE",
-            "/challenges",
-            json={
-                "group_id": group_id,
-                "challenger": challenger,
-                "challenged": challenged,
-            },
-        )
+    def get_challenge(self, challenge_id) -> Challenge:
+        return Challenge.from_dict(self._request("GET", f"/challenges/{_id(challenge_id)}"))
+
+    def accept_challenge(self, challenge_id, *, player_id=None) -> GameState:
+        """Accept a challenge made to you; the game is created and returned."""
+        body = {"player_id": player_id} if player_id is not None else None
+        return GameState.from_dict(self._request("POST", f"/challenges/{_id(challenge_id)}/accept", json=body))
+
+    def decline_challenge(self, challenge_id):
+        """Decline a challenge made to you, or withdraw one you made."""
+        self._request("DELETE", f"/challenges/{_id(challenge_id)}")
+
+    withdraw_challenge = decline_challenge
+
+    # --- games -------------------------------------------------------------
+
+    def create_game(self, white, black, group_id=0) -> GameState:
+        """Administrator only: start (or fetch) a game directly, without a challenge."""
+        body = {"group_id": group_id, "white_id": self.resolve(white), "black_id": self.resolve(black)}
+        return GameState.from_dict(self._request("POST", "/games", json=body))
+
+    def get_game(self, game_id) -> GameState:
+        """A game by its id, in progress or finished."""
+        return GameState.from_dict(self._request("GET", f"/games/{_id(game_id)}"))
+
+    def current_games(self, player=None, group_id=None) -> list[GameState]:
+        """Games in progress: yours, or ``player``'s; in every group unless ``group_id`` is given."""
+        params = {}
+        if player is not None:
+            params["player_id"] = self.resolve(player)
+        if group_id is not None:
+            params["group_id"] = group_id
+        return [GameState.from_dict(g) for g in self._request("GET", "/games", params=params)["games"]]
+
+    def games_between(self, player1, player2, group_id=0, status="all") -> list[GameState]:
+        """Every game between two players in a group, either colour, oldest first."""
+        params = {
+            "player1": self.resolve(player1),
+            "player2": self.resolve(player2),
+            "group_id": group_id,
+            "status": status,
+        }
+        return [GameState.from_dict(g) for g in self._request("GET", "/games/between", params=params)["games"]]
+
+    def record(self, player1, player2, group_id=0) -> dict:
+        """Win/draw/loss record between two players in a group (finished games)."""
+        params = {"player1": self.resolve(player1), "player2": self.resolve(player2), "group_id": group_id}
+        return self._request("GET", "/games/record", params=params)
+
+    def delete_game(self, game_id):
+        """Administrator only."""
+        self._request("DELETE", f"/games/{_id(game_id)}")
+
+    def move(self, game_id, move, player_id=None, expected_version=None) -> MoveResult:
+        body = {"move": move, "player_id": player_id, "expected_version": expected_version}
+        return MoveResult.from_dict(self._request("POST", f"/games/{_id(game_id)}/moves", json=body))
+
+    def resign(self, game_id, player_id=None, expected_version=None) -> GameState:
+        return self._action(game_id, "resign", player_id, expected_version)
+
+    def offer_draw(self, game_id, player_id=None, expected_version=None) -> GameState:
+        return self._action(game_id, "draw/offer", player_id, expected_version)
+
+    def accept_draw(self, game_id, player_id=None, expected_version=None) -> GameState:
+        return self._action(game_id, "draw/accept", player_id, expected_version)
+
+    def decline_draw(self, game_id, player_id=None, expected_version=None) -> GameState:
+        return self._action(game_id, "draw/decline", player_id, expected_version)
+
+    def _action(self, game_id, action, player_id, expected_version) -> GameState:
+        body = {"player_id": player_id, "expected_version": expected_version}
+        return GameState.from_dict(self._request("POST", f"/games/{_id(game_id)}/{action}", json=body))
+
+    def legal_moves(self, game_id):
+        return self._request("GET", f"/games/{_id(game_id)}/legal-moves")["moves"]
+
+    def history(self, game_id):
+        return self._request("GET", f"/games/{_id(game_id)}/history")["moves"]
+
+    def pgn(self, game_id) -> str:
+        return self._send("GET", f"/games/{_id(game_id)}/pgn").text
+
+    def fen(self, game_id) -> str:
+        return self._send("GET", f"/games/{_id(game_id)}/fen").text
+
+    def image(self, game_id, perspective=None) -> bytes:
+        params = {"perspective": perspective} if perspective is not None else None
+        return self._send("GET", f"/games/{_id(game_id)}/image", params=params).content

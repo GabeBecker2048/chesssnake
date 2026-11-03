@@ -1,30 +1,30 @@
-from .dto import GameState, MoveResult, User
+from .dto import Challenge, GameState, LoginResult, MoveResult, TokenInfo, User
 from .engine.enums import Color, GameStatus, PieceType, Termination
-from .remote.game import (
-    Game,
-    challenge,
-    challenge_exists,
-    create_user,
-    delete_challenge,
-    get_user,
-    record,
-    user_for_identity,
-)
+from .remote.game import Game, connect
+
+
+def __getattr__(name):
+    # ApiClient lives with the HTTP code; resolving it lazily keeps `import
+    # chesssnake` free of it, as it was before the client was exported here.
+    if name == "ApiClient":
+        from .remote.client import ApiClient
+
+        return ApiClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
-    "Game",
-    "MoveResult",
-    "GameState",
-    "User",
-    "create_user",
-    "get_user",
-    "user_for_identity",
-    "challenge",
-    "challenge_exists",
-    "delete_challenge",
-    "record",
+    "ApiClient",
+    "Challenge",
     "Color",
+    "Game",
+    "GameState",
     "GameStatus",
+    "LoginResult",
+    "MoveResult",
     "PieceType",
     "Termination",
+    "TokenInfo",
+    "User",
+    "connect",
 ]
