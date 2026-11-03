@@ -248,3 +248,78 @@ def _collect(stream, until, timeout=5):
             seen.append(event)
             if until(event):
                 return seen
+
+
+class _BadGateway:
+    """What a reverse proxy answers while its upstream restarts: HTTP 502 to everything."""
+
+    def __init__(self, port):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"  # as Caddy answers; websockets rejects 1.0 outright
+
+            def do_GET(self):
+                self.send_response(502)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        ThreadingHTTPServer.allow_reuse_address = True
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_a_proxys_502_during_a_restart_is_retried_not_the_end(serve, people, monkeypatch):
+    """
+    Behind Caddy, a reconnect during a restart is answered 502, not refused.
+
+    0.13.0 treated any HTTP status on a reconnect as "websockets were turned off"
+    and gave up, so a restart behind a proxy ended live updates for good. Found on
+    the deployment; locally a restart only ever gave "connection refused".
+    """
+    from chesssnake.remote import realtime
+
+    # Short waits, so several reconnects land while the "proxy" is answering.
+    monkeypatch.setattr(realtime, "BACKOFF_START", 0.1)
+    monkeypatch.setattr(realtime, "BACKOFF_MAX", 0.2)
+    server = serve(enabled=True)
+    stream = client_for(server, people, "alice").events()
+    try:
+        server.stop()
+        assert _collect(stream, lambda e: e["type"] == "disconnected")[-1]["type"] == "disconnected"
+        proxy = _BadGateway(server.port)
+        time.sleep(1.5)  # several reconnects, each answered 502
+        proxy.stop()
+        assert all(e["type"] != "ended" for e in stream.drain()), "a 502 ended the stream"
+        restarted = serve(port=server.port, enabled=True)
+        events = _collect(stream, lambda e: e["type"] in ("reconnected", "ended"), timeout=10)
+        assert events[-1]["type"] == "reconnected", events
+        restarted.stop()
+    finally:
+        stream.close()
+
+
+def test_websockets_turned_off_across_a_restart_ends_the_stream(serve, people, monkeypatch):
+    """The one answer to a reconnect that means stop: the server is up and refuses (403)."""
+    from chesssnake.remote import realtime
+
+    monkeypatch.setattr(realtime, "BACKOFF_START", 0.1)
+    monkeypatch.setattr(realtime, "BACKOFF_MAX", 0.2)
+    server = serve(enabled=True)
+    stream = client_for(server, people, "alice").events()
+    try:
+        server.stop()
+        restarted = serve(port=server.port)  # back, with websockets off
+        events = _collect(stream, lambda e: e["type"] in ("reconnected", "ended"), timeout=10)
+        assert events[-1]["type"] == "ended" and "turned off" in events[-1]["reason"], events
+        restarted.stop()
+    finally:
+        stream.close()

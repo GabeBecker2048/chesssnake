@@ -44,6 +44,12 @@ BACKOFF_START, BACKOFF_MAX = 1.0, 30.0
 #: Close codes after which reconnecting would only be refused again.
 _PERMANENT = {4400: "the server rejected a message", 4403: "this origin is not allowed"}
 
+#: The one HTTP answer to a *reconnect* that means "stop trying": the server is
+#: up and refuses the upgrade, i.e. websockets were switched off since. Anything
+#: else (a proxy's 502/503/504 while the server restarts, most of all) is
+#: transient, and giving up on it would end live updates on every restart.
+_TURNED_OFF = 403
+
 
 class RealtimeUnavailable(Exception):
     """The server does not offer live updates (or they could not be reached); poll instead."""
@@ -155,7 +161,10 @@ class EventStream:
         """Connect, authenticate and subscribe. Raises on any failure."""
         from websockets.sync.client import connect
 
-        ws = connect(self.url, open_timeout=self._open_timeout, close_timeout=2, max_size=2**20)
+        # Entered as a context manager (and closed by hand later): websockets 17
+        # deprecates using connect()'s return value directly, and will change what
+        # it returns, while __enter__ gives the connection on every version.
+        ws = connect(self.url, open_timeout=self._open_timeout, close_timeout=2, max_size=2**20).__enter__()
         try:
             ws.send(json.dumps({"type": "auth", "token": self._token}))
             first = json.loads(ws.recv(timeout=self._open_timeout))
@@ -236,11 +245,11 @@ class EventStream:
                 self._emit({"type": "auth_error", "detail": "the token is no longer valid; log in again"})
                 return None
             except Exception as e:
-                if _http_status(e) is not None:
-                    # The server answers but will not upgrade: websockets were
-                    # switched off, or a proxy no longer passes them on.
+                if _http_status(e) == _TURNED_OFF:
                     self._emit({"type": "ended", "reason": f"live updates are no longer available ({_describe(e)})"})
                     return None
+                # Anything else, an HTTP 502 from a proxy whose upstream is
+                # restarting included, is worth another try after the backoff.
                 delay = min(delay * 2, BACKOFF_MAX)
         return None
 
