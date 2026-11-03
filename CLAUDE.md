@@ -67,6 +67,33 @@ docker compose -f docker/compose.postgres.yaml up --build   # api-endpoint + Pos
 
 Package data (`data/*.sql`, `data/*.ttf`, `data/img/*.png`) is declared under `[tool.setuptools.package-data]` in `pyproject.toml` and accessed at runtime via `chesssnake.assets.asset_path("img/template.png")` (a thin wrapper over `importlib.resources`). If you add runtime assets, register them there or they won't ship in the wheel. `uv.lock` is committed and should be kept in sync (`uv lock`).
 
+## Writing the changelog
+
+`CHANGELOG.md` is the release notes: `scripts/release.sh` and the release workflow
+both read the `## X.Y.Z` section out of it, so a version with no section fails the
+release before anything is published. Every version gets an entry, in one format.
+
+- **Keep a Changelog sections**, in this order, and only the ones that apply:
+  `### Added`, `### Changed`, `### Deprecated`, `### Removed`, `### Fixed`,
+  `### Security`. The heading is `## X.Y.Z - YYYY-MM-DD` with a hyphen.
+- **Bullets, never paragraphs.** One change per bullet, one or two sentences.
+  Wrap the text, do not stack several changes into one bullet.
+- **Summary level.** Say what changed and why it matters to someone using the
+  thing. Module names, call signatures and the reasoning behind a decision
+  belong in the commit message, not here. Roughly one to six bullets per
+  version; more than that usually means several bullets are really one.
+- **Comparable depth.** Entries should look like siblings. "Major PostgreSQL
+  changes." is too thin and a four-paragraph migration note is too much; both
+  existed before 0.9.2 and both were rewritten.
+- **No `**Breaking.**` marker.** Breaking changes are ordinary bullets under
+  `### Changed` or `### Removed`; the note at the top of the file already says
+  pre-1.0 minors may break. Dropping a Python version is a `### Removed` bullet.
+- **No em-dashes** here or in any user-facing document (README, CHANGELOG,
+  ROADMAP, everything under `docs/`). Use a colon, comma, semicolon or full
+  stop. `CLAUDE.md` is exempt, being internal.
+- `ROADMAP.md` holds planned versions in the same shape and is **hand-edited by
+  Gabe**: do not rewrite its entries.
+
 ## Releasing
 
 Pushing a tag `vX.Y.Z` releases that version: `.github/workflows/release.yml` builds
