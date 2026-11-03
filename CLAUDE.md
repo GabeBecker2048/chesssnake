@@ -281,9 +281,15 @@ it does a database lookup, so it runs in the threadpool with the route.
 
 **Argon2 is the other expensive thing, and it has two rules** (`api/auth.py`): it never
 runs inside a transaction (on SQLite a `locked_transaction` holds the whole database's
-write lock), and at most `MAX_CONCURRENT_HASHES` (4) run at once, behind a semaphore
-whose timeout is a 503. Each hash takes ~19 MiB, and anyio runs 40 sync routes at
-once, so an anonymous login flood would otherwise exhaust a 512 MiB container. Because
+write lock), and it **only ever runs on `_hash_pool`, a dedicated pool of
+`MAX_CONCURRENT_HASHES` (4) threads**, admitted by a semaphore whose timeout is a 503.
+A cap on concurrency alone is not enough, and 0.12.0 shipped with only that: each hash
+allocates 19 MiB, glibc keeps a block that size in the allocating thread's arena after
+it is freed, and anyio runs routes on up to 40 threads, so every thread that ever
+hashed kept its own 19 MiB. Measured on the deployed server: one burst of 40 logins
+pinned the 512 MiB container at its limit (throttled 2,234 times, anon memory 479 MiB);
+in-process, 777 MiB with the semaphore alone against a flat 93 MiB with a 4-thread
+pool. `tests/config/test_password_hashing.py` fails if a hash runs on any other thread. Because
 the verify happens outside the transaction, the write that follows (minting the token,
 changing the password) passes `expected_hash=` so the operations layer re-checks, under
 the lock, that the password was not reset in between.
