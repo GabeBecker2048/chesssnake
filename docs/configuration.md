@@ -70,7 +70,7 @@ environment; the config file uses real TOML booleans.
 The `database.url` scheme selects the backend. There is no separate "which
 database" setting to drift out of sync with the connection details.
 
-**SQLite** — one file, no server, and no compiled dependencies:
+**SQLite**, one file with no server and no compiled dependencies:
 
 ```toml
 [database]
@@ -80,7 +80,7 @@ url = "sqlite:///chesssnake.db"          # relative to the working directory
 
 Count the slashes: three means a relative path, four means absolute. A relative
 path resolves against the process's working directory, so a service started from
-a different directory silently opens a different database — prefer the absolute
+a different directory silently opens a different database. Prefer the absolute
 form for anything long-lived.
 
 SQLite is configured for concurrent use: WAL journaling so readers don't block the
@@ -89,7 +89,7 @@ operations. That makes it correct for **one api-endpoint process serving many
 clients**. It is not suitable for several worker processes writing at once, and it
 must not live on a network filesystem, where its locking is unreliable.
 
-**PostgreSQL** — needs a server and the `postgres` extra:
+**PostgreSQL**, which needs a server and the `postgres` extra:
 
 ```commandline
 pip install 'chesssnake[api,postgres]'
@@ -117,7 +117,7 @@ require_auth = true
 ```
 
 Enabling `require_auth` without a key is a startup error, not a silent
-downgrade — a deployment whose secret failed to inject fails loudly instead of
+downgrade: a deployment whose secret failed to inject fails loudly instead of
 coming up wide open.
 
 Supply the key through the environment rather than the file so it stays out of
@@ -137,7 +137,7 @@ Discovery order, first match wins:
 4. `$CHESSSNAKE_HOME/chesssnake.toml`
 5. `~/.config/chesssnake/chesssnake.toml`
 
-Finding no file is fine — the defaults stand alone. A file named explicitly by
+Finding no file is fine, because the defaults stand alone. A file named explicitly by
 (1) or (2) that does not exist *is* an error, since you asked for that file
 specifically.
 
@@ -167,11 +167,11 @@ accepted values, and its default, to:
 
 Both are locations the search above covers, so the file takes effect immediately.
 Every value it contains is the built-in default, so the file changes nothing until
-you edit it — deleting a line just falls back to the same value. The two settings
+you edit it, and deleting a line just falls back to the same value. The two settings
 with no default (`database.url` and `api.api_key`) ship commented out.
 
 It refuses to overwrite an existing file; pass `--force` to replace one. If you
-write to `$CHESSSNAKE_HOME` while a `./chesssnake.toml` also exists, it warns —
+write to `$CHESSSNAKE_HOME` while a `./chesssnake.toml` also exists, it warns,
 the working directory is searched first and would win.
 
 ## Setting anything from the command line
@@ -190,13 +190,13 @@ A named flag beats `-o` for the same key.
 
 The `[client]` section is **environment-only**. A remote `Game` reads
 `CHESSSNAKE__CLIENT__API_URL` and `CHESSSNAKE__CLIENT__API_KEY` directly and never
-looks for a config file — a library that read `./chesssnake.toml` out of the
+looks for a config file: a library that read `./chesssnake.toml` out of the
 caller's working directory would be surprising, and it would put pydantic on the
 dependency-free local-game path. Putting `[client]` in a config file is an error
 rather than a value that would be silently ignored.
 
 For the same reason, `chesssnake config show` needs the `api` extra
-(`pip install 'chesssnake[api]'`), which is where pydantic lives — including when
+(`pip install 'chesssnake[api]'`), which is where pydantic lives, including when
 all you want to inspect is the `[client]` section.
 
 ## Deploying under your own ASGI server
@@ -208,4 +208,4 @@ uvicorn chesssnake.api.server:create_app --factory --host 0.0.0.0 --port 8000
 `chesssnake.api.server:app` also works. Command-line flags obviously cannot reach
 the server this way, and the same is true of `uvicorn --reload`/`--workers`, which
 re-import in a fresh process. Use the environment or a config file for those
-deployments — `CHESSSNAKE_CONFIG` is how you point at a specific file.
+deployments. `CHESSSNAKE_CONFIG` is how you point at a specific file.
