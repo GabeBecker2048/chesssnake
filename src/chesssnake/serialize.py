@@ -11,20 +11,22 @@ from .engine.enums import GameStatus, Termination
 from .engine.game import Game as EngineGame
 
 
-def game_from_state(state: GameState, group_id, white_id, black_id, position_history=None, move_history=None):
+def game_from_state(state: GameState, position_history=None, move_history=None):
     """Build a full engine :class:`Game` from stored state (what the server drives).
 
-    ``position_history`` (the list of past position keys) is loaded so that the
-    reconstructed game detects threefold repetition exactly as an in-memory game
-    would; ``move_history`` (SAN) is loaded so PGN export works server-side.
+    The players' ids and names come from the state itself. ``position_history``
+    (the list of past position keys, starting position included) is loaded so
+    that the reconstructed game detects threefold repetition exactly as an
+    in-memory game would; ``move_history`` (SAN) is loaded so PGN export works
+    server-side.
     """
     board, turn = from_fen(state.fen)
     game = EngineGame(
-        white_id=white_id,
-        black_id=black_id,
-        group_id=group_id,
-        white_name=state.wname or "",
-        black_name=state.bname or "",
+        white_id=state.white_id,
+        black_id=state.black_id,
+        group_id=state.group_id,
+        white_name=state.white_name or "",
+        black_name=state.black_name or "",
         board=board,
         turn=turn,
         draw=state.draw,
@@ -36,8 +38,10 @@ def game_from_state(state: GameState, group_id, white_id, black_id, position_his
     return game
 
 
-def state_from_game(game: EngineGame, version: int, generation: int = 1) -> GameState:
-    """Serialize an engine :class:`Game` back into a :class:`GameState` for storage."""
+def state_from_game(
+    game: EngineGame, version: int, generation: int = 1, *, id=None, started_at=None, updated_at=None
+) -> GameState:
+    """Serialize an engine :class:`Game` back into a :class:`GameState`."""
     return GameState(
         fen=to_fen(game.board, game.turn),
         status=int(game.board.status),
@@ -45,8 +49,14 @@ def state_from_game(game: EngineGame, version: int, generation: int = 1) -> Game
         generation=generation,
         draw=int(game.draw) if game.draw is not None else None,
         termination=game.board.termination.value if game.board.termination is not None else None,
-        wname=game.wname,
-        bname=game.bname,
+        id=id,
+        group_id=game.gid,
+        white_id=game.wid,
+        black_id=game.bid,
+        white_name=game.wname,
+        black_name=game.bname,
+        started_at=started_at,
+        updated_at=updated_at,
     )
 
 

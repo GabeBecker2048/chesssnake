@@ -120,23 +120,29 @@ install. For PostgreSQL, hardening notes and what to do before exposing it, see
 
 ### Connect to it
 
-```python
-from chesssnake import Game
+Players are accounts on the server, so create them first:
 
-game = Game.remote(123, 456, group_id=789, api_url="http://localhost:8000")
+```python
+from chesssnake import Game, create_user
+
+url = "http://localhost:8000"
+create_user("alice", api_url=url)
+create_user("bob", api_url=url)
+
+game = Game.remote("alice", "bob", api_url=url)
 game.move("e4")
 ```
 
 Or from a terminal, anywhere on the network:
 
 ```sh
-chesssnake play --api-url http://localhost:8000 --group 789 --white 123 --black 456 --me 123
+chesssnake play --api-url http://localhost:8000 --white alice --black bob --me alice
 ```
 
-Or over plain HTTP, from any language:
+Or over plain HTTP, from any language (here alice is user 1 and bob user 2):
 
 ```sh
-curl -X POST http://localhost:8000/v1/games/789/123/456/moves \
+curl -X POST http://localhost:8000/v1/games/0/1/2/moves \
   -H 'Content-Type: application/json' -d '{"move":"e4"}'
 ```
 

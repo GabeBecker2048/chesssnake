@@ -16,7 +16,7 @@ configured with an API key, pass ``api_key=`` and it is sent as ``X-API-Key``.
 """
 
 from ..db import errors as db_errors
-from ..dto import GameState, MoveResult
+from ..dto import GameState, MoveResult, User
 from ..engine import errors as chess_errors
 
 # All endpoints live under this version prefix.
@@ -96,62 +96,85 @@ class ApiClient:
         exc.args = (detail,)
         raise exc
 
+    # --- users -------------------------------------------------------------
+
+    def create_user(self, username) -> User:
+        """Create a user; the server assigns the id."""
+        return User.from_dict(self._request("POST", "/users", json={"username": username}))
+
+    def get_user(self, user_id) -> User:
+        return User.from_dict(self._request("GET", f"/users/{user_id}"))
+
+    def get_user_by_name(self, username) -> User:
+        """Look a user up by username (case does not matter)."""
+        return User.from_dict(self._request("GET", "/users", params={"username": username}))
+
+    def rename_user(self, user_id, username) -> User:
+        return User.from_dict(self._request("PATCH", f"/users/{user_id}", json={"username": username}))
+
+    def get_user_by_identity(self, provider, external_id) -> User:
+        """The user linked to an external id, e.g. ``("discord", "1234")``."""
+        return User.from_dict(self._request("GET", f"/users/{provider}/{external_id}"))
+
+    def get_or_create_user_by_identity(self, provider, external_id, username) -> User:
+        """The user linked to an external id, created (with ``username``) if there is none."""
+        data = self._request("POST", f"/users/{provider}/{external_id}", json={"username": username})
+        return User.from_dict(data)
+
+    def link_identity(self, user_id, provider, external_id) -> User:
+        """Link an external id to an existing user."""
+        return User.from_dict(self._request("PUT", f"/users/{user_id}/identities/{provider}/{external_id}"))
+
     # --- games -------------------------------------------------------------
 
-    def get_or_create_game(self, group_id, white_id, black_id, white_name="", black_name="") -> GameState:
-        data = self._request(
-            "POST",
-            "/games",
-            json={
-                "group_id": group_id,
-                "white_id": white_id,
-                "black_id": black_id,
-                "white_name": white_name,
-                "black_name": black_name,
-            },
-        )
-        return GameState(**data)
+    def get_or_create_game(self, group_id, white_id, black_id) -> GameState:
+        data = self._request("POST", "/games", json={"group_id": group_id, "white_id": white_id, "black_id": black_id})
+        return GameState.from_dict(data)
+
+    def get_game(self, game_id) -> GameState:
+        """A game by its id, in progress or finished."""
+        return GameState.from_dict(self._request("GET", f"/games/{game_id}"))
 
     def get_state(self, group_id, white_id, black_id, generation=None) -> GameState:
         data = self._request("GET", f"/games/{group_id}/{white_id}/{black_id}", params=_gen(generation))
-        return GameState(**data)
+        return GameState.from_dict(data)
 
-    def archive(self, group_id, white_id, black_id):
-        """List all games (generations) for a triple, oldest first."""
-        return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/archive")["games"]
+    def archive(self, group_id, white_id, black_id) -> list[GameState]:
+        """Every game (generation) for a triple, oldest first."""
+        data = self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/archive")
+        return [GameState.from_dict(game) for game in data["games"]]
 
-    def move(self, group_id, white_id, black_id, move, player_id=None, expected_version=None) -> MoveResult:
+    def move(
+        self, group_id, white_id, black_id, move, player_id=None, expected_version=None, generation=None
+    ) -> MoveResult:
         data = self._request(
             "POST",
             f"/games/{group_id}/{white_id}/{black_id}/moves",
-            json={"move": move, "player_id": player_id, "expected_version": expected_version},
+            json={"move": move, "player_id": player_id, "expected_version": expected_version, "generation": generation},
         )
         return MoveResult.from_dict(data)
 
-    def resign(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
+    def resign(self, group_id, white_id, black_id, player_id, expected_version=None, generation=None) -> GameState:
+        return self._action(group_id, white_id, black_id, "resign", player_id, expected_version, generation)
+
+    def offer_draw(self, group_id, white_id, black_id, player_id, expected_version=None, generation=None) -> GameState:
+        return self._action(group_id, white_id, black_id, "draw/offer", player_id, expected_version, generation)
+
+    def accept_draw(self, group_id, white_id, black_id, player_id, expected_version=None, generation=None) -> GameState:
+        return self._action(group_id, white_id, black_id, "draw/accept", player_id, expected_version, generation)
+
+    def decline_draw(
+        self, group_id, white_id, black_id, player_id, expected_version=None, generation=None
+    ) -> GameState:
+        return self._action(group_id, white_id, black_id, "draw/decline", player_id, expected_version, generation)
+
+    def _action(self, group_id, white_id, black_id, action, player_id, expected_version, generation) -> GameState:
         data = self._request(
             "POST",
-            f"/games/{group_id}/{white_id}/{black_id}/resign",
-            json={"player_id": player_id, "expected_version": expected_version},
+            f"/games/{group_id}/{white_id}/{black_id}/{action}",
+            json={"player_id": player_id, "expected_version": expected_version, "generation": generation},
         )
-        return GameState(**data)
-
-    def offer_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "offer", expected_version)
-
-    def accept_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "accept", expected_version)
-
-    def decline_draw(self, group_id, white_id, black_id, player_id, expected_version=None) -> GameState:
-        return self._draw(group_id, white_id, black_id, player_id, "decline", expected_version)
-
-    def _draw(self, group_id, white_id, black_id, player_id, action, expected_version) -> GameState:
-        data = self._request(
-            "POST",
-            f"/games/{group_id}/{white_id}/{black_id}/draw/{action}",
-            json={"player_id": player_id, "expected_version": expected_version},
-        )
-        return GameState(**data)
+        return GameState.from_dict(data)
 
     def legal_moves(self, group_id, white_id, black_id, generation=None):
         return self._request("GET", f"/games/{group_id}/{white_id}/{black_id}/legal-moves", params=_gen(generation))[
@@ -187,13 +210,17 @@ class ApiClient:
     def delete_game(self, group_id, white_id, black_id, generation=None):
         return self._request("DELETE", f"/games/{group_id}/{white_id}/{black_id}", params=_gen(generation))
 
-    def current_games(self, player_id, group_id=0):
-        data = self._request("GET", "/games", params={"player_id": player_id, "group_id": group_id})
-        return data["opponents"]
+    def current_games(self, player_id, group_id=None) -> list[GameState]:
+        """The games in progress that a player is in; every group when ``group_id`` is ``None``."""
+        params = {"player_id": player_id}
+        if group_id is not None:
+            params["group_id"] = group_id
+        return [GameState.from_dict(game) for game in self._request("GET", "/games", params=params)["games"]]
 
-    def game_exists(self, player1, player2, group_id=0):
+    def game_exists(self, player1, player2, group_id=0) -> GameState | None:
+        """The game in progress between two players (either colour), or ``None``."""
         data = self._request("GET", f"/games/{group_id}/exists", params={"player1": player1, "player2": player2})
-        return data["game"]
+        return GameState.from_dict(data["game"]) if data["game"] is not None else None
 
     def record(self, player1, player2, group_id=0):
         """Win/draw/loss record between two players in a group (finished games)."""

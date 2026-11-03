@@ -6,6 +6,35 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.11.0 - 2026-11-03
+
+### Added
+- User accounts with server-assigned ids and an admin role, managed over the API
+  or with the new `chesssnake user` command.
+- External ids: a user can be linked to ids from other systems (a Discord id,
+  say), and an integration can get or create the user for one of its ids in a
+  single call.
+- Every game has an id that it keeps after it finishes, readable at
+  `GET /v1/games/{id}`.
+
+### Changed
+- Players are users. Games are created between user ids, `Game.remote` and
+  `chesssnake play` take ids or usernames, and boards and PGN show the
+  account's username.
+- Game states carry the game's id, players, usernames and timestamps
+  (`wname`/`bname` are now `white_name`/`black_name`), and the current-games,
+  exists and archive routes return full game states.
+- Finished games move to a compact archive, and every action names the game it
+  is for, so a client still showing a finished game can no longer play a move
+  into the rematch.
+- New database schema. Existing databases must be recreated with the new
+  `chesssnake init-db --drop`, which deletes their games.
+
+### Removed
+- Display names on remote games: `white_name`/`black_name` are gone from
+  `POST /v1/games`, `Game.remote` and remote `chesssnake play`. Local games
+  keep them.
+
 ## 0.10.0 - 2026-11-03
 
 ### Changed

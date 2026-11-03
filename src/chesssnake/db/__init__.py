@@ -20,6 +20,7 @@ from . import errors
 
 #: Operations re-exported from :mod:`chesssnake.db.operations`.
 _OPERATIONS = (
+    "GameChange",
     "apply_game_change",
     "challenge",
     "challenge_create",
@@ -31,10 +32,20 @@ _OPERATIONS = (
     "game_delete",
     "game_exists",
     "game_get",
+    "game_get_by_id",
     "game_get_or_create",
     "game_history",
     "game_record",
+    "identity_get",
+    "identity_link",
+    "user_create",
+    "user_get",
+    "user_get_by_name",
+    "user_get_or_create_by_identity",
+    "user_rename",
+    "user_set_role",
     "validate_ids",
+    "validate_username",
 )
 
 _MODULES = ("engine", "operations", "postgres", "schema", "sqlite")

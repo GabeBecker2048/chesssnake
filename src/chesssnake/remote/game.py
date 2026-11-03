@@ -5,20 +5,27 @@ Build games with the factory methods:
 
 - ``Game.local(white_name, black_name)`` — a pure in-memory game (no network, no
   extra dependencies), where the engine runs in-process.
-- ``Game.remote(white_id, black_id, group_id=..., api_url=..., player_id=...)`` — a
-  game persisted through a ``chesssnake api-endpoint``. For remote games the
-  **server** runs the engine: ``move``/``draw_*``/``resign`` send a request and the
-  returned state is mirrored locally (for rendering and the read accessors). Illegal
-  moves raise the same ``ChessError`` types you'd get locally.
+- ``Game.remote(white, black, group_id=..., api_url=..., player_id=...)`` — a game
+  persisted through a ``chesssnake api-endpoint``, between two users given by id or
+  username. For remote games the **server** runs the engine:
+  ``move``/``draw_*``/``resign`` send a request and the returned state is mirrored
+  locally (for rendering and the read accessors). Illegal moves raise the same
+  ``ChessError`` types you'd get locally.
+
+Players are accounts on the api-endpoint: create them with :func:`create_user`, or
+let an integration map its own ids onto them with :func:`user_for_identity`. Their
+usernames are what the board and PGN show.
 
 If constructed with ``player_id=``, that player is sent (and validated server-side)
-on every action, and the client sends its last-known ``version`` so a stale action
-is rejected (``VersionConflictError``) rather than silently racing.
+on every action. Every action also carries the client's last-known ``version`` and
+``generation``, so a stale action is rejected (``VersionConflictError``, or
+``GenerationConflictError`` once the game it was aimed at is over) rather than
+silently racing or landing in a rematch.
 """
 
 import os
 
-from ..dto import GameState, MoveResult
+from ..dto import GameState, MoveResult, User
 from ..engine import Board, Square
 from ..engine.enums import Color
 from ..engine.game import Game as BaseGame
@@ -67,12 +74,15 @@ class Game(BaseGame):
     moves are computed by the api-endpoint.
     """
 
-    def __init__(self, *args, client=None, player_id=None, version=None, generation=None, **kwargs):
+    def __init__(self, *args, client=None, player_id=None, version=None, generation=None, game_id=None, **kwargs):
         # Low-level constructor. Prefer Game.local() / Game.remote().
         self._client = client
         self.player_id = player_id
         self.version = version
         self.generation = generation
+        #: The game's id on the server (``None`` for a local game). Stable for
+        #: the game's whole life, archived or not: ``GET /v1/games/{id}``.
+        self.id = game_id
         super().__init__(*args, **kwargs)
 
     # --- factories ---------------------------------------------------------
@@ -85,13 +95,11 @@ class Game(BaseGame):
     @classmethod
     def remote(
         cls,
-        white_id: int,
-        black_id: int,
+        white: "int | str",
+        black: "int | str",
         group_id: int = 0,
         *,
-        white_name: str = "",
-        black_name: str = "",
-        player_id: int | None = None,
+        player_id: "int | str | None" = None,
         generation: int | None = None,
         api_url: str | None = None,
         api_key: str | None = None,
@@ -100,40 +108,51 @@ class Game(BaseGame):
         """
         Load-or-create a game on a chesssnake api-endpoint (the server runs the engine).
 
-        :param player_id: if given, this player is asserted on every action (the
-            server rejects out-of-turn / non-participant actions with 403).
+        :param white: the white player, as a user id or a username.
+        :param black: the black player, as a user id or a username.
+        :param group_id: a namespace of your choosing; the same two players can
+            have one game in progress per group.
+        :param player_id: if given (an id or a username), this player is asserted
+            on every action (the server rejects out-of-turn / non-participant
+            actions with 403).
         :param generation: load a specific past game (read-only) instead of the current
             one; ``None`` (default) loads/creates the current game.
         :param api_url: base URL of the api-endpoint (falls back to ``CHESSSNAKE__CLIENT__API_URL``).
         :param api_key: optional API key sent with every request.
         :param client: an injected ``ApiClient`` (mainly for testing).
+        :raises UserNotFoundError: if a player does not exist.
         """
         client = _make_client(api_url, client, api_key)
+        white_id = _resolve_id(client, white)
+        black_id = _resolve_id(client, black)
+        if player_id is not None:
+            player_id = _resolve_id(client, player_id)
         if generation is None:
-            state = client.get_or_create_game(group_id, white_id, black_id, white_name, black_name)
+            state = client.get_or_create_game(group_id, white_id, black_id)
         else:
             state = client.get_state(group_id, white_id, black_id, generation)
         board, turn = board_and_turn(state)
-        game = cls(
+        return cls(
             client=client,
             player_id=player_id,
             version=state.version,
             generation=state.generation,
+            game_id=state.id,
             white_id=white_id,
             black_id=black_id,
             group_id=group_id,
-            white_name=state.wname if state.wname is not None else white_name,
-            black_name=state.bname if state.bname is not None else black_name,
+            white_name=state.white_name,
+            black_name=state.black_name,
             board=board,
             turn=turn,
             draw=state.draw,
         )
-        return game
 
     @classmethod
-    def archive(cls, white_id, black_id, group_id=0, *, api_url=None, api_key=None, client=None):
-        """List all games (generations) for a triple — summaries, oldest first."""
-        return _make_client(api_url, client, api_key).archive(group_id, white_id, black_id)
+    def archive(cls, white, black, group_id=0, *, api_url=None, api_key=None, client=None) -> list[GameState]:
+        """Every game (generation) between two players in a group, oldest first."""
+        client = _make_client(api_url, client, api_key)
+        return client.archive(group_id, _resolve_id(client, white), _resolve_id(client, black))
 
     @property
     def is_remote(self) -> bool:
@@ -148,17 +167,16 @@ class Game(BaseGame):
         self.draw = Color(state.draw) if state.draw is not None else None
         self.version = state.version
         self.generation = state.generation
-        if state.wname is not None:
-            self.wname = state.wname
-        if state.bname is not None:
-            self.bname = state.bname
+        self.id = state.id
+        self.wname = state.white_name
+        self.bname = state.black_name
 
     def _move_result(self, engine_move) -> MoveResult:
         """Wrap an engine ``Move`` (from a local move) into a public ``MoveResult``."""
         from ..serialize import state_from_game
 
         return MoveResult(
-            state=state_from_game(self, self.version or 0, self.generation or 1),
+            state=state_from_game(self, self.version or 0, self.generation or 1, id=self.id),
             from_square=engine_move.prev.c_notation,
             to_square=engine_move.to.c_notation,
             san=self.move_history[-1],
@@ -174,7 +192,7 @@ class Game(BaseGame):
         if not self.is_remote:
             return self._move_result(super().move(move))
 
-        result = self._client.move(self.gid, self.wid, self.bid, move, self.player_id, self.version)
+        result = self._client.move(self.gid, self.wid, self.bid, move, self.player_id, self.version, self.generation)
         self._apply_state(result.state)
         i1, j1 = Board.get_coords(result.from_square)
         i2, j2 = Board.get_coords(result.to_square)
@@ -185,25 +203,25 @@ class Game(BaseGame):
         pid = player_id if player_id is not None else self.player_id
         if not self.is_remote:
             return super().resign(pid)
-        self._apply_state(self._client.resign(self.gid, self.wid, self.bid, pid, self.version))
+        self._apply_state(self._client.resign(self.gid, self.wid, self.bid, pid, self.version, self.generation))
 
     def draw_offer(self, player_id=None):
         pid = player_id if player_id is not None else self.player_id
         if not self.is_remote:
             return super().draw_offer(pid)
-        self._apply_state(self._client.offer_draw(self.gid, self.wid, self.bid, pid, self.version))
+        self._apply_state(self._client.offer_draw(self.gid, self.wid, self.bid, pid, self.version, self.generation))
 
     def draw_accept(self, player_id=None):
         pid = player_id if player_id is not None else self.player_id
         if not self.is_remote:
             return super().draw_accept(pid)
-        self._apply_state(self._client.accept_draw(self.gid, self.wid, self.bid, pid, self.version))
+        self._apply_state(self._client.accept_draw(self.gid, self.wid, self.bid, pid, self.version, self.generation))
 
     def draw_decline(self, player_id=None):
         pid = player_id if player_id is not None else self.player_id
         if not self.is_remote:
             return super().draw_decline(pid)
-        self._apply_state(self._client.decline_draw(self.gid, self.wid, self.bid, pid, self.version))
+        self._apply_state(self._client.decline_draw(self.gid, self.wid, self.bid, pid, self.version, self.generation))
 
     # --- reads -------------------------------------------------------------
 
@@ -239,24 +257,69 @@ class Game(BaseGame):
         return False
 
 
+def _resolve_id(client, who) -> int:
+    """A user id as given, or the id of the user with that username."""
+    if isinstance(who, bool):
+        raise TypeError(f"A player is a user id or a username, not {who!r}")
+    if isinstance(who, int):
+        return who
+    if isinstance(who, str):
+        return client.get_user_by_name(who).id
+    raise TypeError(f"A player is a user id or a username, not {who!r}")
+
+
+# --- user helpers (module-level functions) ---------------------------------
+
+
+def create_user(username, *, api_url=None, api_key=None, client=None) -> User:
+    """Create a user on the api-endpoint. The server assigns the id."""
+    return _make_client(api_url, client, api_key).create_user(username)
+
+
+def get_user(user, *, api_url=None, api_key=None, client=None) -> User:
+    """Look a user up by id (an int) or username (a str)."""
+    client = _make_client(api_url, client, api_key)
+    if isinstance(user, str):
+        return client.get_user_by_name(user)
+    return client.get_user(user)
+
+
+def user_for_identity(provider, external_id, username, *, api_url=None, api_key=None, client=None) -> User:
+    """
+    The user linked to an id from another system, created on first use.
+
+    This is the one call an integration needs: a Discord bot, say, passes
+    ``("discord", str(member.id), member.name)`` and gets back the same user
+    every time, with a chesssnake id to play games under. ``username`` is used
+    only when the user is created.
+    """
+    return _make_client(api_url, client, api_key).get_or_create_user_by_identity(provider, str(external_id), username)
+
+
 # --- challenge helpers (module-level functions) ----------------------------
+#
+# Players are user ids or usernames here too, like Game.remote.
 
 
 def challenge(challenger, opponent, group_id=0, *, api_url=None, api_key=None, client=None):
     """Issue or accept a challenge. Returns ``True`` if an existing challenge was accepted."""
-    return _make_client(api_url, client, api_key).challenge(challenger, opponent, group_id)
+    client = _make_client(api_url, client, api_key)
+    return client.challenge(_resolve_id(client, challenger), _resolve_id(client, opponent), group_id)
 
 
 def challenge_exists(player1, player2, group_id=0, *, api_url=None, api_key=None, client=None):
     """Return the pending challenge between two players, or ``None``."""
-    return _make_client(api_url, client, api_key).challenge_exists(player1, player2, group_id)
+    client = _make_client(api_url, client, api_key)
+    return client.challenge_exists(_resolve_id(client, player1), _resolve_id(client, player2), group_id)
 
 
 def delete_challenge(challenger, challenged, group_id=0, *, api_url=None, api_key=None, client=None):
     """Delete a pending challenge."""
-    _make_client(api_url, client, api_key).delete_challenge(challenger, challenged, group_id)
+    client = _make_client(api_url, client, api_key)
+    client.delete_challenge(_resolve_id(client, challenger), _resolve_id(client, challenged), group_id)
 
 
 def record(player1, player2, group_id=0, *, api_url=None, api_key=None, client=None):
     """Win/draw/loss record between two players across their finished games in a group."""
-    return _make_client(api_url, client, api_key).record(player1, player2, group_id)
+    client = _make_client(api_url, client, api_key)
+    return client.record(_resolve_id(client, player1), _resolve_id(client, player2), group_id)
