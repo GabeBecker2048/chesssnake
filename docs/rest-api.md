@@ -238,6 +238,7 @@ The HTTP status code indicates the category; `error_type` names the exact condit
 | `404 Not Found` | The referenced game does not exist | `GameNotFoundError` |
 | `409 Conflict` | Stale `expected_version`, **or** an invalid challenge (self-challenge, duplicate, or a game already exists) | `VersionConflictError`, `ChallengeError` |
 | `422 Unprocessable Entity` | An id is outside the BIGINT range | `SQLIdError` |
+| `503 Service Unavailable` | Every database connection is in use; the request was not attempted. Retry shortly. | `SQLBusyError` |
 | `500 Internal Server Error` | A database failure | `SQLError` |
 | `401 Unauthorized` | Missing/invalid API key (only when a key is configured) | *(none, see below)* |
 
