@@ -161,6 +161,22 @@ a local and a remote game**. Anything it does, the client could already do.
   legal moves of a position not on screen. It returns whether the version actually moved
   on, so the caller can redraw and say so instead of silently changing the board. There
   is still **no polling**: nothing arrives while the prompt sits idle.
+- **`allow_action()` gates every action, and the refusal is load-bearing.** The server's
+  **mutating routes ignore `generation`** and always act on the *current* game, while
+  reads are pinned to one (`GET .../?generation=`). So a session left on a superseded
+  generation does not get a clean refusal — its move is applied to whichever game is
+  current, and only an accidental version or legality mismatch stops it. Verified against
+  a live endpoint: a session sitting in a finished generation 1 played `d5` and it landed
+  in generation 2's movetext. `sync()` therefore reads the **current** generation, sets
+  `stale_generation` on drift, and `allow_action()` refuses until the player types `new`.
+  **The real fix is server-side** (have the mutating routes take and validate a
+  generation); until then this guard is the only thing preventing it from the CLI.
+- **`wait_for_line()` is the one thing the session does unasked**, polling every
+  `--refresh` seconds (default 15, `0` disables). `select` rather than a thread, so one
+  thread touches the game and the output stream and there is nothing to shut down. It
+  falls back to a blocking read for a local game, `--refresh 0`, a stdin with no real fd
+  (a `StringIO`, as the tests use), or a platform whose `select` will not take one. A
+  quiet poll prints nothing; a change redraws and re-issues the prompt.
 - **Errors are normal input.** `ChessError`, `GameError` and `ValueError` are caught per
   line and printed; only a failure to *reach* the endpoint escapes, and `cli.py` turns
   that into an exit with the URL in the message rather than a prompt that cannot work.

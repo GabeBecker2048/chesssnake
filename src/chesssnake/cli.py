@@ -165,6 +165,9 @@ def _run_play(args):
             # URL in the message rather than dropping into a prompt that cannot work.
             sys.exit(f"Could not open the game: {e}")
 
+    if args.refresh < 0:
+        sys.exit("--refresh takes a number of seconds, or 0 to disable; it cannot be negative")
+
     color = not args.no_color and sys.stdout.isatty()
     sys.exit(
         run_session(
@@ -175,6 +178,7 @@ def _run_play(args):
             color=color,
             figurines=not args.ascii,
             perspective=args.perspective,
+            refresh_seconds=args.refresh,
         )
     )
 
@@ -278,6 +282,13 @@ def main(argv=None):
         "--perspective",
         choices=("white", "black"),
         help="which side faces you (default: your own side, else white)",
+    )
+    play.add_argument(
+        "--refresh",
+        type=float,
+        default=15.0,
+        metavar="SECONDS",
+        help="while waiting at the prompt, re-read the server this often (default 15; 0 disables)",
     )
     play.add_argument("--ascii", action="store_true", help="draw pieces as letters instead of figurines")
     play.add_argument("--no-color", dest="no_color", action="store_true", help="never emit ANSI colour")

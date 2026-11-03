@@ -8,6 +8,9 @@ rather than inside :mod:`chesssnake.cli`.
 """
 
 import io
+import os
+import threading
+import time
 
 import pytest
 
@@ -275,3 +278,158 @@ def test_moves_reports_none_once_the_game_is_over():
     _, out, game = play([*SCHOLARS_MATE, "moves", "quit"])
     assert game.is_over
     assert "(none)" in out
+
+
+# --- idle refresh ---------------------------------------------------------------
+
+
+class _FakeRemote:
+    """
+    A minimal stand-in for a remote game, to drive `wait_for_line`'s timeout
+    branch deterministically. A real server cannot be made to move an opponent at
+    a predictable moment, and a sleep-based test would be flaky.
+    """
+
+    is_remote = True
+    is_over = False
+
+    def __init__(self, syncs_before_change=1):
+        self.syncs = 0
+        self.syncs_before_change = syncs_before_change
+        self.generation = 1
+        self.version = 1
+        self.wid, self.bid = 0, 1
+        self.wname, self.bname = "W", "B"
+        self.draw_offered_by = None
+        self.board = Game.local().board
+        self.to_move = Color.WHITE
+
+    def refreshed(self):
+        self.syncs += 1
+        if self.syncs >= self.syncs_before_change:
+            self.version += 1
+            return True
+        return False
+
+
+def _session_over_pipe(game, refresh_seconds, monkeypatch):
+    """A session whose stdin is a real pipe, so `select` has an fd to wait on."""
+    read_fd, write_fd = os.pipe()
+    stdin = os.fdopen(read_fd, "r")
+    out = io.StringIO()
+    session = Session(game, stdin=stdin, stdout=out, color=False, refresh_seconds=refresh_seconds)
+    monkeypatch.setattr(session, "sync", game.refreshed)
+    return session, os.fdopen(write_fd, "w"), out
+
+
+def test_idle_refresh_notices_the_opponent_and_reprompts(monkeypatch):
+    """
+    The one thing the session does unasked: poll while idle.
+
+    Deterministic rather than timing-based — the pipe is left empty so the wait
+    *must* take the timeout branch, and the input is only written once a poll has
+    actually happened.
+    """
+    game = _FakeRemote(syncs_before_change=1)
+    session, writer, out = _session_over_pipe(game, 0.01, monkeypatch)
+
+    result = {}
+
+    def read():
+        result["line"] = session.wait_for_line()
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+
+    deadline = time.monotonic() + 5
+    while game.syncs < 1 and time.monotonic() < deadline:
+        pass
+    assert game.syncs >= 1, "the idle wait never polled the server"
+
+    writer.write("quit\n")
+    writer.flush()
+    reader.join(timeout=5)
+    assert not reader.is_alive()
+    writer.close()
+
+    assert result["line"].strip() == "quit"
+    printed = out.getvalue()
+    assert "the opponent moved" in printed
+    assert printed.rstrip().endswith(">"), "the prompt must be re-issued after a redraw"
+
+
+def test_idle_refresh_is_skipped_when_disabled(monkeypatch):
+    game = _FakeRemote()
+    session, writer, _ = _session_over_pipe(game, 0, monkeypatch)
+    writer.write("quit\n")
+    writer.flush()
+    assert session.wait_for_line().strip() == "quit"
+    assert game.syncs == 0, "--refresh 0 must not poll at all"
+    writer.close()
+
+
+def test_idle_refresh_is_skipped_for_a_local_game():
+    """Nothing to poll, so it must not try."""
+    game = Game.local()
+    out = io.StringIO()
+    session = Session(game, stdin=io.StringIO("quit\n"), stdout=out, color=False, refresh_seconds=5)
+    assert session.wait_for_line().strip() == "quit"
+
+
+def test_a_stream_without_a_file_descriptor_falls_back_to_blocking():
+    """A StringIO cannot be selected on; the session must still work."""
+    game = Game.local()
+    session = Session(game, stdin=io.StringIO("e4\n"), stdout=io.StringIO(), color=False, refresh_seconds=5)
+    assert session.wait_for_line().strip() == "e4"
+
+
+def test_refresh_seconds_defaults_to_fifteen():
+    game = Game.local()
+    assert Session(game, stdin=io.StringIO(), stdout=io.StringIO()).refresh_seconds == 15.0
+
+
+def test_a_quiet_poll_prints_nothing(monkeypatch):
+    """Polling must be invisible until something actually changes."""
+    game = _FakeRemote(syncs_before_change=3)
+    session, writer, out = _session_over_pipe(game, 0.01, monkeypatch)
+
+    result = {}
+    reader = threading.Thread(target=lambda: result.update(line=session.wait_for_line()), daemon=True)
+    reader.start()
+    deadline = time.monotonic() + 5
+    while game.syncs < 2 and time.monotonic() < deadline:
+        pass
+    assert game.syncs >= 2, "expected several quiet polls"
+    assert out.getvalue() == "", "a poll that found nothing must stay silent"
+
+    writer.write("quit\n")
+    writer.flush()
+    reader.join(timeout=5)
+    writer.close()
+    assert result["line"].strip() == "quit"
+
+
+def test_idle_poll_announces_a_rematch_started_elsewhere(monkeypatch):
+    """The stale-generation case has to surface while idle too, not only on command."""
+    game = _FakeRemote()
+    session, writer, out = _session_over_pipe(game, 0.01, monkeypatch)
+
+    def stale():
+        game.syncs += 1
+        session.stale_generation = 2
+        return False
+
+    monkeypatch.setattr(session, "sync", stale)
+
+    result = {}
+    reader = threading.Thread(target=lambda: result.update(line=session.wait_for_line()), daemon=True)
+    reader.start()
+    deadline = time.monotonic() + 5
+    while game.syncs < 1 and time.monotonic() < deadline:
+        pass
+
+    writer.write("quit\n")
+    writer.flush()
+    reader.join(timeout=5)
+    writer.close()
+    assert "a rematch has started elsewhere (generation 2)" in out.getvalue()
