@@ -4,16 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chesssnake"
-version = "0.9.1"
+version = "0.9.2"
 description = "A robust Chess API and backend"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Gabe Becker", email = "gabebecker2048@gmail.com" }]
 dependencies = ["pillow>=11.3"]
 classifiers = [
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -85,7 +84,7 @@ show_missing = true
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -101,7 +100,7 @@ ignore = ["E501"]
 # Tests intentionally compare with `== None` to exercise Square.__eq__ (E711),
 # and use `pytest.importorskip(...)` before importing optional deps (E402).
 "tests/**" = ["E711", "E402"]
-# UP042 wants `Termination(str, Enum)` rewritten as a StrEnum now that 3.11 is the
+# UP042 wants `Termination(str, Enum)` rewritten as a StrEnum now that 3.12 is the
 # floor. That changes `str(member)` from "Termination.X" to "x", which is a
 # behavioral change to a serialized value — worth doing deliberately, not as
 # lint fallout from a version bump.
@@ -111,7 +110,7 @@ ignore = ["E501"]
 # Lenient starting point (per the refactor plan): type-check the package without
 # requiring every function to be annotated yet. Tighten in later phases.
 files = ["src/chesssnake"]
-python_version = "3.11"
+python_version = "3.12"
 ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true

@@ -1,96 +1,73 @@
-# Publish to PyPI when a GitHub release is published.
+# Pushing a tag vX.Y.Z (scripts/release.sh does it) publishes that version: the
+# package to PyPI, the container image to ghcr.io, and a GitHub release carrying
+# that version's CHANGELOG entry.
 #
-# Nothing here needs a secret. Publishing uses PyPI's Trusted Publishing (OIDC):
-# GitHub mints a short-lived identity token for this exact repository, workflow
-# and environment, and PyPI exchanges it for a one-off upload token. There is no
-# API token to store, leak or rotate. The one-time PyPI-side setup is in
-# docs/releasing.md.
+# No tokens. PyPI trusts this workflow through Trusted Publishing (OIDC), and
+# the image is pushed with the automatic GITHUB_TOKEN. The one-time PyPI-side
+# setup is in docs/releasing.md.
 #
-# Triggered by the release being *published*, not by the tag being pushed, so a
-# draft release can be written up and reviewed first and nothing ships until the
-# Publish button. Pre-releases are included deliberately: marking a release as a
-# pre-release on GitHub publishes it to PyPI, where the version number (0.9.1rc1)
-# is what makes pip skip it unless asked.
+# The tag is the trigger, rather than a GitHub release, so that the release page
+# is created by the same run that built the artifacts. There is no window in
+# which a release exists but nothing was published.
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*.*.*"]
 
-# Least privilege by default; the publish job adds the id-token it needs.
 permissions:
   contents: read
 
 jobs:
-  # The tag is the only thing a human types during a release, and typing it
-  # wrong is the easy mistake: tagging v0.9.2 while pyproject still says 0.9.1
-  # would publish 0.9.1 again (PyPI rejects it) or, worse, publish something
-  # nobody expected. Fail here, before anything is built.
-  check-version:
+  # Everything that can say "no" happens here, before anything is published.
+  check:
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.check.outputs.version }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - name: The tag must match the version in pyproject.toml
-        id: check
-        env:
-          TAG: ${{ github.event.release.tag_name }}
+
+      # The tag is the only thing typed by hand during a release. A tag that
+      # disagrees with pyproject.toml would publish a version nobody meant, or
+      # be rejected by PyPI as a duplicate.
+      - name: The tag matches pyproject.toml, and CHANGELOG.md has an entry
         run: |
           set -euo pipefail
-          project="$(uv run --no-project --with tomli python -c '
-          import tomli, pathlib
-          print(tomli.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])
-          ')"
-          tag="${TAG#v}"
-          echo "pyproject: $project"
-          echo "tag:       $tag"
-          if [ "$project" != "$tag" ]; then
-            echo "::error::Tag '$TAG' does not match pyproject.toml version '$project'." \
-                 "Bump the version and VersionHistory.md, or retag."
-            exit 1
-          fi
-          echo "version=$project" >> "$GITHUB_OUTPUT"
+          version="${GITHUB_REF_NAME#v}"
+          grep -qE "^version = \"${version}\"$" pyproject.toml \
+            || { echo "::error::tag ${GITHUB_REF_NAME} does not match the version in pyproject.toml"; exit 1; }
+          # The release notes are the CHANGELOG section, so a missing section is
+          # a release with no notes -- worth failing over.
+          awk -v v="$version" '
+            $0 ~ "^## " v "( |$)" {on=1; next}
+            on && /^## / {exit}
+            on {print}' CHANGELOG.md | sed -e '/./,$!d' > notes.md
+          test -s notes.md || { echo "::error::no '## ${version}' section in CHANGELOG.md"; exit 1; }
+          echo "Release notes:"; cat notes.md
 
-  # ci.yml runs on pushes to main and on pull requests, neither of which covers
-  # "the exact tree this tag points at". A release is the one build where being
-  # sure is worth a couple of minutes, so the gate runs again here.
-  test:
-    needs: check-version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
       - name: Lint and types
         run: |
           uv run ruff check
           uv run ruff format --check
           uv run mypy
+
       - name: Full suite, both backends, with the coverage gate
         run: uv run --extra api --extra client --extra postgres --group pg pytest --cov --cov-fail-under=75
 
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
       - name: Build the sdist and wheel
         run: uv build
-      # twine's check catches a README that PyPI will refuse to render, which is
-      # otherwise only discovered after the upload has already succeeded.
+
+      # Catches a README that PyPI will refuse to render, which is otherwise
+      # only discovered after the upload has already succeeded.
       - name: Check the metadata renders
         run: uv run --no-project --with twine twine check dist/*
-      # Prove the wheel is installable and the console script works from it,
-      # rather than from the source tree the tests ran against. This is what
-      # would have caught a missing package-data entry before shipping.
+
+      # The suite runs against the source tree, so it cannot see a missing
+      # package-data entry. Only installing the artifact can.
       - name: The built wheel actually works
         run: |
           set -euo pipefail
@@ -104,29 +81,28 @@ jobs:
           g = Game.local(white_name='a', black_name='b')
           g.move('e4')
           assert g.fen.startswith('rnbqkbnr/pppppppp/8/8/4P3'), g.fen
-          # asset_path returns a str. Every packaged data kind is checked, because
-          # a missing package-data entry is invisible until a user hits it.
           for asset in ('img/template.png', 'img/blankboard.png', 'Roboto-Black.ttf', 'chesssnake.toml'):
               assert os.path.isfile(asset_path(asset)), f'{asset} is missing from the wheel'
-          # render() composites the piece PNGs and loads the font, so it exercises
-          # the packaged data rather than just asserting the files are present.
-          g.render()  # actually composite the piece images
+          g.render()
           print('wheel ok')
           "
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
 
-  publish:
-    needs: build
+  pypi:
+    needs: check
     runs-on: ubuntu-latest
-    # Named so PyPI's trusted publisher can be scoped to it, and so you can add
-    # a required reviewer in Settings -> Environments if you ever want releases
-    # to pause for a human.
+    timeout-minutes: 10
     environment:
       name: pypi
-      url: https://pypi.org/p/chesssnake
+      url: https://pypi.org/project/chesssnake/
     permissions:
       id-token: write # mint the OIDC token Trusted Publishing exchanges
     steps:
@@ -134,26 +110,72 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        # No `skip-existing`: re-publishing a version that is already on PyPI
-        # should fail loudly rather than succeed quietly and leave you thinking
-        # the new code shipped.
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # No `skip-existing`: re-publishing a version already on PyPI should
+        # fail loudly, not succeed quietly and leave you thinking it shipped.
 
-  # Attach the exact files that were uploaded to the GitHub release, so what is
-  # on PyPI and what is on the release page are provably the same artifacts.
-  attach:
-    needs: publish
+  image:
+    needs: check
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      packages: write # push to ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # arm64 is emulated, which is why this job gets a long timeout. It is
+      # worth it: a Raspberry Pi or an Apple-silicon machine is a normal place
+      # to run a small self-hosted game server.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/gabebecker2048/chesssnake # lowercase: image names must be
+          # :0.9.2, :0.9 and :0 so a deployment can pin as tightly as it likes,
+          # plus :latest.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/build/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Last, so the release page only appears once PyPI and the registry both have
+  # the version. A release that exists while nothing was published is worse than
+  # no release.
+  github-release:
+    needs: [pypi, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: notes
+      - uses: actions/download-artifact@v4
+        with:
           name: dist
           path: dist/
-      - name: Attach the sdist and wheel to the release
+      - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "chesssnake ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag --latest
