@@ -7,112 +7,139 @@ persists the result, and returns the new state, or a structured error describing
 exactly what went wrong. Any HTTP client, in any language, can play a full game
 without a chess engine of its own.
 
-This document describes every route, the JSON shapes that go in and out, every
-response you can get, and how a client is expected to interpret them.
+This document describes every route, who may call it, the JSON that goes in and
+out, every response you can get, and how a client is expected to interpret them.
 
 - [Overview](#overview)
 - [Authentication](#authentication)
+- [Who may do what](#who-may-do-what)
 - [Data models](#data-models)
 - [Error handling](#error-handling)
-- [Player identity and versioning](#player-identity-and-versioning)
-- [Generations and the game archive](#generations-and-the-game-archive)
+- [Acting in a game](#acting-in-a-game)
 - [Endpoints](#endpoints)
   - [Health](#get-health)
-  - [Create a user](#post-v1users)
-  - [Look a user up](#get-v1users)
-  - [Rename a user](#patch-v1usersid)
-  - [A user by external id](#get-v1usersproviderexternal_id)
-  - [Get or create a user by external id](#post-v1usersproviderexternal_id)
-  - [Link an external id](#put-v1usersididentitiesproviderexternal_id)
-  - [Create or load a game](#post-v1games)
-  - [Get a game by id](#get-v1gamesid)
-  - [Get a game's state](#get-v1gamesgwb)
-  - [List past games (archive)](#get-v1gamesgwbarchive)
-  - [Play a move](#post-v1gamesgwbmoves)
-  - [Resign](#post-v1gamesgwbresign)
-  - [Offer / accept / decline a draw](#post-v1gamesgwbdrawaction)
-  - [List legal moves](#get-v1gamesgwblegal-moves)
-  - [Move history](#get-v1gamesgwbhistory)
-  - [Export PGN](#get-v1gamesgwbpgn)
-  - [Get the FEN](#get-v1gamesgwbfen)
-  - [Render the board as an image](#get-v1gamesgwbimage)
-  - [Delete a game](#delete-v1gamesgwb)
-  - [List a player's current games](#get-v1games)
-  - [Check whether a game exists](#get-v1gamesgexists)
-  - [Head-to-head record](#get-v1gamesgrecord)
-  - [Issue or accept a challenge](#post-v1challenges)
-  - [Check a pending challenge](#get-v1challengesgexists)
-  - [Delete a challenge](#delete-v1challenges)
-- [How the chesssnake Python client interprets responses](#how-the-chesssnake-python-client-interprets-responses)
+  - [Accounts and tokens](#accounts-and-tokens)
+  - [Users](#users)
+  - [Challenges](#challenges)
+  - [Games](#games)
+- [Websockets (planned for 0.13.0)](#websockets-planned-for-0130)
+- [The Python client](#the-python-client)
 - [Building your own client](#building-your-own-client)
 
 ---
 
 ## Overview
 
-- **Base URL**: whatever host/port the server is bound to, e.g. `http://localhost:8000`.
-- **Versioning**: every gameplay/challenge route is under the `/v1` prefix. `/health`
-  is intentionally unversioned. New incompatible versions would be added under a new
-  prefix (`/v2`) rather than changing `/v1`.
-- **Content type**: request and response bodies are JSON (`application/json`), except
-  the board image endpoint, which returns `image/png`.
-- **Users**: every player is a user account with a **server-assigned** 64-bit id.
-  Create one with [`POST /v1/users`](#post-v1users) before starting a game. The
-  username shown on boards and in PGN is the account's; games never carry their own
-  names. An integration with its own ids (a Discord bot, say) maps them onto users
-  through [external ids](#get-v1usersproviderexternal_id) rather than choosing user ids.
-- **Games**: a game is addressed either by its own **id** (stable for its whole life,
-  in progress or finished: [`GET /v1/games/{id}`](#get-v1gamesid)) or by the triple
-  `(group_id, white_id, black_id)`, which names the players' game in progress plus
-  their earlier games in that group. `group_id` is a namespace of your choosing (a
-  Discord server id, a tournament id, `0` for none); it is not a reference to
-  anything. `white_id` always plays white and moves first. All ids are 64-bit
-  integers.
-- **Who is the server the authority on?** The rules. The server decides whether a move
-  is legal, whose turn it is, and when the game is over. Clients render and collect
+- **Base URL**: whatever host and port the server is bound to, e.g. `http://localhost:8000`.
+- **Versioning**: every route except `/health` is under `/v1`. Incompatible
+  changes would go under a new prefix (`/v2`) after 1.0; before 1.0 a minor
+  version may change `/v1` (see the changelog).
+- **Content type**: request and response bodies are JSON, except the PGN and FEN
+  exports (`text/plain`) and the board image (`image/png`).
+- **Everything needs a login** except `/health`, `POST /v1/auth/login` and
+  `POST /v1/auth/register`. See [Authentication](#authentication).
+- **Users**: every player is an account with a server-assigned id and a username.
+  Boards and PGN show the username. An integration with ids of its own (a Discord
+  bot, say) maps them onto users through [external ids](#users) rather than
+  choosing user ids.
+- **Games** are addressed by their **id**, which never changes and is kept when
+  the game finishes. A game is normally created by one user
+  [challenging](#challenges) another and the challenge being accepted;
+  administrators can also create games directly. `group_id` is a namespace of your
+  choosing (a Discord server, a tournament, `0` for none): the same two players
+  can have one game in progress per group.
+- **The server is the authority on the rules.** It decides whether a move is
+  legal, whose turn it is, and when the game is over. Clients render and collect
   input; they never decide legality.
 
 ### The game lifecycle at a glance
 
-0. `POST /v1/users` once per player → each gets an `id`.
-1. `POST /v1/games` to load-or-create the game for a triple → you get its `GameState`.
-2. `POST /v1/games/{g}/{w}/{b}/moves` with `{"move": "e4"}` each turn → you get a
-   `MoveResult` (or an error). The server has already stored the new state.
-3. Poll `GET /v1/games/{g}/{w}/{b}` (or re-`POST` step 1) to see the opponent's moves.
-4. Optionally `GET …/image` to display the board, `POST …/draw/*` to negotiate a draw,
-   and `DELETE …` to remove a finished game.
+1. `POST /v1/auth/login` with a username and password → a token. Send it as
+   `Authorization: Bearer <token>` from then on.
+2. `POST /v1/challenges {"opponent_id": …}`; the opponent sees it in
+   `GET /v1/challenges?direction=incoming` and accepts with
+   `POST /v1/challenges/{id}/accept`, which creates the game and returns it.
+3. `POST /v1/games/{id}/moves {"move": "e4"}` on your turn → a `MoveResult`.
+4. `GET /v1/games/{id}` to see the opponent's moves (compare `version`).
+5. When it is over, challenge again for a rematch; the finished game stays
+   readable at the same id.
 
 ---
 
 ## Authentication
 
-Authentication is **optional and off by default**, and must be enabled explicitly.
-
-- If the server is configured with `api.require_auth` **true**, then **every `/v1`
-  route requires** the header `X-API-Key: <api.api_key>`. Requests without it, or
-  with a wrong value, get **`401 Unauthorized`**.
-- If `api.require_auth` is false, no key is required. Setting `api.api_key` on its
-  own does **not** turn authentication on; the server warns that the key is being
-  ignored.
-- Enabling `api.require_auth` without an `api.api_key` is a **startup error**, so a
-  deployment whose secret failed to inject fails loudly rather than serving
-  unauthenticated traffic.
-- `GET /health` is **always open**: it never requires the key (so load balancers and
-  uptime checks can probe it).
+Tokens are opaque bearer tokens: `css_` followed by 43 random characters. Send
+one on every request:
 
 ```
-X-API-Key: my-secret-key
+Authorization: Bearer css_9fJ…
 ```
 
-Configure it however you like (see [configuration.md](configuration.md)):
+There are two kinds, held in the same way:
 
-```commandline
-CHESSSNAKE__API__API_KEY='my-secret-key' chesssnake api-endpoint --require-auth
-```
+- **Session tokens** come from logging in (`POST /v1/auth/login`) or registering.
+  They expire after `api.session_lifetime_days` (30 by default); log in again then.
+  A user keeps at most 20; older ones are revoked as new ones are made.
+- **Api tokens** are named and made by a user for a script or a bot
+  (`POST /v1/auth/tokens`, which asks for the password again). Their expiry is
+  chosen when they are made, or never.
 
-A `401` body uses the same envelope as every other error,
-`{"error_type": "AuthError", "detail": "Invalid or missing API key"}`. See
-[Error handling](#error-handling).
+The server stores only a SHA-256 of each token, so a token is shown exactly once:
+in the response that created it. Revoking one (logging out, an administrator
+resetting a password or disabling the account) takes effect on the very next
+request.
+
+What revokes what:
+
+| Event | Session tokens | Api tokens |
+|---|---|---|
+| `POST /v1/auth/logout` | the one presented | the one presented |
+| The user changes their own password | all **but** the one presented | kept |
+| An administrator resets the password | all | all |
+| An administrator disables the account | all | all |
+
+Changing your own password keeps your api tokens on purpose: they are separate
+credentials, and a bot should not stop because its owner changed a password.
+
+**Accounts.** `api.registration` decides who can make one: `"closed"` (the
+default) means only administrators, through `POST /v1/users` or
+`chesssnake user create` on the server's machine; `"open"` lets anyone call
+`POST /v1/auth/register`. The first administrator is always made on the server:
+`chesssnake user create NAME --admin`.
+
+**Passwords** are 8 to 256 characters, sent in plain text over TLS and stored as
+Argon2id hashes. A failed login always answers `401 invalid username or password`,
+whether the username exists, the password is wrong, or the account has no
+password, and takes the same time in each case. A disabled account is only
+reported (`403`) once the password was right.
+
+A request without a valid token gets `401` with `{"error_type": "AuthError", ...}`
+and `WWW-Authenticate: Bearer`. A response that says the token is invalid means
+log in again; a `503` means the server was busy and the token is fine.
+
+---
+
+## Who may do what
+
+Two roles: **user** and **admin**.
+
+| | anonymous | user | admin |
+|---|---|---|---|
+| `GET /health`, log in | yes | yes | yes |
+| register | only if `registration = "open"` | n/a | n/a |
+| read users, games, records, PGN, images | no | yes, any | yes |
+| move, offer or answer a draw, resign | no | as themselves, in their own games | as any player |
+| challenge, accept, decline, withdraw | no | as themselves | on anyone's behalf |
+| create or delete games directly | no | no | yes |
+| create users, change roles, disable, reset passwords | no | no | yes |
+| link external ids | no | no | yes |
+| rename themselves, change their own password, manage their own tokens | no | yes | any account |
+
+Linked external ids appear in a `User` only for that user and for administrators.
+Someone else's challenge or token answers `404`, not `403`, so ids of other
+people's things are not confirmed.
+
+The last enabled administrator cannot be demoted or disabled.
 
 ---
 
@@ -120,25 +147,22 @@ A `401` body uses the same envelope as every other error,
 
 ### `GameState`
 
-The persisted state of a game, in progress or finished. Returned by the create,
-get-state, resign and draw endpoints, listed by the archive and current-games
-endpoints, and nested inside a `MoveResult`.
+The state of a game, in progress or finished. Returned by game creation, reads,
+and every action, and nested inside a `MoveResult`.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `fen` | string | The full position as standard [FEN](#fen): placement, side to move, castling, en passant, and the move clocks. |
-| `status` | integer | Outcome: `0` = in play, `1` = white won, `2` = black won, `3` = draw. |
-| `version` | integer | Monotonic version, bumped on every state change (for [optimistic concurrency](#optimistic-concurrency)). |
-| `generation` | integer | Which game between this triple this is (`1` = first; higher = a later rematch), see [generations](#generations-and-the-game-archive). |
-| `draw` | integer \| null | Who has an open draw offer: `0` = white, `1` = black, `null` = none. |
-| `termination` | string \| null | Why a finished game ended (see [result model](#result-model)), or `null` while in play. |
-| `id` | integer | The game's id: never reused, and kept when the game finishes. |
-| `group_id`, `white_id`, `black_id` | integer | The triple the game belongs to. |
+| `id` | integer | The game's id. Never reused, and kept when the game finishes. |
+| `fen` | string | The full position as standard [FEN](#fen). |
+| `status` | integer | `0` in play, `1` white won, `2` black won, `3` draw. |
+| `version` | integer | Bumped on every change, for [optimistic concurrency](#optimistic-concurrency-expected_version). |
+| `generation` | integer | Which game this is between these two colours in this group: `1`, then `2` for a rematch with the same colours, and so on. |
+| `draw` | integer \| null | Who has an open draw offer: `0` white, `1` black, `null` none. |
+| `termination` | string \| null | Why a finished game ended ([result model](#result-model)); `null` in play. |
+| `group_id`, `white_id`, `black_id` | integer | The group and the two players. |
 | `white_name`, `black_name` | string | The players' current usernames. |
 | `started_at` | string | When the game began (ISO 8601, UTC). |
 | `updated_at` | string | When it last changed; for a finished game, when it ended. |
-
-Example (after `1. e4`):
 
 ```json
 {
@@ -149,79 +173,76 @@ Example (after `1. e4`):
   "draw": null,
   "termination": null,
   "id": 41,
-  "group_id": 10,
+  "group_id": 0,
   "white_id": 1,
   "black_id": 2,
-  "white_name": "Bob",
-  "black_name": "Phil",
+  "white_name": "alice",
+  "black_name": "bob",
   "started_at": "2026-11-03T16:00:49.852248+00:00",
   "updated_at": "2026-11-03T16:01:02.117730+00:00"
 }
 ```
 
-New fields may be added to any response in a later version, so a client should
-ignore keys it does not recognize.
-
 Whose turn it is comes from the FEN (the field after the placement: `w` or `b`).
+New fields may be added to any response, so a client should ignore keys it does
+not recognize.
+
+### `MoveResult`
+
+What playing a move returns: the move plus the resulting `GameState`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | `GameState` | The full state **after** the move. |
+| `from`, `to` | string | Origin and destination squares, e.g. `"e2"`, `"e4"`. |
+| `san` | string | The move as a postable string (`"e4"`, `"Nf3"`, `"exd5"`, `"e8Q"`, `"0-0"`, with `+`/`#` on check/mate). |
+| `check` | boolean | Whether the move gives check (non-terminal; a mate is `status` 1/2). |
+| `castle` | string \| null | `"K"` or `"Q"` for a castle, else `null`. |
+| `promotion` | string \| null | The promoted-to piece letter, else `null`. |
+| `en` | boolean | Whether the move was an en-passant capture. |
 
 ### `User`
-
-An account. Returned by every user endpoint; never includes a password or its hash.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | integer | Assigned by the server. |
 | `username` | string | 2 to 32 letters, digits, `_`, `.` or `-`, not all digits. Unique ignoring case; shown as typed. |
 | `role` | string | `"user"` or `"admin"`. |
+| `has_password` | boolean | Whether the account can log in with a password (a bot account may only use api tokens). |
 | `created_at` | string | ISO 8601, UTC. |
-| `disabled_at` | string \| null | Reserved for account management; `null`. |
-| `identities` | array | The external ids linked to the account, as `{"provider", "external_id"}`. |
+| `disabled_at` | string \| null | When it was disabled, or `null`. |
+| `identities` | array | Linked external ids, `{"provider", "external_id"}`; empty unless you are this user or an admin. |
 
-```json
-{
-  "id": 2,
-  "username": "Phil",
-  "role": "user",
-  "created_at": "2026-11-03T16:00:50.216444+00:00",
-  "disabled_at": null,
-  "identities": [ { "provider": "discord", "external_id": "123456789012345678" } ]
-}
-```
+Usernames cannot be all digits, so a client can accept "a user id or a username"
+in one field without ambiguity.
 
-Usernames cannot be all digits so that a client can accept "a user id or a
-username" in one field without ambiguity, as the Python client and
-`chesssnake play` do.
-
-### `MoveResult`
-
-The outcome of a played move: the move itself plus the resulting `GameState`.
-Returned only by [play a move](#post-v1gamesgwbmoves).
+### `Challenge`
 
 | Field | Type | Meaning |
 |---|---|---|
-| `state` | `GameState` | The full state **after** the move. |
-| `from` | string | Origin square of the piece that moved, e.g. `"e2"`. |
-| `to` | string | Destination square, e.g. `"e4"`. |
-| `san` | string | The move as a postable string (e.g. `"e4"`, `"Nf3"`, `"exd5"`, `"e8Q"`, `"0-0"`, with a `+`/`#` suffix on check/mate). |
-| `check` | boolean | Whether the move gives check to the side now to move. |
-| `castle` | string \| null | `"K"` (king-side) or `"Q"` (queen-side) if the move was a castle, else `null`. |
-| `promotion` | string \| null | The promoted-to piece letter (`"Q"`, `"R"`, `"B"`, `"N"`) if a pawn promoted, else `null`. |
-| `en` | boolean | Whether the move was an en-passant capture. |
+| `id` | integer | The challenge's id. |
+| `group_id` | integer | The group the game will be in. |
+| `challenger_id`, `challenger_name` | integer, string | Who sent it. |
+| `challenged_id`, `challenged_name` | integer, string | Who it is for. |
+| `color` | string | The colour the **challenger** plays: `"white"`, `"black"` or `"random"` (decided on acceptance). |
+| `created_at` | string | ISO 8601, UTC. |
 
-Example (after `1. e4`):
+### `LoginResult` and `TokenInfo`
+
+Logging in, registering and creating an api token return a `LoginResult`:
 
 ```json
 {
-  "state": { "...": "a GameState as above" },
-  "from": "e2",
-  "to": "e4",
-  "san": "e4",
-  "check": false,
-  "castle": null,
-  "promotion": null,
-  "en": false
+  "token": "css_9fJ…",
+  "token_info": {"id": 12, "kind": "session", "name": "login",
+                 "created_at": "2026-11-03T16:00:49+00:00", "expires_at": "2026-12-03T16:00:49+00:00"},
+  "user": { "...": "a User (absent when creating an api token)" }
 }
 ```
+
+`token` appears only here. `GET /v1/auth/tokens` lists `TokenInfo`s, which never
+include it. `kind` is `"session"` or `"api"`; `expires_at` is `null` for an api
+token that does not expire.
 
 ### Result model
 
@@ -272,7 +293,9 @@ rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1
 
 Because it's standard FEN, any chess library or tool can render or analyze a
 chesssnake position directly. You can also fetch it as plain text from
-[`GET …/fen`](#get-v1gamesgwbfen).
+[`GET …/fen`](#game-reads).
+
+---
 
 ---
 
@@ -285,675 +308,307 @@ human-readable detail:
 { "error_type": "MoveIntoCheckError", "detail": "Making that move would put you in check" }
 ```
 
-The HTTP status code indicates the category; `error_type` names the exact condition.
-
 | Status | When | `error_type` values |
 |---|---|---|
-| `400 Bad Request` | The move or draw action is illegal / invalid chess input | any engine error: `InvalidNotationError`, `GameOverError`, `MoveIntoCheckError`, `PromotionError`, `InvalidCastleError`, `PieceNotFoundError`, `MultiplePiecesFoundError`, `NothingToCaptureError`, `CaptureOwnPieceError`, `PieceOnSquareError`, `DrawWrongTurnError`, `DrawAlreadyOfferedError`, `DrawNotOfferedError` |
-| `403 Forbidden` | The supplied `player_id` isn't allowed to act (not their turn, or not in the game) | `NotYourTurnError` |
-| `404 Not Found` | The referenced game or user does not exist | `GameNotFoundError`, `UserNotFoundError` |
-| `409 Conflict` | Stale `expected_version` or `generation`; a username or external id already taken; an invalid challenge (self-challenge, duplicate, or a game already exists) | `VersionConflictError`, `GenerationConflictError`, `UserExistsError`, `ChallengeError` |
-| `422 Unprocessable Entity` | An id is outside the BIGINT range, or a game's two players are the same user; a malformed username, provider or external id | `SQLIdError`, `UserValidationError` |
-| `503 Service Unavailable` | Every database connection is in use; the request was not attempted. Retry shortly. | `SQLBusyError` |
+| `400 Bad Request` | The move or draw action breaks the rules | any engine error: `InvalidNotationError`, `GameOverError`, `MoveIntoCheckError`, `PromotionError`, `InvalidCastleError`, `PieceNotFoundError`, `MultiplePiecesFoundError`, `NothingToCaptureError`, `CaptureOwnPieceError`, `PieceOnSquareError`, `DrawWrongTurnError`, `DrawAlreadyOfferedError`, `DrawNotOfferedError` |
+| `401 Unauthorized` | No token, or an invalid, expired or revoked one; a failed login; a wrong current password | `AuthError` |
+| `403 Forbidden` | Logged in but not allowed: not an admin, acting as someone else, not your turn or not your game, a disabled account, registration closed | `ForbiddenError`, `NotYourTurnError` |
+| `404 Not Found` | No such game, user, challenge or token (or not one you may see) | `GameNotFoundError`, `UserNotFoundError`, `ChallengeNotFoundError`, `TokenNotFoundError` |
+| `409 Conflict` | Stale `expected_version`; a username or external id taken; a challenge that cannot be made or accepted | `VersionConflictError`, `UserExistsError`, `ChallengeError` |
+| `422 Unprocessable Entity` | A malformed value: an id out of range, a bad username, password, provider or token name; an admin not saying which player acts | `SQLIdError`, `UserValidationError` |
+| `503 Service Unavailable` | The server is busy (no free database connection, or too many logins being checked at once). Retry shortly. | `SQLBusyError` |
 | `500 Internal Server Error` | A database failure | `SQLError` |
-| `401 Unauthorized` | Missing/invalid API key (only when a key is configured) | *(none, see below)* |
 
-Notes:
+FastAPI's own request-validation failures (malformed JSON, a missing body field, a
+string where an integer belongs) are `422` with a list-shaped `detail` and no
+`error_type`.
 
-- **`401`** and FastAPI's own request-validation failures (malformed JSON, missing
-  required body fields, a non-integer where an integer is required) use FastAPI's
-  default shape `{"detail": ...}` and do **not** carry an `error_type`. Treat any
-  response without `error_type` as a transport/validation error rather than a game
-  rule violation.
-- The full list of engine (`ChessError`) meanings is documented alongside
-  `Game.move` in the engine; the common ones:
-  - `InvalidNotationError`: the `move` string isn't valid algebraic notation.
-  - `PieceNotFoundError`: no piece of that type can legally reach the target square.
-  - `MultiplePiecesFoundError`: the move is ambiguous; add file/rank disambiguation.
-  - `MoveIntoCheckError`: the move would leave your own king in check.
-  - `NothingToCaptureError` / `CaptureOwnPieceError` / `PieceOnSquareError`: capture
-    or occupancy mistakes.
-  - `PromotionError`: a pawn reached the back rank without a promotion piece, or a
-    promotion was specified off the back rank.
-  - `InvalidCastleError`: castling isn't legal here.
-  - `GameOverError`: the game already ended; no further moves/draws are allowed.
-  - `DrawWrongTurnError` / `DrawAlreadyOfferedError` / `DrawNotOfferedError`: draw
-    negotiation done out of turn / twice / with no offer outstanding.
-
-**Expected client behavior:** on a non-2xx response, read the status and `error_type`,
-surface `detail` to the user, and **do not** advance any local game state. The server
-did not change anything. The action was rejected atomically.
+**On an error the server changed nothing.** Show `detail`, keep your current
+state, and on a `409` re-read before retrying.
 
 ---
 
-## Player identity and versioning
+## Acting in a game
 
-Mutating routes (`/moves`, `/resign`, `/draw/*`) accept three optional controls.
+### Who acts
 
-### Player identity (`player_id`)
+Moves, draws and resignations are made **as the logged-in user**. A user who is
+not one of the two players gets `403 NotYourTurnError`; a player moving out of
+turn gets the same.
 
-Pass the id of the player performing the action. The server validates it:
-
-- for a **move**, `player_id` must be the side whose turn it is, else `403 NotYourTurnError`;
-- for **resign / draw**, `player_id` must be a participant (`white_id` or `black_id`).
-
-Omitting `player_id` on a move applies it for whichever side is to move (no check).
-There is no per-player secret: this guards against acting for the wrong side, not
-against a client that deliberately spoofs an id. Combine it with the service
-[API key](#authentication) to gate access to the whole endpoint.
+Administrators can act for a player by sending `player_id` (how a bot plays for
+the people it represents). An administrator who is one of the players and sends
+no `player_id` acts as themselves. An administrator who is not playing and sends
+no `player_id` moves for whichever side is to move, but must name the player for
+a resignation or a draw (`422` otherwise). A non-admin sending someone else's
+`player_id` gets `403 ForbiddenError`. Nobody can act as a disabled user.
 
 ### Optimistic concurrency (`expected_version`)
 
-Every `GameState` carries a `version` that increases on each change. Pass the
-`version` you last saw as `expected_version`; if the game has moved on since, the
-server rejects the action with `409 VersionConflictError` instead of applying it
-against a newer position. This makes retries after a dropped response **safe**: a
-retry that carries the now-stale version is refused rather than double-applied. On a
-`409`, re-read the state (`GET …`) and decide whether to retry.
+Every `GameState` carries a `version` that increases on each change. Send the
+`version` you last saw as `expected_version`; if the game has moved on, the
+server refuses with `409 VersionConflictError` instead of applying your action to
+a position you have not seen. That makes retrying after a dropped response
+**safe**. Even without it, actions on one game are serialized and never corrupt
+each other.
 
-Even without `expected_version`, every action runs inside a locked transaction, so
-concurrent actions on one game are serialized and never corrupt each other.
-Versioning just lets the *client* detect that it was working from stale state.
+### Finished games and rematches
 
-### The game you mean (`generation`)
-
-Pass the `generation` of the game the action is for. If that game is over and a
-rematch is now in progress, the server refuses with `409 GenerationConflictError`
-rather than applying the action to the rematch. Without it, an action always goes
-to the game in progress, so a client that was looking at an old game could play a
-move into a new one by accident. The Python client always sends it.
-
----
-
-## Generations and the game archive
-
-A triple `(group_id, white_id, black_id)` can own **many** games over time, one per
-**generation**. The *current* game is the one with the highest generation.
-
-- `POST /v1/games` returns the current game if it's still in play, or, once the
-  current game is **finished**, creates a **fresh** game at the next generation
-  (so the same two players can rematch). Finished games are preserved.
-- Mutations (`/moves`, `/resign`, `/draw/*`) act on the game in progress. Send
-  `generation` to make sure it is the one you mean (see
-  [above](#the-game-you-mean-generation)). An action on a finished game, with no
-  newer one started, is refused with `400 GameOverError`.
-- Read routes take an optional `?generation=N` to view a past (finished, read-only)
-  game; the default is the game in progress or, if there is none, the last one
-  played. `GET …/archive` lists every generation.
-- A finished game keeps its `id`, so `GET /v1/games/{id}` finds it whether or not it
-  is over.
-- `GET /v1/games` (current games) and `GET …/exists` report **only active** games,
-  so a finished game between two players no longer blocks a new challenge.
+A finished game keeps its id and stays readable through every read route. Acting
+on it answers `400 GameOverError`. A rematch is a new challenge (and so a new game
+with a new id); `GET /v1/games/between` lists every game two players have played.
 
 ---
 
 ## Endpoints
 
-Path parameters are written `{g}` = `group_id`, `{w}` = `white_id`, `{b}` =
-`black_id`. All example URLs omit the base URL and (when required) the `X-API-Key`
-header for brevity.
+All examples omit the base URL and the `Authorization` header.
 
 ### `GET /health`
 
 Liveness probe. Unversioned and never authenticated.
 
-- **Response** `200 OK`
-
-  ```json
-  { "status": "ok" }
-  ```
-
-- **Client behavior:** use for liveness checks. A `200` means the process is up and
-  its event loop is responsive. It does **not** mean the database is reachable, and it
-  does not mean the server has a free worker to run your request: this is the one route
-  that runs on the event loop rather than in the worker threadpool, so it answers in
-  milliseconds even when every worker is busy. That is deliberate, so that a merely
-  busy server is not reported as a failed one, and it is why this is a liveness probe
-  and not a readiness probe.
+- **Response** `200 OK`: `{ "status": "ok" }`.
+- A `200` means the process is up and its event loop responsive. It does **not**
+  mean the database is reachable or that a worker is free: this route runs on the
+  event loop on purpose, so it answers in milliseconds even when every worker is
+  busy. It is a liveness probe, not a readiness probe.
 
 ---
 
-### `POST /v1/users`
+### Accounts and tokens
 
-Create a user. The server assigns the id.
-
-- **Request body**: `{ "username": "Phil" }`
-- **Response** `201 Created`: a [`User`](#user).
-- **Errors:** `409 UserExistsError` if the name is taken (ignoring case);
-  `422 UserValidationError` if it breaks the [username rule](#user); `401`.
-
----
-
-### `GET /v1/users`
-
-### `GET /v1/users/{id}`
-
-Look a user up by username (`GET /v1/users?username=phil`, case does not matter)
-or by id.
-
-- **Response** `200 OK`: a [`User`](#user).
-- **Errors:** `404 UserNotFoundError`, `401`.
+| Route | Body | Response | Notes |
+|---|---|---|---|
+| `POST /v1/auth/login` | `{username, password}` | `200 LoginResult` | No token needed. `401` on any wrong username or password; `403` if disabled. |
+| `POST /v1/auth/register` | `{username, password}` | `201 LoginResult` | No token needed. `403` unless `api.registration = "open"`; `409` if the name is taken. |
+| `POST /v1/auth/logout` | | `204` | Revokes the token presented. |
+| `GET /v1/auth/me` | | `200 User` | Who the token belongs to. |
+| `POST /v1/auth/password` | `{current_password, new_password}` | `204` | Ends your other sessions; keeps this one and your api tokens. `401` if `current_password` is wrong. |
+| `POST /v1/auth/tokens` | `{name, current_password, expires_in_days?}` | `201 LoginResult` | An api token. `name` 1 to 64 characters; `expires_in_days` 1 to 3650, or omit for none. |
+| `GET /v1/auth/tokens` | | `200 {"tokens": [TokenInfo]}` | Your tokens. Admins may add `?user_id=`. |
+| `DELETE /v1/auth/tokens/{id}` | | `204` | Your own token (admins: any). `404` otherwise. |
 
 ---
 
-### `PATCH /v1/users/{id}`
+### Users
 
-Change a user's username. Games show the new name immediately, including games
-already in progress or finished, because they never stored a copy.
+| Route | Who | Body | Response |
+|---|---|---|---|
+| `POST /v1/users` | admin | `{username, password?, role?}` | `201 User`. Without a password the account can only use api tokens. |
+| `GET /v1/users?username=` | any | | `200 User` (case does not matter), `404` if none |
+| `GET /v1/users/{id}` | any | | `200 User` |
+| `PATCH /v1/users/{id}` | self: `username`; admin: also `role`, `disabled`, `password` | any subset | `200 User`. A non-admin changing anything else, or another account, gets `403`. |
+| `GET /v1/users/{provider}/{external_id}` | admin | | `200 User` linked to that external id, `404` if none |
+| `POST /v1/users/{provider}/{external_id}` | admin | `{username}` | `200 User`: the linked user, **created** (with that username, no password) on first use. Idempotent: the one call a bot needs per interaction. |
+| `PUT /v1/users/{id}/identities/{provider}/{external_id}` | admin | | `200 User`. `409` if that external id belongs to someone else. Linking again is a no-op. |
+| `DELETE /v1/users/{id}/identities/{provider}/{external_id}` | admin | | `200 User` |
 
-- **Request body**: `{ "username": "Philip" }`
-- **Response** `200 OK`: the [`User`](#user).
-- **Errors:** `404 UserNotFoundError`, `409 UserExistsError`, `422 UserValidationError`, `401`.
+`provider` is a short lowercase name of your choosing (`[a-z0-9_-]`, up to 32
+characters); `external_id` is any token up to 128 characters, stored as text, so
+a Discord snowflake is its decimal digits. A user can be linked from any number
+of providers.
 
----
-
-### `GET /v1/users/{provider}/{external_id}`
-
-The user an id from another system is linked to, e.g.
-`GET /v1/users/discord/123456789012345678`. `provider` is a short lowercase name of
-your choosing (`[a-z0-9_-]`, up to 32 characters); `external_id` is any token up to
-128 characters, stored as text.
-
-- **Response** `200 OK`: a [`User`](#user).
-- **Errors:** `404 UserNotFoundError` if nothing is linked; `422`; `401`.
-
----
-
-### `POST /v1/users/{provider}/{external_id}`
-
-Get the linked user, **creating** user and link on first use. This is the one call
-an integration needs per interaction: idempotent, and the body's `username` is used
-only when the user is created.
-
-- **Request body**: `{ "username": "Phil" }`
-- **Response** `200 OK`: the [`User`](#user), with the link in `identities`.
-- **Errors:** `409 UserExistsError` if the user had to be created and the username
-  is taken (nothing is created); `422 UserValidationError`; `401`.
+A bot's usual setup: a dedicated admin account with no password
+(`chesssnake user create discord-bot --admin --no-password` on the server) and an
+api token for it (`chesssnake user token discord-bot --name bot`). It maps each
+Discord member with `POST /v1/users/discord/{member_id}` and acts for them with
+`player_id`.
 
 ---
 
-### `PUT /v1/users/{id}/identities/{provider}/{external_id}`
+### Challenges
 
-Link an external id to an existing user. A user can have any number of links, one
-per `(provider, external_id)`. Linking the same one again is a no-op.
+A challenge is how a game normally starts. Accepting it creates the game, in the
+same transaction that consumes the challenge, so a challenge can never be
+accepted twice or accepted after being withdrawn.
 
-- **Response** `200 OK`: the [`User`](#user).
-- **Errors:** `409 UserExistsError` if that external id is linked to someone else;
-  `404 UserNotFoundError`; `422`; `401`.
+#### `POST /v1/challenges`
 
----
+- **Body**: `{ "opponent_id": 2, "group_id": 0, "color": "random" }`. `color` is
+  the colour you want: `"white"`, `"black"` or `"random"` (the default, decided on
+  acceptance). Admins may add `player_id` to challenge on someone's behalf.
+- **Response** `201 Challenge`.
+- **Errors**: `409 ChallengeError` when you challenge yourself, the opponent is
+  disabled, a game between you is already in progress in that group, or a
+  challenge between you is already pending (if *they* challenged *you*, the
+  detail names the challenge to accept instead); `404` if the opponent does not
+  exist.
 
-### `POST /v1/games`
+#### `GET /v1/challenges?direction=incoming|outgoing|all`
 
-Open the **current** game for a triple: return it if one is in progress, create one
-if none exists, or start a **new generation** if the current game is already
-finished (see [generations](#generations-and-the-game-archive)). This is how a client
-"opens" a game or starts a rematch.
+Your pending challenges, oldest first: `{ "challenges": [Challenge] }`. The
+default is `all`. Admins may add `user_id=` to see someone else's.
 
-- **Request body**
+#### `GET /v1/challenges/{id}`
 
-  | Field | Type | Default | Notes |
-  |---|---|---|---|
-  | `group_id` | integer | `0` | |
-  | `white_id` | integer | required | a user id; plays white, moves first |
-  | `black_id` | integer | required | a user id, not the same as `white_id` |
+One challenge, if you are in it (admins: any). `404` otherwise.
 
-  ```json
-  { "group_id": 10, "white_id": 1, "black_id": 2 }
-  ```
+#### `POST /v1/challenges/{id}/accept`
 
-- **Response** `200 OK`: a [`GameState`](#gamestate). A brand-new game has the
-  starting position, `status: 0`, `draw: null`, and its `generation` (1 for the first
-  game between the triple, higher for a rematch after a finished game).
-- **Errors:** `404 UserNotFoundError` if either player does not exist;
-  `422 SQLIdError` if any id is out of BIGINT range; `422` if both players are the
-  same user; `401` if a key is required and missing.
-- **Client behavior:** call this to obtain the current state, then drive the game with
-  `/moves`. It never resets a game in progress; once a game **ends**, calling it again
-  starts the next generation (the finished game stays in the [archive](#get-v1gamesgwbarchive)).
+Only the challenged user can accept (an admin acts as them). Creates the game
+and returns it: **`201 GameState`**. `403` for the challenger; `404` if it is no
+longer pending; `409` if a game between the two started in the meantime (the
+challenge is then kept).
 
----
+#### `DELETE /v1/challenges/{id}`
 
-### `GET /v1/games/{id}`
-
-A game by its id, in progress or finished. This is the handle to keep when you only
-need to follow one game.
-
-- **Response** `200 OK`: a [`GameState`](#gamestate).
-- **Errors:** `404 GameNotFoundError`, `422`, `401`.
+Decline (as the challenged user) or withdraw (as the challenger): `204`. Admins
+may delete any. `404` if it is not pending or not yours.
 
 ---
 
-### `GET /v1/games/{g}/{w}/{b}`
+### Games
 
-Fetch a game's state without modifying it.
+#### `POST /v1/games` (admin)
 
-- **Query params:** `generation` (optional): a past game to view; default = the game
-  in progress, or the last one played if none is.
-- **Response** `200 OK`: a [`GameState`](#gamestate).
-- **Errors:** `404 GameNotFoundError` if there is no such game (or generation);
-  `422 SQLIdError`; `401`.
-- **Client behavior:** use this to refresh, e.g. poll it to detect that the opponent
-  has moved (compare `version`, `fen`, or `status`). Prefer this over re-`POST`ing
-  `/v1/games` when you only want to read (it won't create/rematch as a side effect).
+Create a game directly, without a challenge: `{ "group_id": 0, "white_id": 1,
+"black_id": 2 }`. Returns the game in progress between those colours in that
+group if there is one, otherwise a new one: `200 GameState`. `404` for an unknown
+player, `422` if both players are the same user.
 
-The `generation` query param is accepted the same way on `/legal-moves`, `/history`,
-`/pgn`, `/fen`, `/image`, and `DELETE`.
+#### `GET /v1/games?player_id=&group_id=`
 
----
+Games in progress, most recently changed first: `{ "games": [GameState] }`.
+Without `player_id`, your own; without `group_id`, in every group.
 
-### `GET /v1/games/{g}/{w}/{b}/archive`
+#### `GET /v1/games/between?player1=&player2=&group_id=0&status=all`
 
-List every game (generation) between the triple: finished ones oldest first, then
-the one in progress, each as a full [`GameState`](#gamestate).
+Every game between two players in a group, **either colour**, oldest first:
+`{ "games": [GameState] }`. `status` is `active` (the game in progress, if any),
+`finished`, or `all`. This is a head-to-head history, and how to find the game
+two players currently have.
 
-- **Response** `200 OK`
+#### `GET /v1/games/record?player1=&player2=&group_id=0`
 
-  ```json
-  { "games": [
-    { "id": 41, "generation": 1, "status": 2, "termination": "checkmate", "...": "…" },
-    { "id": 57, "generation": 2, "status": 0, "termination": null, "...": "…" }
-  ] }
-  ```
-- **Errors:** `422 SQLIdError`, `401`. (An empty `games` list if the triple has no games.)
-- **Client behavior:** build a "past games" screen; fetch a specific one with
-  `?generation=`.
+Win/draw/loss record over their **finished** games in a group, both colour
+arrangements:
 
----
+```json
+{ "player1": 1, "player2": 2, "player1_wins": 3, "player2_wins": 1, "draws": 2 }
+```
 
-### `POST /v1/games/{g}/{w}/{b}/moves`
+A win by checkmate or resignation counts for that side; every kind of draw counts
+as a draw; games in progress are not counted.
 
-Play a move. **The server validates and applies it** against the stored game and
-persists the new state atomically.
+#### `GET /v1/games/{id}`
 
-- **Request body**
+The game, in progress or finished: `200 GameState`, or `404 GameNotFoundError`.
+Poll it (compare `version`) to see the opponent's moves.
 
-  | Field | Type | Required | Notes |
-  |---|---|---|---|
-  | `move` | string | yes | the move in algebraic notation (see [move notation](#move-notation)) |
-  | `player_id` | integer | no | if given, must be the side to move (else `403`), see [player identity](#player-identity-player_id) |
-  | `expected_version` | integer | no | optimistic-concurrency guard (else `409`), see [versioning](#optimistic-concurrency-expected_version) |
-  | `generation` | integer | no | the game this move is for (else `409`), see [the game you mean](#the-game-you-mean-generation) |
+#### `DELETE /v1/games/{id}` (admin)
 
-  ```json
-  { "move": "e4", "player_id": 1, "expected_version": 1, "generation": 1 }
-  ```
+Delete a game, in progress or finished, and its moves: `204`, or `404`.
 
-- **Response** `200 OK`: a [`MoveResult`](#moveresult). By the time you receive it,
-  the move is already stored server-side and `state.version` has increased.
-- **Errors:**
-  - `400` with an engine `error_type` if the move is illegal or malformed, e.g.
-    `InvalidNotationError` (`"move": "xyz"`), `PieceNotFoundError` (`"move": "e5"` as
-    white's first move), `MoveIntoCheckError`, `GameOverError` (the game already
-    ended), etc. **Nothing is stored** when a move is rejected.
-  - `403 NotYourTurnError` if `player_id` isn't the side to move;
-    `409 VersionConflictError` if `expected_version` is stale;
-    `409 GenerationConflictError` if `generation` is over and a rematch is in progress.
-  - `404 GameNotFoundError`, `422 SQLIdError`, `401`.
+#### `POST /v1/games/{id}/moves`
 
-  Example rejection:
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `move` | string | yes | algebraic notation ([move notation](#move-notation)) |
+| `expected_version` | integer | no | `409` if stale |
+| `player_id` | integer | no | admins only: act as this player |
 
-  ```json
-  { "error_type": "InvalidNotationError", "detail": "\"xyz\" is not in valid algebraic notation" }
-  ```
+```json
+{ "move": "e4", "expected_version": 1 }
+```
 
-- **Client behavior:** on `200`, replace your view with `result.state`; use `from`/`to`
-  (or `san`) to highlight the move and `check`/`state.status`/`state.termination` to
-  show check/checkmate/draw. On an error, show `detail` and keep your current state.
+- **Response** `200 MoveResult`. The move is already stored when you receive it.
+- **Errors**: `400` with the engine's `error_type` for an illegal or malformed
+  move, or `GameOverError` on a finished game; `403 NotYourTurnError` out of turn
+  or outside the game; `409 VersionConflictError`; `404`. Nothing is stored when a
+  move is refused.
 
----
+#### `POST /v1/games/{id}/resign`, `/draw/offer`, `/draw/accept`, `/draw/decline`
 
-### `POST /v1/games/{g}/{w}/{b}/resign`
+Body optional: `{ "expected_version": 5 }` (and `player_id` for admins).
+Response `200 GameState`. Draw rules, enforced by the engine:
 
-Resign the game; the opponent wins.
+- `offer`: only on your own turn. Offering when the opponent already has an
+  offer open **accepts** it.
+- `accept` ends the game in a draw (`status` 3, `termination` `"agreement"`).
+- `decline` clears the opponent's offer; play continues.
 
-- **Request body**: `{ "player_id": 2, "expected_version": 5, "generation": 1 }`.
-  `player_id` (the resigning participant) is required; the others are optional.
-- **Response** `200 OK`, the resulting [`GameState`](#gamestate): `status` is the
-  opponent's win (`1`/`2`) and `termination` is `"resignation"`.
-- **Errors:** `400 GameOverError` (already ended); `403 NotYourTurnError` (not a
-  participant); `409 VersionConflictError` / `GenerationConflictError`; `404`, `422`, `401`.
+Errors: `400 DrawWrongTurnError`, `DrawAlreadyOfferedError`, `DrawNotOfferedError`,
+`GameOverError`; `403`; `409`; `404`.
+
+#### Game reads
+
+| Route | Response |
+|---|---|
+| `GET /v1/games/{id}/legal-moves` | `{ "moves": [ { "from": "e2", "to": "e4", "san": "e4", "promotion": null } ] }`; each `san` is postable as is. Castling has `to: null`. A finished game has none. |
+| `GET /v1/games/{id}/history` | `{ "moves": [ { "ply": 1, "san": "e4" }, { "ply": 2, "san": "e5" } ] }` |
+| `GET /v1/games/{id}/pgn` | `text/plain` PGN: tag pairs, movetext and result, ready for any chess tool |
+| `GET /v1/games/{id}/fen` | `text/plain` FEN (also in every `GameState`) |
+| `GET /v1/games/{id}/image?perspective=white\|black` | `image/png`. Without `perspective`, both orientations side by side with the players' names; with it, one board from that side. |
 
 ---
 
-### `POST /v1/games/{g}/{w}/{b}/draw/{action}`
+## Websockets (planned for 0.13.0)
 
-Negotiate a draw. `{action}` is one of `offer`, `accept`, `decline`.
-
-- **Request body**: `{ "player_id": 1, "expected_version": 3, "generation": 1 }`.
-  `player_id` (a participant) is required; the others are optional.
-
-- **Semantics** (all enforced by the engine):
-  - `offer`: record a draw offer from `player_id`. You may only offer on your own
-    turn. If the *opponent* already had an offer outstanding, offering back **accepts**
-    it (the game ends in a draw).
-  - `accept`: accept the opponent's outstanding offer; the game ends in a draw
-    (`status` becomes `3`, `termination` `"agreement"`).
-  - `decline`: clear the opponent's outstanding offer; play continues (`draw` becomes
-    `null`).
-- **Response** `200 OK`: the resulting [`GameState`](#gamestate).
-- **Errors:**
-  - `400 DrawWrongTurnError`: offered a draw when it isn't your turn.
-  - `400 DrawAlreadyOfferedError`: you already have an offer outstanding.
-  - `400 DrawNotOfferedError`: accepted/declined with no offer to act on.
-  - `400 GameOverError`: the game already ended.
-  - `403 NotYourTurnError`, `409 VersionConflictError` / `GenerationConflictError`, `404`, `422`, `401`.
-- **Client behavior:** reflect the returned `draw`/`status`. When `status` becomes `3`,
-  render "draw" and stop accepting moves.
+Not built yet; recorded here because the authentication above was designed for
+it. Browsers cannot set an `Authorization` header on a WebSocket, so a socket will
+send its token as its **first message** rather than in the URL, where it would end
+up in access logs. A long-lived socket will re-check its token periodically, so
+that logging out, disabling an account or a token expiring still ends it. The
+check is the same one every HTTP request makes.
 
 ---
 
-### `GET /v1/games/{g}/{w}/{b}/legal-moves`
+## The Python client
 
-List every legal move in the current position, for highlighting destinations or
-validating input before submitting.
-
-- **Response** `200 OK`
-
-  ```json
-  { "moves": [ { "from": "e2", "to": "e4", "san": "e4", "promotion": null }, "..." ] }
-  ```
-
-  Each `san` is directly postable to [`/moves`](#post-v1gamesgwbmoves). For castling,
-  `to` is `null` and `san` is `"0-0"`/`"0-0-0"` (the equivalent letter-O forms
-  `"O-O"`/`"O-O-O"` are also accepted when posting a move). A finished game returns `[]`.
-- **Errors:** `404 GameNotFoundError`, `422`, `401`.
-
----
-
-### `GET /v1/games/{g}/{w}/{b}/history`
-
-The moves played so far, in order.
-
-- **Response** `200 OK`: `{ "moves": [ { "ply": 1, "san": "e4" }, { "ply": 2, "san": "e5" } ] }`.
-- **Errors:** `404 GameNotFoundError`, `422`, `401`.
-
----
-
-### `GET /v1/games/{g}/{w}/{b}/pgn`
-
-The game as **PGN** (`text/plain`): standard headers + movetext + result token,
-ready to paste into any chess tool.
-
-- **Response** `200 OK`, `Content-Type: text/plain`:
-
-  ```
-  [White "Alice"]
-  [Black "Bob"]
-  [Result "1-0"]
-  [Termination "resignation"]
-
-  1. e4 e5 2. Nf3 Nc6 1-0
-  ```
-- **Errors:** `404 GameNotFoundError`, `422`, `401`.
-
----
-
-### `GET /v1/games/{g}/{w}/{b}/fen`
-
-The current position as a [FEN](#fen) string (`text/plain`). The same value is also
-in every JSON response as `state.fen`.
-
-- **Response** `200 OK`, `Content-Type: text/plain`, e.g. `rnbqkbnr/... b KQkq e3 0 1`.
-- **Errors:** `404 GameNotFoundError`, `422`, `401`.
-
----
-
-### `GET /v1/games/{g}/{w}/{b}/image`
-
-Render the board to a PNG **on the server**, so a frontend can display it without any
-chess/rendering code of its own.
-
-- **Query params:**
-  - `perspective` (optional): `white` or `black` for a **single board** from that
-    side's point of view (board only, no names). Omit for the default **wide** image
-    (both orientations side by side; the player-name strip is included only if the game
-    has at least one name; a nameless game renders just the two boards).
-  - `generation` (optional): render a past game.
-- **Response** `200 OK`, `Content-Type: image/png`: raw PNG bytes.
-- **Errors:** `422` (bad `perspective` → request-validation error, or an out-of-range
-  id → `SQLIdError`), `404 GameNotFoundError`, `401`. (Error bodies are JSON.)
-- **Client behavior:** display/cache the bytes. The image reflects the latest stored
-  position; request it again after a move to refresh.
-
----
-
-### `DELETE /v1/games/{g}/{w}/{b}`
-
-Delete a game and its moves.
-
-- **Query params:** `generation` (optional): a specific game to delete; default = the
-  game in progress, or the last one played if none is.
-- **Response** `200 OK` → `{ "status": "ok" }` (no-op + `200` if nothing matched).
-- **Errors:** `422 SQLIdError`, `401`.
-
----
-
-### `GET /v1/games`
-
-A player's games in progress, most recently changed first.
-
-- **Query params:** `player_id` (required), `group_id` (optional; omit it for every group).
-- **Response** `200 OK`
-
-  ```json
-  { "games": [ { "id": 57, "white_id": 1, "black_id": 2, "white_name": "Bob", "...": "…" } ] }
-  ```
-
-  Each entry is a full [`GameState`](#gamestate). Finished games are excluded.
-- **Errors:** `422 SQLIdError`, `401`.
-- **Client behavior:** build an "ongoing games" list straight from it: every entry
-  already has the colours and names. For *finished* games, use `GET …/archive`.
-
----
-
-### `GET /v1/games/{g}/exists`
-
-Look up whether an **active** game exists between two players (in either color
-arrangement). Finished games don't count, so this returns `null` once a game ends,
-which is what lets a rematch be challenged.
-
-- **Query params:** `player1` (required), `player2` (required). `{g}` is the group.
-- **Response** `200 OK`
-
-  ```json
-  { "game": { "id": 57, "white_id": 1, "black_id": 2, "...": "a full GameState" } }
-  ```
-
-  or, when there is no such game:
-
-  ```json
-  { "game": null }
-  ```
-
-- **Errors:** `422 SQLIdError`, `401`.
-- **Client behavior:** the returned `white_id`/`black_id` tell you the color
-  assignment, which is what you need to address the game's other routes.
-
----
-
-### `GET /v1/games/{g}/record`
-
-The head-to-head win/draw/loss record between two players in a group, across all
-**finished** games: every generation and **both color arrangements** (games where
-either player had white). In-play games are excluded.
-
-- **Query params:** `player1` (required), `player2` (required). `{g}` is the group.
-- **Response** `200 OK`
-
-  ```json
-  { "player1": 1, "player2": 2, "player1_wins": 3, "player2_wins": 1, "draws": 2 }
-  ```
-
-  `player1_wins` is how many finished games `player1` won (whether as white or black);
-  `player2_wins` likewise; `draws` counts drawn games. All zero if they've never
-  finished a game. Swapping `player1`/`player2` just swaps the two win fields.
-- **What counts:** a game contributes as soon as it has a result. A win
-  by **checkmate or resignation** counts as a win for that side; **every** kind of draw
-  (agreement, stalemate, threefold repetition, fifty-move, insufficient material) counts
-  as a draw; the `termination` reason doesn't matter. Only games **still in play** are
-  excluded, so a game a player abandons mid-way never appears in the record.
-- **Errors:** `422 SQLIdError`, `401`.
-
----
-
-### `POST /v1/challenges`
-
-Issue a challenge, or accept a reciprocal one. Matchmaking runs entirely server-side
-so concurrent challenges stay consistent.
-
-- **Request body**
-
-  ```json
-  { "group_id": 10, "challenger": 100, "challenged": 200 }
-  ```
-
-- **Response** `200 OK`
-
-  ```json
-  { "accepted": false }
-  ```
-
-  - `accepted: false`: no reciprocal challenge existed, so a new pending challenge was
-    created.
-  - `accepted: true`: the challenged player had already challenged the challenger, so
-    the challenge is mutually agreed (the pending challenge is consumed). *(This route
-    does not itself create the game; create it with `POST /v1/games` using the agreed
-    colors.)*
-- **Errors:** `409 ChallengeError` if you challenged yourself, you already have a
-  pending challenge to that player, or an unresolved game between the two already
-  exists (`detail` explains which); `404 UserNotFoundError` if either player does
-  not exist. Also `422 SQLIdError`, `401`.
-- **Client behavior:** on `accepted: true`, proceed to open the game; on `false`, show
-  "challenge sent"; on `409`, surface `detail`.
-
----
-
-### `GET /v1/challenges/{g}/exists`
-
-Check for a pending challenge between two players (in either direction).
-
-- **Query params:** `player1` (required), `player2` (required).
-- **Response** `200 OK`
-
-  ```json
-  { "challenge": { "challenger": 100, "challenged": 200 } }
-  ```
-
-  or `{ "challenge": null }` if none is pending.
-- **Errors:** `422 SQLIdError`, `401`.
-
----
-
-### `DELETE /v1/challenges`
-
-Withdraw/cancel a pending challenge. Note this route takes a **request body** (some
-HTTP tooling requires opting in to send a body on `DELETE`).
-
-- **Request body**
-
-  ```json
-  { "group_id": 10, "challenger": 100, "challenged": 200 }
-  ```
-
-- **Response** `200 OK` → `{ "status": "ok" }` (no-op if nothing was pending).
-- **Errors:** `422 SQLIdError`, `401`.
-
----
-
-## How the chesssnake Python client interprets responses
-
-The bundled Python client turns the raw HTTP contract above into ordinary Python
-objects and exceptions, so you rarely touch JSON directly.
-
-- **`ApiClient`** (`chesssnake.remote.client`) is a thin wrapper over a `requests`-style
-  session. It prepends `/v1`, attaches `X-API-Key` when constructed with `api_key=`,
-  and parses responses:
-  - `get_or_create_game(...)` / `get_state(...)` / `get_game(id)` → a `GameState`;
-    `move(...)` → a `MoveResult`; `resign` / `offer_draw` / `accept_draw` /
-    `decline_draw` → `GameState`; `archive` / `current_games` → lists of
-    `GameState`; `legal_moves` / `history` → lists; `pgn` / `fen` → `str`;
-    `image(...)` → raw PNG `bytes`; the user routes → a `User`.
-  - On any non-2xx response it reads `{error_type, detail}` and **re-raises the exact
-    matching exception type**, the same `ChessError` subclasses the engine raises
-    locally (e.g. `MoveIntoCheckError`) and the persistence `GameError` subclasses
-    (e.g. `GameNotFoundError`, `NotYourTurnError`, `VersionConflictError`,
-    `UserNotFoundError`). So
-    server-side and local errors look identical to your `except` clauses. A response
-    without a recognized `error_type` (e.g. a `401`) surfaces as a generic `GameError`.
-
-- **`Game.remote(white, black, ...)`** (`chesssnake.Game`) wraps `ApiClient` as a
-  `Game`. Each player may be a user id or a username:
-  - Construct with `player_id=` to have that player asserted on every action; the
-    client also tracks `version` and `generation` and sends them with every action
-    automatically, so a retry after a dropped response is refused rather than
-    double-applied, and an action never lands in a rematch.
-  - `game.id` is the game's server id.
-  - `move("e4")` calls the moves endpoint, mirrors the returned state into a local
-    board (so `render()`, `to_move`, `is_over`, `fen`, etc. work without another
-    request), and returns a `MoveResult`. An illegal move raises the mapped `ChessError`.
-  - `resign()`, `draw_offer/accept/decline()`, `legal_moves()`, `pgn()`, `history()`,
-    `refresh()` map to the corresponding routes.
-  - Read state through the accessors: `to_move` (`Color`), `is_over`, `result`
-    (`GameStatus`), `winner` (`Color | None`), `termination` (`Termination | None`),
-    `draw_offered_by` (`Color | None`).
-  - `render()` / `save(path)` draw the mirrored board locally (the Python client has
-    Pillow); you don't need the image endpoint unless you want the server to render.
-
-The **local** engine (`Game.local(...)`) exposes the same features in-process
-(`move`, `resign`, `legal_moves`, `pgn`, `fen`, auto draw-by-rule). The client and
-server run identical rules.
-
-A minimal remote session:
+The bundled client turns all of this into objects and exceptions:
 
 ```python
-from chesssnake import Game, create_user
+from chesssnake import Game, connect
 from chesssnake.engine.errors import MoveIntoCheckError
 
-url = "http://localhost:8000"                   # api_key="..." too, if required
-create_user("bob", api_url=url)
-create_user("phil", api_url=url)
-game = Game.remote("bob", "phil", group_id=10, api_url=url)
-result = game.move("e4")          # MoveResult; already persisted server-side
-print(result.from_square, result.to_square, game.to_move)
+client = connect("http://localhost:8000", username="alice", password="...")
+challenge = client.challenge("bob", color="white")      # bob then: client.accept_challenge(id)
 
+state = client.current_games()[0]                        # once bob has accepted
+game = Game.remote(state, client=client)
+result = game.move("e4")                                 # MoveResult, already stored
 try:
-    game.move("Ke2")              # illegal? the server decides
+    game.move("Ke2")
 except MoveIntoCheckError as e:
     print("rejected:", e)
-
-game.refresh()                    # pull the opponent's reply
+game.refresh()                                           # pick up bob's reply
 ```
+
+- `connect(api_url, ...)` returns an `ApiClient`. It logs in with
+  `username`/`password`, or uses a `token`, `$CHESSSNAKE__CLIENT__TOKEN`, or the
+  token `chesssnake login` stored for that endpoint.
+- `ApiClient` has one method per route: `login`, `me`, `create_token`, `challenge`,
+  `challenges`, `accept_challenge`, `decline_challenge`, `get_game`,
+  `current_games`, `games_between`, `record`, `move`, and the admin methods
+  (`create_user`, `update_user`, `create_game`, the identity methods). Players may
+  be given as ids or usernames.
+- `Game.remote(game_id, client=...)` mirrors one game locally (board, accessors,
+  `render()`), sends `expected_version` with every action, and maps every error
+  response back to the same exception class the engine or database raised, so
+  `except GameOverError` works the same against a server as against a local game.
 
 ---
 
 ## Building your own client
 
-You do not need Python or the chess engine, just HTTP. A typical frontend:
+You need HTTP and nothing else. A typical frontend:
 
-1. **Know your players:** `POST /v1/users` (or `POST /v1/users/{provider}/{id}` to
-   map your own ids) → keep each user's `id`.
-2. **Open the game:** `POST /v1/games` with the triple → store the returned
-   `GameState` (keep its `id`, `version` and `generation`).
-3. **Render:** parse the [FEN](#fen) with any chess library, or `GET …/image` and show
-   the PNG.
-4. **Show options (optional):** `GET …/legal-moves` to highlight destinations; each
-   `san` is directly postable.
-5. **Submit a move:** `POST …/moves` with `{"move": "<algebraic>", "player_id": <me>,
-   "expected_version": <last version>, "generation": <its generation>}`.
-   - `200` → replace your state with `result.state` (note the new `version`); use
-     `from`/`to`/`san` for highlights and `check` / `state.status` / `state.termination`
-     for check/checkmate/draw messaging.
-   - `4xx` with `error_type` → show `detail`; **keep your current state** (nothing
-     changed on the server). On `409 VersionConflictError`, re-read and retry.
-6. **See the opponent's move:** poll `GET /v1/games/{id}` and watch `version` /
-   `fen` / `status` (there is no push/websocket channel).
-7. **End states:** `status` `1`/`2` is a win for white/black, `3` a draw;
-   `termination` says why. After the game ends, actions return `GameOverError`.
-8. **Resign, draws, PGN, matchmaking:** use the `/resign`, `/draw/*`, `/pgn`, and
-   `/challenges` routes.
-9. **Auth:** if the server requires it, send `X-API-Key` on every `/v1` request; expect
-   `401` otherwise.
+1. **Log in**: `POST /v1/auth/login`; keep the token and the `user`. On any `401`
+   later, log in again.
+2. **Home screen**: `GET /v1/auth/me`, `GET /v1/games` (your games in progress)
+   and `GET /v1/challenges?direction=incoming`.
+3. **Start a game**: `POST /v1/challenges`, or accept an incoming one, which
+   returns the new game.
+4. **Render**: parse the [FEN](#fen) with any chess library, or show
+   `GET /v1/games/{id}/image`.
+5. **Show options** (optional): `GET /v1/games/{id}/legal-moves`.
+6. **Move**: `POST /v1/games/{id}/moves {"move": …, "expected_version": …}`. On
+   `200` replace your state with `result.state`. On a `4xx` show `detail` and keep
+   your state.
+7. **See the opponent move**: poll `GET /v1/games/{id}` and watch `version`.
+8. **End states**: `status` `1`/`2` is a win for white/black, `3` a draw;
+   `termination` says why.
 
-The golden rule: **treat the server's response as the truth.** Never advance your view
-on a rejected request, and re-sync from the server whenever in doubt.
+The golden rule: **the server's response is the truth.** Never advance your view
+on a refused request, and re-read whenever in doubt.

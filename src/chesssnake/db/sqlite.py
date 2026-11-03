@@ -50,6 +50,16 @@ def lock_current_game(conn, stmt, of=None):
     return conn.execute(stmt)
 
 
+def lock_pair(conn, group_id, a, b):
+    """
+    Nothing to do: the transaction opened with ``BEGIN IMMEDIATE`` and already holds
+    the database's only write lock. See :func:`chesssnake.db.postgres.lock_pair`.
+    """
+    from .engine import require_write_transaction
+
+    require_write_transaction()
+
+
 def configure_engine(engine, busy_timeout: int = 5000) -> None:
     """
     Attach the connect and begin hooks that make concurrent writers safe.

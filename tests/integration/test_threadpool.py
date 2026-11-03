@@ -32,6 +32,22 @@ pytestmark = pytest.mark.integration
 CONCURRENCY = 3
 
 
+def _all_routes():
+    """
+    Every API route in a built app, however it was included.
+
+    FastAPI keeps included routers as wrappers rather than flattening them into
+    ``app.routes``, and the public auth router is included on the app rather than
+    into ``v1``; walking the route contexts finds them all.
+    """
+    from fastapi.routing import APIRoute, iter_route_contexts
+
+    from chesssnake.config import Settings
+
+    app = server.create_app(Settings(database={"url": "sqlite:////nonexistent/never-opened.db"}))
+    return [c for c in iter_route_contexts(app.routes) if isinstance(c.route, APIRoute)]
+
+
 def test_health_is_the_only_route_on_the_event_loop():
     """
     Every ``/v1`` route must be ``def`` so Starlette runs it in the threadpool.
@@ -42,8 +58,8 @@ def test_health_is_the_only_route_on_the_event_loop():
     timeout, and before this change it was measured at 325 ms while only eight
     board renders were in flight.
     """
-    routes = [*server.v1.routes, *server.health_router.routes]
-    on_the_loop = sorted(r.path for r in routes if inspect.iscoroutinefunction(r.endpoint))
+    routes = _all_routes()
+    on_the_loop = sorted(r.path for r in routes if inspect.iscoroutinefunction(r.route.endpoint))
 
     assert on_the_loop == ["/health"], (
         "These routes are `async def`, so they run on the event loop and block "
@@ -51,8 +67,8 @@ def test_health_is_the_only_route_on_the_event_loop():
         "blocking database and rendering calls, so they must be plain `def`."
     )
     # A new route that nobody thought about should trip this, not slip through.
-    assert len(routes) == 29, (
-        f"expected 29 routes, found {len(routes)}; if you added one, confirm it is "
+    assert len(routes) == 38, (
+        f"expected 38 routes, found {len(routes)}; if you added one, confirm it is "
         "`def` and not `async def`, then update this count"
     )
 
@@ -67,16 +83,14 @@ def test_requests_run_in_parallel(api_client, pair, monkeypatch):
     barrier would break on its timeout, and this fails with a clear message
     instead of a slow test.
     """
-    group, (white, black) = 70, pair
-    assert (
-        api_client.post("/v1/games", json={"group_id": group, "white_id": white, "black_id": black}).status_code == 200
-    )
+    white, black = pair
+    game_id = api_client.post("/v1/games", json={"white_id": white, "black_id": black}).json()["id"]
 
     barrier = threading.Barrier(CONCURRENCY, timeout=10)
-    real_game_get = ops.game_get
+    real_game_get = ops.game_get_by_id
 
     def gated(*args, **kwargs):
-        # Delegate FIRST: game_get opens and closes its own transaction, so by
+        # Delegate FIRST: game_get_by_id opens and closes its own transaction, so by
         # the time we wait, this thread holds no connection and no database
         # lock. Blocking inside a transaction instead would deadlock three
         # SQLite writers against each other and fail even with perfect
@@ -85,7 +99,7 @@ def test_requests_run_in_parallel(api_client, pair, monkeypatch):
         barrier.wait()
         return row
 
-    monkeypatch.setattr(ops, "game_get", gated)
+    monkeypatch.setattr(ops, "game_get_by_id", gated)
 
     statuses: list[int] = []
     failures: list[BaseException] = []
@@ -93,7 +107,7 @@ def test_requests_run_in_parallel(api_client, pair, monkeypatch):
 
     def fetch():
         try:
-            resp = api_client.get(f"/v1/games/{group}/{white}/{black}")
+            resp = api_client.get(f"/v1/games/{game_id}")
             with lock:
                 statuses.append(resp.status_code)
         except BaseException as e:  # noqa: BLE001 - a broken barrier must not just print
@@ -168,10 +182,8 @@ def test_a_saturated_pool_answers_503_not_500(api_client, pair, monkeypatch):
 
     from chesssnake.db import engine as db_engine
 
-    group, (white, black) = 73, pair
-    assert (
-        api_client.post("/v1/games", json={"group_id": group, "white_id": white, "black_id": black}).status_code == 200
-    )
+    white, black = pair
+    game_id = api_client.post("/v1/games", json={"white_id": white, "black_id": black}).json()["id"]
 
     real_get_engine = db_engine.get_engine
 
@@ -180,7 +192,7 @@ def test_a_saturated_pool_answers_503_not_500(api_client, pair, monkeypatch):
 
     monkeypatch.setattr(db_engine, "get_engine", exhausted)
     try:
-        resp = api_client.get(f"/v1/games/{group}/{white}/{black}")
+        resp = api_client.get(f"/v1/games/{game_id}")
     finally:
         monkeypatch.setattr(db_engine, "get_engine", real_get_engine)
 

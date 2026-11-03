@@ -25,8 +25,8 @@ chesssnake config show
 [api]
   host           127.0.0.1  (default)
   port           9001       (env: CHESSSNAKE__API__PORT)
-  require_auth   True       (cli: --require-auth)
-  api_key        ********   (file: /etc/chesssnake/chesssnake.toml)
+  registration   open       (file: /etc/chesssnake/chesssnake.toml)
+  session_lifetime_days  30  (default)
 ```
 
 Credentials are redacted; pass `--show-secrets` to print them. `--format json`
@@ -52,15 +52,15 @@ reported as a warning rather than silently ignored.
 |---|---|---|---|---|
 | `api` | `host` | string | `127.0.0.1` | Address the api-endpoint binds to. |
 | `api` | `port` | integer | `8000` | Port the api-endpoint binds to. |
-| `api` | `require_auth` | boolean | `false` | Require a matching `X-API-Key` header on all `/v1` routes. |
-| `api` | `api_key` | string | unset | The key clients must send as `X-API-Key`. Secret. |
+| `api` | `registration` | `closed` or `open` | `closed` | Who can create an account: only administrators, or anyone through `POST /v1/auth/register`. |
+| `api` | `session_lifetime_days` | integer (days) | `30` | How long a login lasts, 1 to 3650. |
 | `database` | `url` | string | unset | Connection **URL**; the scheme selects the backend. |
 | `database` | `pool_min_size` | integer | `1` | Minimum pooled connections. |
 | `database` | `pool_max_size` | integer | `10` | Maximum pooled connections. |
 | `database` | `init_schema` | boolean | `false` | Create any missing tables when the server starts. Existing tables are never altered; recreate them with `chesssnake init-db --drop` after a release that changes the schema. |
 | `database` | `sqlite_busy_timeout` | integer (ms) | `5000` | How long a blocked SQLite writer waits. Ignored on PostgreSQL. |
 | `client` | `api_url` | string | unset | Base URL a remote `Game` connects to. **Environment only.** |
-| `client` | `api_key` | string | unset | Key a remote `Game` sends. Secret. **Environment only.** |
+| `client` | `token` | string | unset | Bearer token the Python client and `chesssnake play` send, instead of the one `chesssnake login` stored. Secret. **Environment only.** |
 
 Booleans accept `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off` from the
 environment; the config file uses real TOML booleans.
@@ -70,7 +70,7 @@ environment; the config file uses real TOML booleans.
 The `database.url` scheme selects the backend. There is no separate "which
 database" setting to drift out of sync with the connection details.
 
-**SQLite**, one file with no server and no compiled dependencies:
+**SQLite**, one file with no database server to run:
 
 ```toml
 [database]
@@ -128,24 +128,27 @@ error shows the URL to use instead.
 
 ## Authentication
 
-Authentication is **explicit**. `api.require_auth` controls whether a key is
-required; setting `api.api_key` alone does nothing but earn a warning.
+Every `/v1` route except logging in and registering needs a login; there is no
+setting to turn that off. Accounts have a username and an Argon2id-hashed
+password, and log in for a bearer token. The settings decide who can make an
+account and how long a login lasts:
 
 ```toml
 [api]
-require_auth = true
+registration = "closed"        # "open": anyone can register
+session_lifetime_days = 30
 ```
 
-Enabling `require_auth` without a key is a startup error, not a silent
-downgrade: a deployment whose secret failed to inject fails loudly instead of
-coming up wide open.
-
-Supply the key through the environment rather than the file so it stays out of
-version control:
+The first administrator is made on the server's machine, straight in the database:
 
 ```commandline
-CHESSSNAKE__API__API_KEY='...' chesssnake api-endpoint --require-auth
+chesssnake user create yourname --admin
 ```
+
+The shared key of 0.11 and earlier (`api.require_auth`, `api.api_key`) is gone. A
+config file that still sets either is rejected at startup, and the environment
+variables warn as unknown, so a stale setting is noticed rather than ignored. How
+logins, tokens and roles work is in the [REST reference](rest-api.md#authentication).
 
 ## The config file
 
@@ -187,8 +190,8 @@ accepted values, and its default, to:
 
 Both are locations the search above covers, so the file takes effect immediately.
 Every value it contains is the built-in default, so the file changes nothing until
-you edit it, and deleting a line just falls back to the same value. The two settings
-with no default (`database.url` and `api.api_key`) ship commented out.
+you edit it, and deleting a line just falls back to the same value. `database.url`,
+which has no default, ships commented out.
 
 It refuses to overwrite an existing file; pass `--force` to replace one. If you
 write to `$CHESSSNAKE_HOME` while a `./chesssnake.toml` also exists, it warns,
@@ -196,8 +199,8 @@ the working directory is searched first and would win.
 
 ## Setting anything from the command line
 
-Named flags exist for the common settings (`--host`, `--port`, `--api-key`,
-`--require-auth`, `--database-url`). Any other setting can be overridden with
+Named flags exist for the common settings (`--host`, `--port`, `--registration`,
+`--database-url`). Any other setting can be overridden with
 `-o`/`--set`, which needs no bespoke flag:
 
 ```commandline
@@ -209,7 +212,7 @@ A named flag beats `-o` for the same key.
 ## Notes for library users
 
 The `[client]` section is **environment-only**. A remote `Game` reads
-`CHESSSNAKE__CLIENT__API_URL` and `CHESSSNAKE__CLIENT__API_KEY` directly and never
+`CHESSSNAKE__CLIENT__API_URL` and `CHESSSNAKE__CLIENT__TOKEN` directly and never
 looks for a config file: a library that read `./chesssnake.toml` out of the
 caller's working directory would be surprising, and it would put pydantic on the
 dependency-free local-game path. Putting `[client]` in a config file is an error

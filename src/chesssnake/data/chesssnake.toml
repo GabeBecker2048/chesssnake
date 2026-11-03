@@ -61,25 +61,20 @@ host = "127.0.0.1"
 #: Values: 1-65535. Ports below 1024 need elevated privileges. Default 8000.
 port = 8000
 
-#: Whether every /v1 route requires an X-API-Key header matching `api_key`.
-#: GET /health is always open regardless, so load balancers can probe it.
-#:
-#: This is deliberately explicit: setting `api_key` on its own does NOT turn
-#: authentication on (the server warns that the key is being ignored), and
-#: turning this on WITHOUT a key is a startup error rather than a server that
-#: quietly accepts everything.
-#: Values: true, false. Default false.
-require_auth = false
+#: Who can create an account.
+#:   "closed": only administrators create users (over the API, or with
+#:             `chesssnake user create` on the server's machine).
+#:   "open":   anyone who can reach the server can POST /v1/auth/register.
+#: Every /v1 route except logging in and registering needs a login either way;
+#: GET /health is always open, so load balancers can probe it. Make the first
+#: administrator with `chesssnake user create NAME --admin`.
+#: Values: "closed", "open". Default "closed".
+registration = "closed"
 
-#: The key clients must send as the X-API-Key header, and pass to
-#: Game.remote(..., api_key="..."). Required when require_auth is true.
-#:
-#: Prefer supplying this through the environment so the secret stays out of
-#: version control:
-#:   CHESSSNAKE__API__API_KEY='...' chesssnake api-endpoint --require-auth
-#:
-#: Values: any non-empty string. No default (unset).
-# api_key = "change-me"
+#: How long a login lasts before the user has to log in again. Named api tokens
+#: (for scripts and bots) set their own expiry, or none.
+#: Values: 1-3650 days. Default 30.
+session_lifetime_days = 30
 
 
 #: ===========================================================================
@@ -151,7 +146,7 @@ sqlite_busy_timeout = 5000
 #: Remote Game clients read only the environment, never this file:
 #:
 #:   CHESSSNAKE__CLIENT__API_URL=http://localhost:8000
-#:   CHESSSNAKE__CLIENT__API_KEY=...
+#:   CHESSSNAKE__CLIENT__TOKEN=css_...     (or log in once with `chesssnake login`)
 #:
 #: A library that read ./chesssnake.toml out of whatever directory the calling
 #: program happened to start in would be surprising, so it does not. Adding a

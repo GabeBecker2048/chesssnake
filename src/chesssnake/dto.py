@@ -1,8 +1,9 @@
 """The wire payloads shared by the client and the api-endpoint.
 
 ``GameState`` is the single definition of the serialized game state that crosses
-the network; ``MoveResult`` is what a move returns; ``User`` is an account. All
-are stdlib dataclasses (no third-party dependency), so the client needs no
+the network; ``MoveResult`` is what a move returns; ``User`` is an account,
+``Challenge`` a pending challenge, and ``LoginResult`` / ``TokenInfo`` what the
+authentication routes return. All are stdlib dataclasses (no third-party dependency), so the client needs no
 pydantic; FastAPI accepts them on the server side too.
 
 The board itself is carried as standard **FEN** inside ``GameState.fen`` (which
@@ -20,6 +21,10 @@ from dataclasses import asdict, dataclass, field, fields
 #: Role names on the wire, mapped to the codes the database stores.
 ROLES = {"user": 0, "admin": 1}
 ROLE_NAMES = {code: name for name, code in ROLES.items()}
+
+#: Challenge colours on the wire (the colour the challenger plays), mapped to codes.
+COLORS = {"white": 0, "black": 1, "random": 2}
+COLOR_NAMES = {code: name for name, code in COLORS.items()}
 
 
 def _iso(value):
@@ -139,6 +144,7 @@ class User:
     created_at: str | None = None  # ISO 8601, UTC
     disabled_at: str | None = None
     identities: list[dict] = field(default_factory=list)  # [{"provider", "external_id"}]
+    has_password: bool = False  # whether the account can log in with a password
 
     def to_dict(self) -> dict:
         """Return the payload as a plain JSON-serializable dict."""
@@ -149,14 +155,111 @@ class User:
         """Build a ``User`` from a decoded response dict, ignoring unknown keys."""
         return cls(**_known_fields(cls, data))
 
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
     @classmethod
-    def from_row(cls, row) -> "User":
-        """Build a ``User`` from the user dict the database layer returns."""
+    def from_row(cls, row, *, show_identities=True) -> "User":
+        """
+        Build a ``User`` from the user dict the database layer returns.
+
+        :param show_identities: ``False`` hides the linked external ids, which only
+            the user themselves and administrators may see.
+        """
         return cls(
             id=int(row["id"]),
             username=row["username"],
             role=ROLE_NAMES[int(row["role"])],
             created_at=_iso(row["created_at"]),
             disabled_at=_iso(row["disabled_at"]),
-            identities=[dict(identity) for identity in row.get("identities", [])],
+            identities=[dict(identity) for identity in row.get("identities", [])] if show_identities else [],
+            has_password=bool(row.get("has_password", False)),
+        )
+
+
+@dataclass
+class Challenge:
+    """A pending challenge: ``challenger`` asked ``challenged`` for a game in ``group_id``."""
+
+    id: int
+    group_id: int
+    challenger_id: int
+    challenger_name: str
+    challenged_id: int
+    challenged_name: str
+    color: str = "random"  # the colour the challenger plays: "white", "black" or "random"
+    created_at: str | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data) -> "Challenge":
+        return cls(**_known_fields(cls, data))
+
+    @classmethod
+    def from_row(cls, row) -> "Challenge":
+        return cls(
+            id=int(row["id"]),
+            group_id=int(row["group_id"]),
+            challenger_id=int(row["challenger_id"]),
+            challenger_name=row["challenger_name"],
+            challenged_id=int(row["challenged_id"]),
+            challenged_name=row["challenged_name"],
+            color=COLOR_NAMES[int(row["color"])],
+            created_at=_iso(row["created_at"]),
+        )
+
+
+@dataclass
+class TokenInfo:
+    """A token's metadata. The secret itself is only ever in ``LoginResult.token`` or a create response."""
+
+    id: int
+    kind: str  # "session" (from logging in) or "api" (named, for scripts and bots)
+    name: str | None = None
+    created_at: str | None = None
+    expires_at: str | None = None  # None: never expires (api tokens only)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data) -> "TokenInfo":
+        return cls(**_known_fields(cls, data))
+
+    @classmethod
+    def from_row(cls, row) -> "TokenInfo":
+        return cls(
+            id=int(row["id"]),
+            kind=row["kind"],
+            name=row["name"],
+            created_at=_iso(row["created_at"]),
+            expires_at=_iso(row["expires_at"]),
+        )
+
+
+@dataclass
+class LoginResult:
+    """What logging in, registering or creating an api token returns: the secret, once."""
+
+    token: str
+    token_info: TokenInfo
+    user: User | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "token": self.token,
+            "token_info": self.token_info.to_dict(),
+            "user": self.user.to_dict() if self.user is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data) -> "LoginResult":
+        user = data.get("user")
+        return cls(
+            token=data["token"],
+            token_info=TokenInfo.from_dict(data["token_info"]),
+            user=User.from_dict(user) if user is not None else None,
         )

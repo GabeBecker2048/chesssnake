@@ -27,11 +27,10 @@ services:
       CHESSSNAKE__DATABASE__URL: sqlite:////data/chesssnake.db
       # Create the schema on startup. Idempotent, so it is safe to leave on.
       CHESSSNAKE__DATABASE__INIT_SCHEMA: "1"
-      # Uncomment both to require an X-API-Key header on every /v1 route.
-      # Setting the key alone does nothing: auth is explicit, and enabling it
-      # without a key is a startup error rather than a silently open server.
-      # CHESSSNAKE__API__REQUIRE_AUTH: "1"
-      # CHESSSNAKE__API__API_KEY: "change-me"
+      # Every /v1 route needs a login. Make the first administrator with:
+      #   docker compose -f docker/compose.sqlite.yaml exec api chesssnake user create NAME --admin
+      # "open" lets anyone who can reach the server register an account.
+      # CHESSSNAKE__API__REGISTRATION: "open"
     ports:
       - "8000:8000"
     volumes:

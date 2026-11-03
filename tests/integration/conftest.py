@@ -80,15 +80,35 @@ def api_client(settings):
             engine.dispose_engine()
 
 
+#: The password every test user has. Hashed once per session (Argon2 is slow on
+#: purpose) and stored directly, so creating a user in a test costs nothing.
+TEST_PASSWORD = "correct-horse-battery"
+
+
+@pytest.fixture(scope="session")
+def test_password_hash():
+    from chesssnake.api.auth import hash_password
+
+    return hash_password(TEST_PASSWORD)
+
+
 @pytest.fixture(autouse=True)
 def clean_tables(request):
     """
-    Empty every table between tests, on whichever backend is active.
+    Empty every table between tests, on whichever backend is active, and sign
+    ``api_client`` in as a fresh administrator.
+
+    Every ``/v1`` route needs a token, so each test starts with an admin account
+    (``api_client.admin_id``) and an api token for it set as the client's default
+    ``Authorization`` header. Both are minted through the operations layer, not
+    the API, so no test pays for a password hash it does not exercise. Tests about
+    what a *plain* user may do use :func:`as_user` / :func:`user_client`, which is
+    what keeps admin-by-default from hiding a missing permission check (the
+    permission table in ``test_permissions.py`` checks every route that way).
 
     Only for tests that actually use the app. Depending on ``api_client``
     unconditionally would drag a PostgreSQL cluster up for every test in this
-    directory — including ones that only parse URLs or build their own engine —
-    and would parametrize them over both backends for no reason.
+    directory, including ones that only parse URLs or build their own engine.
     """
     if "api_client" not in request.fixturenames:
         yield
@@ -97,39 +117,46 @@ def clean_tables(request):
     from sqlalchemy import delete
 
     from chesssnake.db import engine, schema
+    from chesssnake.db import operations as ops
 
-    request.getfixturevalue("api_client")
+    client = request.getfixturevalue("api_client")
     with engine.transaction() as conn:
         # Children before parents, or the foreign keys refuse the delete.
         for table in reversed(schema.TABLES):
             conn.execute(delete(table))
+    admin = ops.user_create("admin", ops.ROLE_ADMIN)
+    raw, _ = ops.token_create(admin["id"], ops.TOKEN_API, name="tests")
+    client.headers["Authorization"] = f"Bearer {raw}"
+    client.admin_id = admin["id"]
     yield
 
 
 @pytest.fixture
+def admin_id(api_client):
+    """The id of the administrator ``api_client`` is signed in as."""
+    return api_client.admin_id
+
+
+@pytest.fixture
 def remote_client(api_client):
-    """An ApiClient wired to drive the in-process app through the TestClient."""
+    """An ApiClient wired to the in-process app, acting as the test administrator."""
     from chesssnake.remote.client import ApiClient
 
     return ApiClient("", session=api_client)
 
 
 @pytest.fixture
-def users(api_client):
+def users(api_client, test_password_hash):
     """
-    Create users through the API and return their ids, in the order named.
+    Create plain users (password :data:`TEST_PASSWORD`) and return their ids, in order.
 
     Ids are assigned by the server and never reused, so tests take them from
     here rather than writing them down: ``white, black = users("alice", "bob")``.
     """
+    from chesssnake.db import operations as ops
 
-    def create(*names):
-        ids = []
-        for name in names:
-            resp = api_client.post("/v1/users", json={"username": name})
-            assert resp.status_code == 201, resp.text
-            ids.append(resp.json()["id"])
-        return ids
+    def create(*names, role=0):
+        return [ops.user_create(name, role, test_password_hash)["id"] for name in names]
 
     return create
 
@@ -138,3 +165,27 @@ def users(api_client):
 def pair(users):
     """Two fresh users, ``(white_id, black_id)``."""
     return tuple(users("white", "black"))
+
+
+@pytest.fixture
+def as_user(api_client):
+    """``as_user(user_id)`` -> request headers authenticating as that user."""
+    from chesssnake.db import operations as ops
+
+    def headers(user_id):
+        raw, _ = ops.token_create(user_id, ops.TOKEN_API, name="tests")
+        return {"Authorization": f"Bearer {raw}"}
+
+    return headers
+
+
+@pytest.fixture
+def user_client(api_client, as_user):
+    """``user_client(user_id)`` -> an ApiClient acting as that (plain) user."""
+    from chesssnake.remote.client import ApiClient
+
+    def make(user_id):
+        token = as_user(user_id)["Authorization"].split()[1]
+        return ApiClient("", session=api_client, token=token)
+
+    return make
