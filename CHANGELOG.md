@@ -6,6 +6,15 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.13.1 - 2026-11-03
+
+### Fixed
+- Live updates now come back after the server restarts behind a reverse proxy.
+  The proxy's "bad gateway" answer while the server was down was mistaken for
+  live updates being switched off, so clients gave up and fell back to polling.
+- The live-update client no longer uses a websockets API that version 17
+  deprecated, so it keeps working when that API is removed.
+
 ## 0.13.0 - 2026-11-03
 
 ### Added
@@ -26,6 +35,7 @@ documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md
 - Logging out, revoking a token, resetting a password or disabling an account
   also closes that login's live connections at once.
 
+## 0.12.1 - 2026-11-03
 
 ### Fixed
 - A burst of logins could push the server to its memory limit and keep it
