@@ -46,7 +46,7 @@ uv add <pkg>
 uv add --group dev <pkg>                 # add a dev/test dependency
 uv add --optional api <pkg>              # add to the `api` extra
 
-# Build the distributable
+# Build the distributable (what the release workflow publishes)
 uv build
 
 # Bring up a local Postgres for the api-endpoint to talk to (create the schema with
@@ -61,6 +61,27 @@ docker compose -f docker/compose.postgres.yaml up --build   # api-endpoint + Pos
 ```
 
 Package data (`data/*.sql`, `data/*.ttf`, `data/img/*.png`) is declared under `[tool.setuptools.package-data]` in `pyproject.toml` and accessed at runtime via `chesssnake.assets.asset_path("img/template.png")` (a thin wrapper over `importlib.resources`). If you add runtime assets, register them there or they won't ship in the wheel. `uv.lock` is committed and should be kept in sync (`uv lock`).
+
+## Releasing
+
+Publishing a **GitHub release** publishes the same version to PyPI, via
+`.github/workflows/release.yml`. Full runbook: `docs/releasing.md`.
+
+- The version in `pyproject.toml` is the source of truth; the tag only has to agree
+  with it (`v0.9.1` or `0.9.1`). The workflow's first job fails on a mismatch, before
+  anything is built — tagging a version the project does not claim would otherwise be
+  rejected by PyPI as a duplicate, or publish something unintended.
+- Upload uses **PyPI Trusted Publishing** (OIDC), not an API token, so there is no
+  secret in the repo. It requires the `pypi` environment named in the workflow to match
+  the publisher configured on PyPI.
+- The workflow re-runs lint, mypy and the full suite before building, then **installs
+  the built wheel into a clean venv** and renders a board from it. That step exists to
+  catch a missing `[tool.setuptools.package-data]` entry, which the test suite cannot
+  see because it runs against the source tree — add a runtime asset without
+  registering it there and only this would notice.
+- **PyPI is currently on 0.6.6**, which predates the api-endpoint. 0.7.0–0.9.0 are
+  marked Released in `VersionHistory.md` but were never uploaded, so `pip install
+  chesssnake` does not get any of what the README documents.
 
 ## Three-tier architecture
 
