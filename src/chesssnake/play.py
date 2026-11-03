@@ -1,0 +1,536 @@
+"""
+The interactive terminal session behind ``chesssnake play``.
+
+This is the third way to drive chesssnake, alongside the REST API and the
+Python client — and it is deliberately built *on* the client rather than beside
+it: :func:`run_session` talks to a :class:`chesssnake.Game` and never to HTTP,
+so the same loop plays a local in-memory game and a game persisted through an
+api-endpoint. Anything it can do, the client could already do; this only puts a
+board and a prompt around it.
+
+Separated from :mod:`chesssnake.cli` so the loop can be tested by handing it two
+streams, with no terminal, no server and no subprocess.
+"""
+
+import io
+import select
+
+from .db.errors import GameError, NotYourTurnError
+from .engine import Color, GameStatus, render_text
+from .engine.errors import ChessError
+
+#: Printed by ``help``. Two columns, formatted on use so the pairs stay readable
+#: here and the widths stay consistent there.
+COMMANDS = [
+    ("<move>", "play a move in algebraic notation (e4, Nf3, O-O, exd5, e8=Q)"),
+    ("moves", "list every legal move for the side to move"),
+    ("board", "redraw the board"),
+    ("flip", "view from the other side"),
+    ("fen", "the position as FEN"),
+    ("pgn", "the game so far as PGN"),
+    ("draw", "offer a draw"),
+    ("accept", "accept a draw offer"),
+    ("decline", "decline a draw offer"),
+    ("resign", "resign the game"),
+    ("refresh", "re-fetch from the server (see the opponent's move)"),
+    ("new", "start a rematch once the game is over"),
+    ("save PATH", "write a PNG of the board"),
+    ("help", "this list"),
+    ("quit", "leave (a remote game is saved; a local one is not)"),
+]
+
+_STATUS_TEXT = {
+    GameStatus.IN_PLAY: "in play",
+    GameStatus.WHITE_WON: "white won",
+    GameStatus.BLACK_WON: "black won",
+    GameStatus.DRAW: "draw",
+}
+
+_DIM = "\033[2m"
+_BOLD = "\033[1m"
+_RED = "\033[31m"
+_RESET = "\033[0m"
+
+
+class Quit(Exception):
+    """Raised by the ``quit`` command to unwind the loop."""
+
+
+class Session:
+    """
+    One interactive game at a terminal.
+
+    :param game: the :class:`chesssnake.Game` to drive — local or remote; the
+        loop does not care which, beyond labelling the header.
+    :param player_id: the id actions are sent as. When given, a remote server
+        enforces turn order against it. When ``None``, the session acts as
+        whichever side is to move, which is what a single player at one
+        keyboard wants.
+    :param stdin: stream read for commands.
+    :param stdout: stream written to.
+    :param color: emit ANSI colour. When false, **no** escape sequence is
+        written at all, so the output pipes cleanly.
+    :param figurines: draw pieces as ``♞`` rather than the letter ``N``.
+    :param perspective: which side faces the reader; defaults to the player's
+        own side when ``player_id`` identifies one, else white.
+    """
+
+    def __init__(
+        self,
+        game,
+        *,
+        player_id=None,
+        stdin,
+        stdout,
+        color: bool = True,
+        figurines: bool = True,
+        perspective=None,
+        refresh_seconds: float = 10.0,
+    ):
+        self.game = game
+        self.player_id = player_id
+        self.stdin = stdin
+        self.stdout = stdout
+        self.color = color
+        self.figurines = figurines
+        self.refresh_seconds = refresh_seconds
+        #: Set by :meth:`sync` when a rematch has superseded this session's game.
+        self.stale_generation = None
+        if perspective is not None:
+            self.perspective = Color(perspective)
+        elif player_id is not None and player_id == getattr(game, "bid", None):
+            self.perspective = Color.BLACK
+        else:
+            self.perspective = Color.WHITE
+
+    # --- output ------------------------------------------------------------
+
+    def write(self, text: str = "") -> None:
+        """Write one line to the output stream."""
+        self.stdout.write(text + "\n")
+
+    def _style(self, text: str, code: str) -> str:
+        """Wrap ``text`` in an ANSI code, or return it untouched when colour is off."""
+        return f"{code}{text}{_RESET}" if self.color else text
+
+    def note(self, text: str) -> None:
+        """Write a de-emphasized line (hints, confirmations)."""
+        self.write(self._style(text, _DIM))
+
+    def error(self, text: str) -> None:
+        """Write an error line. Errors are expected here — an illegal move is normal input."""
+        self.write(self._style(text, _RED))
+
+    # --- state ---------------------------------------------------------------
+
+    def _id_of(self, color):
+        """The player id for ``color`` in this game."""
+        return self.game.wid if Color(color) == Color.WHITE else self.game.bid
+
+    def actor(self, *, responding: bool = False):
+        """
+        The player id an action should be sent as.
+
+        :param responding: when true the action answers an existing draw offer,
+            so the actor defaults to the player who did *not* make it — the side
+            to move may well be the offerer.
+        """
+        if self.player_id is not None:
+            return self.player_id
+        offered_by = self.game.draw_offered_by
+        if responding and offered_by is not None:
+            return self._id_of(Color(offered_by).opponent)
+        return self._id_of(self.game.to_move)
+
+    def header(self) -> str:
+        """The one-line status under the board."""
+        game = self.game
+        white = game.wname or "white"
+        black = game.bname or "black"
+        bits = [f"{white} (white) vs {black} (black)"]
+        if game.is_remote:
+            bits.append(f"gen {game.generation}")
+        if game.is_over:
+            bits.append(self._style(_STATUS_TEXT[game.result].upper(), _BOLD))
+            if game.termination is not None:
+                bits.append(f"by {game.termination.value}")
+        else:
+            bits.append(f"{'white' if game.to_move == Color.WHITE else 'black'} to move")
+            offered_by = game.draw_offered_by
+            if offered_by is not None:
+                side = "white" if Color(offered_by) == Color.WHITE else "black"
+                bits.append(f"draw offered by {side}")
+        return "  |  ".join(bits)
+
+    def show(self) -> None:
+        """Draw the board followed by the status line."""
+        self.write()
+        self.write(
+            render_text(
+                self.game.board,
+                self.perspective,
+                figurines=self.figurines,
+                color=self.color,
+                move=getattr(self.game, "last_move", None),
+            )
+        )
+        self.write()
+        self.write(self.header())
+
+    # --- commands ------------------------------------------------------------
+
+    def do_help(self, _arg):
+        """List the available commands."""
+        width = max(len(name) for name, _ in COMMANDS)
+        for name, blurb in COMMANDS:
+            self.write(f"  {name.ljust(width)}  {blurb}")
+
+    def sync(self) -> bool:
+        """
+        Pull the latest server state into the mirror, for a remote game.
+
+        Called before every informational command and every action, because
+        several reads (``legal_moves``, ``pgn``, ``history``) are *proxied to the
+        server* while the board and ``fen`` come from the local mirror. Without
+        this the two disagree the moment the opponent moves: the board would show
+        your last position while ``moves`` listed the legal moves of a position
+        you cannot see.
+
+        Reads the **current** generation rather than this session's pinned one,
+        so a rematch started elsewhere is noticed instead of leaving the session
+        staring at a finished game forever. On drift it sets
+        :attr:`stale_generation` and does *not* move the mirror — joining a
+        rematch is the player's decision (``new``), not a surprise.
+
+        :return: whether the position moved on, so the caller can redraw and say
+            so rather than silently changing the board.
+        """
+        if not self.game.is_remote:
+            return False
+        # Private attribute use: play.py and remote/game.py ship together, and
+        # `generation=None` (the current game) is not reachable through the
+        # public Game, which pins the generation it was opened at.
+        state = self.game._client.get_state(self.game.gid, self.game.wid, self.game.bid, None)
+        if state.generation != self.game.generation:
+            self.stale_generation = state.generation
+            return False
+        self.stale_generation = None
+        before = self.game.version
+        self.game._apply_state(state)
+        return self.game.version != before
+
+    def _sync_and_announce(self) -> None:
+        """Sync, and redraw with a note if the opponent has been and gone."""
+        changed = self.sync()
+        if self.stale_generation is not None:
+            self.note(self._rematch_notice())
+            return
+        if changed:
+            self.note("the position changed on the server")
+            self.show()
+
+    def _rematch_notice(self) -> str:
+        """Explain that this session is looking at a superseded game."""
+        return (
+            f"a rematch has started elsewhere (generation {self.stale_generation}); "
+            f"this session is on generation {self.game.generation}. `new` joins the current game."
+        )
+
+    def allow_action(self) -> bool:
+        """
+        Sync, then report whether an action may be sent.
+
+        Every action goes through here, so the cross-generation hazard described
+        in :meth:`blocked_reason` is checked once rather than at seven call sites.
+
+        :return: ``True`` when it is safe to act.
+        """
+        self.sync()
+        reason = self.blocked_reason()
+        if reason is None:
+            return True
+        self.error(reason)
+        return False
+
+    def blocked_reason(self):
+        """
+        Why an action must not be sent, or ``None`` when it is safe.
+
+        This exists because the server's **mutating routes ignore the generation
+        entirely** and always act on the current game, while reads are pinned to
+        one. A session left on a superseded generation therefore does not get a
+        clean refusal: its move is applied to *whichever game is current*, and
+        only an accidental version or legality mismatch stops it. Verified
+        against a live endpoint — a session sitting in a finished generation 1
+        played ``d5`` and it landed in generation 2's movetext. So the session
+        refuses to send anything until the player rejoins with ``new``.
+
+        :return: a message to show, or ``None``.
+        """
+        if not self.game.is_remote:
+            return None
+        if self.stale_generation is not None:
+            return self._rematch_notice()
+        if self.game.is_over:
+            return "this game is over - `new` starts a rematch"
+        return None
+
+    def do_moves(self, _arg):
+        """List the legal moves for the side to move."""
+        self._sync_and_announce()
+        moves = self.game.legal_moves()
+        if not moves:
+            self.write("(none)")
+            return
+        self.write("  ".join(sorted(m["san"] for m in moves)))
+        self.note(f"{len(moves)} legal moves")
+
+    def do_board(self, _arg):
+        """Redraw the board, from current server state when remote."""
+        self.sync()
+        self.show()
+
+    def do_flip(self, _arg):
+        """Swap which side faces the reader."""
+        self.perspective = Color(self.perspective).opponent
+        self.show()
+
+    def do_fen(self, _arg):
+        """Print the position as FEN."""
+        self._sync_and_announce()
+        self.write(self.game.fen)
+
+    def do_pgn(self, _arg):
+        """Print the game so far as PGN."""
+        self._sync_and_announce()
+        self.write(self.game.pgn().strip())
+
+    def do_draw(self, _arg):
+        """Offer a draw."""
+        if not self.allow_action():
+            return
+        self.game.draw_offer(self.actor())
+        self.show()
+
+    def do_accept(self, _arg):
+        """Accept the outstanding draw offer."""
+        if not self.allow_action():
+            return
+        self.game.draw_accept(self.actor(responding=True))
+        self.show()
+
+    def do_decline(self, _arg):
+        """Decline the outstanding draw offer."""
+        if not self.allow_action():
+            return
+        self.game.draw_decline(self.actor(responding=True))
+        self.show()
+
+    def do_resign(self, _arg):
+        """Resign the game."""
+        if not self.allow_action():
+            return
+        self.game.resign(self.actor())
+        self.show()
+
+    def do_refresh(self, _arg):
+        """Re-fetch the game from the server."""
+        if not self.game.is_remote:
+            self.note("local game - nothing to refresh")
+            return
+        changed = self.sync()
+        if self.stale_generation is not None:
+            self.note(self._rematch_notice())
+        elif changed:
+            self.show()
+        else:
+            self.note("nothing new")
+
+    def do_save(self, arg):
+        """Write a PNG of the current board to ``arg``."""
+        if not arg:
+            self.error("usage: save PATH")
+            return
+        self.game.save(arg)
+        self.note(f"wrote {arg}")
+
+    def do_new(self, _arg):
+        """Start a rematch. Only meaningful once the current game is over."""
+        if not self.game.is_over:
+            self.error("the current game is still in play - resign or finish it first")
+            return
+        if not self.game.is_remote:
+            self.error("a local game cannot be restarted in place - rerun `chesssnake play --local`")
+            return
+        # Re-opening a finished triple is what starts a new generation server-side.
+        from .remote.game import Game
+
+        self.game = Game.remote(
+            self.game.wid,
+            self.game.bid,
+            self.game.gid,
+            white_name=self.game.wname,
+            black_name=self.game.bname,
+            player_id=self.player_id,
+            client=self.game._client,
+        )
+        self.note(f"rematch - generation {self.game.generation}")
+        self.show()
+
+    def do_quit(self, _arg):
+        """Leave the session."""
+        raise Quit()
+
+    #: Command name -> handler. Aliases point at the same bound method name.
+    DISPATCH = {
+        "help": "do_help",
+        "?": "do_help",
+        "moves": "do_moves",
+        "board": "do_board",
+        "flip": "do_flip",
+        "fen": "do_fen",
+        "pgn": "do_pgn",
+        "draw": "do_draw",
+        "offer": "do_draw",
+        "accept": "do_accept",
+        "decline": "do_decline",
+        "resign": "do_resign",
+        "refresh": "do_refresh",
+        "r": "do_refresh",
+        "save": "do_save",
+        "new": "do_new",
+        "quit": "do_quit",
+        "exit": "do_quit",
+        "q": "do_quit",
+    }
+
+    def dispatch(self, line: str) -> None:
+        """
+        Run one line of input: a command, or otherwise a move.
+
+        Anything not in :attr:`DISPATCH` is treated as a move, so moves need no
+        prefix. That is the right default — it is the only thing typed often —
+        and it is why commands are lowercase words that cannot collide with
+        algebraic notation.
+        """
+        word, _, rest = line.strip().partition(" ")
+        handler = self.DISPATCH.get(word.lower())
+        if handler is not None:
+            getattr(self, handler)(rest.strip())
+            return
+        # A remote server checks this itself and is the authority, so the client
+        # must not duplicate the rule. A local game has no server to ask, and
+        # the engine's move() takes no player id — so without this check `--me`
+        # would silently mean nothing offline, which is worse than not offering it.
+        if not self.allow_action():
+            return
+        if self.player_id is not None and not self.game.is_remote and not self.game.is_players_turn(self.player_id):
+            raise NotYourTurnError(f"It is not player {self.player_id}'s turn to move")
+        result = self.game.move(line.strip())
+        san = getattr(result, "san", None) or line.strip()
+        self.note(f"played {san}")
+        self.show()
+
+    def wait_for_line(self):
+        """
+        Read one line, re-reading the server every ``refresh_seconds`` while idle.
+
+        This is the only place the session acts without being asked, and it is
+        deliberately narrow: it polls, it does not push. ``select`` is used rather
+        than a background thread so there is exactly one thread touching the game
+        and the output stream, and nothing to shut down on exit.
+
+        Falls back to a plain blocking read whenever waiting is not possible — a
+        local game (nothing to poll), ``--refresh 0``, a stdin with no real file
+        descriptor (a ``StringIO``, as the tests use), or a platform where
+        ``select`` will not take one. The session still works; it just will not
+        notice the opponent on its own.
+
+        :return: the line read, or ``""`` at EOF.
+        """
+        if self.refresh_seconds <= 0 or not self.game.is_remote:
+            return self.stdin.readline()
+        try:
+            fd = self.stdin.fileno()
+        except (AttributeError, io.UnsupportedOperation, ValueError):
+            return self.stdin.readline()
+        while True:
+            try:
+                ready, _, _ = select.select([fd], [], [], self.refresh_seconds)
+            except (OSError, ValueError):
+                # Windows select() takes sockets only; nothing to do but block.
+                return self.stdin.readline()
+            if ready:
+                return self.stdin.readline()
+            changed = self.sync()
+            if self.stale_generation is not None:
+                self.write()
+                self.note(self._rematch_notice())
+            elif changed:
+                self.write()
+                self.note("the opponent moved")
+                self.show()
+            else:
+                continue
+            # Re-issue the prompt: whatever the player had half-typed is still in
+            # the terminal's buffer, but the prompt itself has scrolled away.
+            self.stdout.write("\n> ")
+            self.stdout.flush()
+
+    def run(self) -> int:
+        """
+        Read commands until EOF or ``quit``.
+
+        :return: a process exit status — 0 on ``quit``/EOF, 130 on Ctrl+C. A
+            failure to *reach* the server raises out of the session instead,
+            because that is a setup problem rather than a move the player got
+            wrong.
+        """
+        self.show()
+        self.note("type `help` for commands")
+        while True:
+            self.stdout.write("\n> ")
+            self.stdout.flush()
+            try:
+                line = self.wait_for_line()
+            except KeyboardInterrupt:
+                # Ctrl+C at the prompt is how people leave a REPL. It is not a
+                # crash, and a traceback through select() tells the player
+                # nothing. 130 is the conventional status for SIGINT.
+                self.write()
+                return 130
+            if not line:  # EOF
+                self.write()
+                return 0
+            if not line.strip():
+                continue
+            was_over = self.game.is_over
+            try:
+                self.dispatch(line)
+            except Quit:
+                return 0
+            except KeyboardInterrupt:
+                # Ctrl+C part-way through a request: the action may or may not
+                # have reached the server, so say nothing about it and leave.
+                # Re-reading on the next run is what resolves it.
+                self.write()
+                return 130
+            except (ChessError, GameError, ValueError) as e:
+                # Expected: an illegal move, acting out of turn, a stale version.
+                # Keep playing — the player simply types something else.
+                self.error(f"{type(e).__name__}: {e}")
+            # Only on the transition. Printing it after every command — `pgn`
+            # and `fen` included — turns the one line that matters into noise.
+            if self.game.is_over and not was_over:
+                self.note("game over - `new` starts a rematch" if self.game.is_remote else "game over")
+
+
+def run_session(game, **kwargs) -> int:
+    """
+    Build a :class:`Session` and run it.
+
+    :param game: the :class:`chesssnake.Game` to play.
+    :param kwargs: forwarded to :class:`Session`.
+    :return: the process exit status.
+    """
+    return Session(game, **kwargs).run()
