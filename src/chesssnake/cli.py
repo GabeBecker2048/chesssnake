@@ -23,6 +23,7 @@ from pathlib import Path
 # chesssnake.remote at module scope would pull the engine (and Pillow) into
 # every `chesssnake config show`. test_play_cli asserts the two stay equal.
 _API_URL_ENV = "CHESSSNAKE__CLIENT__API_URL"
+_API_KEY_ENV = "CHESSSNAKE__CLIENT__API_KEY"
 
 # Maps a parsed argparse attribute to the (section, key) it overrides. Flags that
 # are not settings (--config, --create-database) are handled separately.
@@ -267,7 +268,11 @@ def main(argv=None):
     play = subparsers.add_parser("play", help="play a game at the terminal")
     play.add_argument("--local", action="store_true", help="play offline, in memory, with no api-endpoint")
     play.add_argument("--api-url", dest="api_url", help=f"api-endpoint base URL (env: {_API_URL_ENV})")
-    play.add_argument("--api-key", dest="api_key", help="key sent as X-API-Key, if the endpoint requires one")
+    play.add_argument(
+        "--api-key",
+        dest="api_key",
+        help=f"key sent as X-API-Key, if the endpoint requires one (env: {_API_KEY_ENV})",
+    )
     play.add_argument("--group", type=int, default=0, help="group id (default 0)")
     play.add_argument("--white", type=int, default=0, help="white player id (default 0)")
     play.add_argument("--black", type=int, default=1, help="black player id (default 1)")
@@ -286,9 +291,9 @@ def main(argv=None):
     play.add_argument(
         "--refresh",
         type=float,
-        default=15.0,
+        default=10.0,
         metavar="SECONDS",
-        help="while waiting at the prompt, re-read the server this often (default 15; 0 disables)",
+        help="while waiting at the prompt, re-read the server this often (default 10; 0 disables)",
     )
     play.add_argument("--ascii", action="store_true", help="draw pieces as letters instead of figurines")
     play.add_argument("--no-color", dest="no_color", action="store_true", help="never emit ANSI colour")
@@ -314,7 +319,14 @@ def main(argv=None):
     init.set_defaults(func=_run_config_init)
 
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        # Every subcommand, not only `play`: Ctrl+C is a way of leaving, and a
+        # traceback is never the right answer to it. 130 is the SIGINT
+        # convention. `play` handles it inside the session so it can exit
+        # tidily; this catches anywhere else, such as init-db mid-connection.
+        sys.exit(130)
 
 
 if __name__ == "__main__":

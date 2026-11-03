@@ -383,9 +383,63 @@ def test_a_stream_without_a_file_descriptor_falls_back_to_blocking():
     assert session.wait_for_line().strip() == "e4"
 
 
-def test_refresh_seconds_defaults_to_fifteen():
+def test_refresh_seconds_has_a_nonzero_default():
+    """Polling on by default is the point; the exact number is a judgement call."""
     game = Game.local()
-    assert Session(game, stdin=io.StringIO(), stdout=io.StringIO()).refresh_seconds == 15.0
+    assert Session(game, stdin=io.StringIO(), stdout=io.StringIO()).refresh_seconds == 10.0
+
+
+# --- Ctrl+C ---------------------------------------------------------------------
+
+
+class _InterruptingStream:
+    """A stdin that raises KeyboardInterrupt, as Ctrl+C at the prompt does."""
+
+    def __init__(self, raise_on=1):
+        self.reads = 0
+        self.raise_on = raise_on
+
+    def readline(self):
+        self.reads += 1
+        if self.reads >= self.raise_on:
+            raise KeyboardInterrupt
+        return "board\n"
+
+
+def test_ctrl_c_at_the_prompt_exits_quietly():
+    """
+    Regression: Ctrl+C used to propagate out of `select()` and print a traceback
+    through cli.py, which tells the player nothing. 130 is the SIGINT convention.
+    """
+    out = io.StringIO()
+    status = run_session(Game.local(), stdin=_InterruptingStream(), stdout=out, color=False)
+    assert status == 130
+    assert "Traceback" not in out.getvalue()
+    assert "KeyboardInterrupt" not in out.getvalue()
+
+
+def test_ctrl_c_after_some_input_still_exits_quietly():
+    out = io.StringIO()
+    stream = _InterruptingStream(raise_on=3)
+    assert run_session(Game.local(), stdin=stream, stdout=out, color=False) == 130
+    assert "KeyboardInterrupt" not in out.getvalue()
+
+
+def test_ctrl_c_during_an_action_exits_quietly(monkeypatch):
+    """Ctrl+C part-way through a move must not surface as a crash either."""
+    game = Game.local()
+    monkeypatch.setattr(game, "move", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    out = io.StringIO()
+    assert run_session(game, stdin=io.StringIO("e4\n"), stdout=out, color=False) == 130
+    assert "KeyboardInterrupt" not in out.getvalue()
+
+
+def test_cli_api_key_env_name_matches_the_client():
+    """Same hardcode-with-a-test pattern as the URL variable."""
+    from chesssnake.cli import _API_KEY_ENV
+    from chesssnake.remote.game import API_KEY_ENV
+
+    assert _API_KEY_ENV == API_KEY_ENV
 
 
 def test_a_quiet_poll_prints_nothing(monkeypatch):

@@ -247,9 +247,10 @@ Notes:
   accidentally move for your opponent, and the board faces your side. Without it the
   session acts as whoever is to move — which is what one person at one keyboard wants.
 - **Two players** each run `play` with the same `--group/--white/--black` and their own
-  `--me`. While you sit at the prompt the session **polls every 15 seconds** and announces
+  `--me`. While you sit at the prompt the session **polls every 10 seconds** and announces
   the opponent's move when it lands; `--refresh SECONDS` changes the interval and
-  `--refresh 0` turns it off. Every command re-reads the server first too, so you are
+  `--refresh 0` turns it off. (One poll is a single small GET — measured at ~25 ms against
+  a LAN deployment — so the interval is about how live it feels, not about load.) Every command re-reads the server first too, so you are
   never shown a stale position. (It is polling, not push — see
   `docs/realtime-websockets.md` for the design that would make moves arrive instantly.)
 - **A rematch started elsewhere is noticed.** Re-opening a finished game starts a new
@@ -259,7 +260,12 @@ Notes:
   so a move sent from a superseded session would otherwise land in the new game.
 - `--ascii` draws pieces as letters, and `--no-color` emits no escape codes at all — both
   useful over a flaky terminal or when piping to a file.
-- Add `--api-key` if the endpoint runs with `api.require_auth` on.
+- **Auth**, if the endpoint runs with `api.require_auth` on: `--api-key KEY`, or set
+  `CHESSSNAKE__CLIENT__API_KEY` to keep it out of your shell history. It is sent as the
+  `X-API-Key` header. A missing or wrong key fails immediately with
+  `Invalid or missing API key` rather than showing you an empty board.
+- **`quit`, Ctrl+D or Ctrl+C** all leave; Ctrl+C exits with status 130 and prints nothing.
+  A remote game is saved on the server either way, and a local one is not saved at all.
 
 ### Running in Docker
 

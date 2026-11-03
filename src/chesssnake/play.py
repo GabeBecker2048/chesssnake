@@ -85,7 +85,7 @@ class Session:
         color: bool = True,
         figurines: bool = True,
         perspective=None,
-        refresh_seconds: float = 15.0,
+        refresh_seconds: float = 10.0,
     ):
         self.game = game
         self.player_id = player_id
@@ -481,16 +481,24 @@ class Session:
         """
         Read commands until EOF or ``quit``.
 
-        :return: a process exit status — always 0; a failure to *reach* the
-            server raises out of the session instead, because that is a setup
-            problem rather than a move the player got wrong.
+        :return: a process exit status — 0 on ``quit``/EOF, 130 on Ctrl+C. A
+            failure to *reach* the server raises out of the session instead,
+            because that is a setup problem rather than a move the player got
+            wrong.
         """
         self.show()
         self.note("type `help` for commands")
         while True:
             self.stdout.write("\n> ")
             self.stdout.flush()
-            line = self.wait_for_line()
+            try:
+                line = self.wait_for_line()
+            except KeyboardInterrupt:
+                # Ctrl+C at the prompt is how people leave a REPL. It is not a
+                # crash, and a traceback through select() tells the player
+                # nothing. 130 is the conventional status for SIGINT.
+                self.write()
+                return 130
             if not line:  # EOF
                 self.write()
                 return 0
@@ -501,6 +509,12 @@ class Session:
                 self.dispatch(line)
             except Quit:
                 return 0
+            except KeyboardInterrupt:
+                # Ctrl+C part-way through a request: the action may or may not
+                # have reached the server, so say nothing about it and leave.
+                # Re-reading on the next run is what resolves it.
+                self.write()
+                return 130
             except (ChessError, GameError, ValueError) as e:
                 # Expected: an illegal move, acting out of turn, a stale version.
                 # Keep playing — the player simply types something else.
