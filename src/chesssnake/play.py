@@ -12,6 +12,9 @@ Separated from :mod:`chesssnake.cli` so the loop can be tested by handing it two
 streams, with no terminal, no server and no subprocess.
 """
 
+import io
+import select
+
 from .db.errors import GameError, NotYourTurnError
 from .engine import Color, GameStatus, render_text
 from .engine.errors import ChessError
@@ -82,6 +85,7 @@ class Session:
         color: bool = True,
         figurines: bool = True,
         perspective=None,
+        refresh_seconds: float = 15.0,
     ):
         self.game = game
         self.player_id = player_id
@@ -89,6 +93,9 @@ class Session:
         self.stdout = stdout
         self.color = color
         self.figurines = figurines
+        self.refresh_seconds = refresh_seconds
+        #: Set by :meth:`sync` when a rematch has superseded this session's game.
+        self.stale_generation = None
         if perspective is not None:
             self.perspective = Color(perspective)
         elif player_id is not None and player_id == getattr(game, "bid", None):
@@ -182,27 +189,91 @@ class Session:
         """
         Pull the latest server state into the mirror, for a remote game.
 
-        Called before every informational command, because several of them
-        (``legal_moves``, ``pgn``, ``history``) are *proxied to the server* while
-        the board and ``fen`` come from the local mirror. Without this the two
-        disagree the moment the opponent moves: the board would show your last
-        position while ``moves`` listed the legal moves of a position you cannot
-        see. One GET is a cheap price for the board and the data always agreeing.
+        Called before every informational command and every action, because
+        several reads (``legal_moves``, ``pgn``, ``history``) are *proxied to the
+        server* while the board and ``fen`` come from the local mirror. Without
+        this the two disagree the moment the opponent moves: the board would show
+        your last position while ``moves`` listed the legal moves of a position
+        you cannot see.
 
-        :return: whether the position actually moved on (so the caller can
-            redraw and say so, rather than silently changing the board).
+        Reads the **current** generation rather than this session's pinned one,
+        so a rematch started elsewhere is noticed instead of leaving the session
+        staring at a finished game forever. On drift it sets
+        :attr:`stale_generation` and does *not* move the mirror — joining a
+        rematch is the player's decision (``new``), not a surprise.
+
+        :return: whether the position moved on, so the caller can redraw and say
+            so rather than silently changing the board.
         """
         if not self.game.is_remote:
             return False
+        # Private attribute use: play.py and remote/game.py ship together, and
+        # `generation=None` (the current game) is not reachable through the
+        # public Game, which pins the generation it was opened at.
+        state = self.game._client.get_state(self.game.gid, self.game.wid, self.game.bid, None)
+        if state.generation != self.game.generation:
+            self.stale_generation = state.generation
+            return False
+        self.stale_generation = None
         before = self.game.version
-        self.game.refresh()
+        self.game._apply_state(state)
         return self.game.version != before
 
     def _sync_and_announce(self) -> None:
         """Sync, and redraw with a note if the opponent has been and gone."""
-        if self.sync():
+        changed = self.sync()
+        if self.stale_generation is not None:
+            self.note(self._rematch_notice())
+            return
+        if changed:
             self.note("the position changed on the server")
             self.show()
+
+    def _rematch_notice(self) -> str:
+        """Explain that this session is looking at a superseded game."""
+        return (
+            f"a rematch has started elsewhere (generation {self.stale_generation}); "
+            f"this session is on generation {self.game.generation}. `new` joins the current game."
+        )
+
+    def allow_action(self) -> bool:
+        """
+        Sync, then report whether an action may be sent.
+
+        Every action goes through here, so the cross-generation hazard described
+        in :meth:`blocked_reason` is checked once rather than at seven call sites.
+
+        :return: ``True`` when it is safe to act.
+        """
+        self.sync()
+        reason = self.blocked_reason()
+        if reason is None:
+            return True
+        self.error(reason)
+        return False
+
+    def blocked_reason(self):
+        """
+        Why an action must not be sent, or ``None`` when it is safe.
+
+        This exists because the server's **mutating routes ignore the generation
+        entirely** and always act on the current game, while reads are pinned to
+        one. A session left on a superseded generation therefore does not get a
+        clean refusal: its move is applied to *whichever game is current*, and
+        only an accidental version or legality mismatch stops it. Verified
+        against a live endpoint — a session sitting in a finished generation 1
+        played ``d5`` and it landed in generation 2's movetext. So the session
+        refuses to send anything until the player rejoins with ``new``.
+
+        :return: a message to show, or ``None``.
+        """
+        if not self.game.is_remote:
+            return None
+        if self.stale_generation is not None:
+            return self._rematch_notice()
+        if self.game.is_over:
+            return "this game is over - `new` starts a rematch"
+        return None
 
     def do_moves(self, _arg):
         """List the legal moves for the side to move."""
@@ -236,21 +307,29 @@ class Session:
 
     def do_draw(self, _arg):
         """Offer a draw."""
+        if not self.allow_action():
+            return
         self.game.draw_offer(self.actor())
         self.show()
 
     def do_accept(self, _arg):
         """Accept the outstanding draw offer."""
+        if not self.allow_action():
+            return
         self.game.draw_accept(self.actor(responding=True))
         self.show()
 
     def do_decline(self, _arg):
         """Decline the outstanding draw offer."""
+        if not self.allow_action():
+            return
         self.game.draw_decline(self.actor(responding=True))
         self.show()
 
     def do_resign(self, _arg):
         """Resign the game."""
+        if not self.allow_action():
+            return
         self.game.resign(self.actor())
         self.show()
 
@@ -259,7 +338,10 @@ class Session:
         if not self.game.is_remote:
             self.note("local game - nothing to refresh")
             return
-        if self.sync():
+        changed = self.sync()
+        if self.stale_generation is not None:
+            self.note(self._rematch_notice())
+        elif changed:
             self.show()
         else:
             self.note("nothing new")
@@ -340,12 +422,60 @@ class Session:
         # must not duplicate the rule. A local game has no server to ask, and
         # the engine's move() takes no player id — so without this check `--me`
         # would silently mean nothing offline, which is worse than not offering it.
+        if not self.allow_action():
+            return
         if self.player_id is not None and not self.game.is_remote and not self.game.is_players_turn(self.player_id):
             raise NotYourTurnError(f"It is not player {self.player_id}'s turn to move")
         result = self.game.move(line.strip())
         san = getattr(result, "san", None) or line.strip()
         self.note(f"played {san}")
         self.show()
+
+    def wait_for_line(self):
+        """
+        Read one line, re-reading the server every ``refresh_seconds`` while idle.
+
+        This is the only place the session acts without being asked, and it is
+        deliberately narrow: it polls, it does not push. ``select`` is used rather
+        than a background thread so there is exactly one thread touching the game
+        and the output stream, and nothing to shut down on exit.
+
+        Falls back to a plain blocking read whenever waiting is not possible — a
+        local game (nothing to poll), ``--refresh 0``, a stdin with no real file
+        descriptor (a ``StringIO``, as the tests use), or a platform where
+        ``select`` will not take one. The session still works; it just will not
+        notice the opponent on its own.
+
+        :return: the line read, or ``""`` at EOF.
+        """
+        if self.refresh_seconds <= 0 or not self.game.is_remote:
+            return self.stdin.readline()
+        try:
+            fd = self.stdin.fileno()
+        except (AttributeError, io.UnsupportedOperation, ValueError):
+            return self.stdin.readline()
+        while True:
+            try:
+                ready, _, _ = select.select([fd], [], [], self.refresh_seconds)
+            except (OSError, ValueError):
+                # Windows select() takes sockets only; nothing to do but block.
+                return self.stdin.readline()
+            if ready:
+                return self.stdin.readline()
+            changed = self.sync()
+            if self.stale_generation is not None:
+                self.write()
+                self.note(self._rematch_notice())
+            elif changed:
+                self.write()
+                self.note("the opponent moved")
+                self.show()
+            else:
+                continue
+            # Re-issue the prompt: whatever the player had half-typed is still in
+            # the terminal's buffer, but the prompt itself has scrolled away.
+            self.stdout.write("\n> ")
+            self.stdout.flush()
 
     def run(self) -> int:
         """
@@ -360,7 +490,7 @@ class Session:
         while True:
             self.stdout.write("\n> ")
             self.stdout.flush()
-            line = self.stdin.readline()
+            line = self.wait_for_line()
             if not line:  # EOF
                 self.write()
                 return 0

@@ -234,7 +234,7 @@ Type a move in algebraic notation, or one of:
 | `fen` / `pgn` | the position as FEN / the game as PGN |
 | `draw`, `accept`, `decline` | offer a draw, answer an offer |
 | `resign` | resign |
-| `refresh` | check the server for the opponent's move |
+| `refresh` | check the server now (it also polls on its own) |
 | `new` | rematch, once the game is over |
 | `save PATH` | write a PNG of the board |
 | `help`, `quit` | |
@@ -247,11 +247,16 @@ Notes:
   accidentally move for your opponent, and the board faces your side. Without it the
   session acts as whoever is to move — which is what one person at one keyboard wants.
 - **Two players** each run `play` with the same `--group/--white/--black` and their own
-  `--me`. There is **no push channel**, so the opponent's move never arrives on its own
-  while you sit at the prompt — but you are never shown a stale position either: every
-  informational command (`board`, `fen`, `moves`, `pgn`) re-reads the server first and
-  says so if the position moved on, as does each move you make. `refresh` is simply the
-  command for asking when you have nothing else to type.
+  `--me`. While you sit at the prompt the session **polls every 15 seconds** and announces
+  the opponent's move when it lands; `--refresh SECONDS` changes the interval and
+  `--refresh 0` turns it off. Every command re-reads the server first too, so you are
+  never shown a stale position. (It is polling, not push — see
+  `docs/realtime-websockets.md` for the design that would make moves arrive instantly.)
+- **A rematch started elsewhere is noticed.** Re-opening a finished game starts a new
+  generation, so if your opponent does that while you are still looking at the old one,
+  the session says so and refuses to act until you type `new`. That refusal is
+  load-bearing: the server's mutating routes act on whichever generation is *current*,
+  so a move sent from a superseded session would otherwise land in the new game.
 - `--ascii` draws pieces as letters, and `--no-color` emits no escape codes at all — both
   useful over a flaky terminal or when piping to a file.
 - Add `--api-key` if the endpoint runs with `api.require_auth` on.

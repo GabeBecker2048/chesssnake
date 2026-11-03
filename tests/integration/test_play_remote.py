@@ -158,3 +158,105 @@ def test_refresh_says_so_when_there_is_nothing_new(remote_client):
     game = make_game(remote_client, white_id=23, black_id=24)
     _, out = play(["refresh", "quit"], game)
     assert "nothing new" in out
+
+
+# --- the cross-generation hazard --------------------------------------------
+
+
+def test_move_after_the_game_ends_says_so_plainly(remote_client):
+    """Not a VersionConflictError, and not a traceback: a sentence and a way out."""
+    game = make_game(remote_client, white_id=25, black_id=26)
+    _, out = play(["resign", "e4", "quit"], game)
+    assert "this game is over - `new` starts a rematch" in out
+    assert "VersionConflict" not in out
+
+
+def test_a_rematch_started_elsewhere_is_explained(remote_client):
+    """
+    Regression for the reported bug. A session sitting in a finished game while
+    someone else re-opened the triple used to get
+    ``VersionConflictError: Expected version 5 but the game is at version 1``.
+    """
+    mine = make_game(remote_client, white_id=27, black_id=28)
+    mine.move("d4")
+    mine.move("d5")
+    mine.resign(28)
+
+    # Someone else re-opens the finished triple, which starts generation 2.
+    other = make_game(remote_client, white_id=27, black_id=28)
+    assert other.generation == 2
+
+    _, out = play(["e4", "quit"], mine)
+    assert "a rematch has started elsewhere (generation 2)" in out
+    assert "generation 1" in out
+    assert "VersionConflict" not in out
+
+
+def test_a_stale_session_cannot_write_into_the_rematch(remote_client):
+    """
+    The hazard behind that error, and the reason the guard refuses rather than
+    merely explaining: the server's mutating routes ignore the generation and act
+    on the *current* game, so a stale session's legal move lands in the rematch.
+    Verified against a live endpoint before this guard existed.
+    """
+    stale = make_game(remote_client, white_id=29, black_id=30)
+    stale.resign(29)  # generation 1 is over at version 2
+
+    live = make_game(remote_client, white_id=29, black_id=30)  # generation 2
+    live.move("d4")  # also version 2 -- so a version check alone would pass
+    assert live.generation == 2 and live.version == stale.version
+
+    # d5 is legal in generation 2. Without the guard this is applied there.
+    _, out = play(["d5", "quit"], stale)
+    assert "a rematch has started elsewhere" in out
+
+    fresh = Game.remote(29, 30, 70, client=remote_client)
+    assert "d5" not in fresh.pgn(), "the stale session must not reach the rematch"
+    assert "1. d4 *" in fresh.pgn()
+
+
+def test_new_joins_the_rematch_that_started_elsewhere(remote_client):
+    """The guard names `new` as the way out, so `new` has to work from there."""
+    mine = make_game(remote_client, white_id=31, black_id=32)
+    mine.resign(31)
+    make_game(remote_client, white_id=31, black_id=32)  # someone starts generation 2
+
+    _, out = play(["e4", "new", "d4", "quit"], mine)
+    assert "a rematch has started elsewhere" in out
+    assert "rematch - generation 2" in out
+    assert "played d4" in out
+
+
+def test_informational_commands_report_the_rematch_too(remote_client):
+    mine = make_game(remote_client, white_id=33, black_id=34)
+    mine.resign(33)
+    make_game(remote_client, white_id=33, black_id=34)
+
+    _, out = play(["moves", "quit"], mine)
+    assert "a rematch has started elsewhere" in out
+
+
+def test_refresh_reports_the_rematch_rather_than_nothing_new(remote_client):
+    """`refresh` is the command you reach for when confused; it must not mislead."""
+    mine = make_game(remote_client, white_id=35, black_id=36)
+    mine.resign(35)
+    make_game(remote_client, white_id=35, black_id=36)
+
+    _, out = play(["refresh", "quit"], mine)
+    assert "a rematch has started elsewhere" in out
+    assert "nothing new" not in out
+
+
+# Explicit ids rather than a hash of the command: PYTHONHASHSEED is randomized,
+# so a derived id would pick a different game on every run.
+@pytest.mark.parametrize(
+    ("command", "white_id"),
+    [("draw", 37), ("accept", 38), ("decline", 39), ("resign", 40)],
+)
+def test_every_action_is_guarded_not_just_moves(remote_client, command, white_id):
+    """All of the actions route through allow_action, so none can reach a dead game."""
+    game = make_game(remote_client, white_id=white_id, black_id=99)
+    game.resign(99)
+    _, out = play([command, "quit"], game)
+    assert "this game is over - `new` starts a rematch" in out
+    assert "VersionConflict" not in out
