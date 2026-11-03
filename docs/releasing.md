@@ -114,6 +114,12 @@ gh workflow enable release.yml
 `--commit` is checked the same way as a normal release: the commit has to
 declare that exact version, in `pyproject.toml` or (before 0.6.7) `setup.py`.
 
+When tagging a past commit the script backdates the tagger to that commit's own
+date. GitHub derives a release's `created_at` from the tag and **orders the
+releases page by it**, so a tag made today for a commit from July would sort a
+historical release above the current one. Live releases are unaffected, since
+the commit is minutes old either way.
+
 The script creates and pushes the tag itself rather than letting `gh` do it via
 `--target`. That is not stylistic: GitHub's release API rejects
 `target_commitish` for some perfectly valid commits with a bare **404**, and
