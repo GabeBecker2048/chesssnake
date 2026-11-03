@@ -22,7 +22,7 @@ out, every response you can get, and how a client is expected to interpret them.
   - [Users](#users)
   - [Challenges](#challenges)
   - [Games](#games)
-- [Websockets (planned for 0.13.0)](#websockets-planned-for-0130)
+- [Real-time updates (websockets)](#real-time-updates-websockets)
 - [The Python client](#the-python-client)
 - [Building your own client](#building-your-own-client)
 
@@ -494,7 +494,8 @@ as a draw; games in progress are not counted.
 #### `GET /v1/games/{id}`
 
 The game, in progress or finished: `200 GameState`, or `404 GameNotFoundError`.
-Poll it (compare `version`) to see the opponent's moves.
+Poll it (compare `version`) to see the opponent's moves, or follow it over a
+[websocket](realtime-websockets.md) when the server offers one.
 
 #### `DELETE /v1/games/{id}` (admin)
 
@@ -543,14 +544,18 @@ Errors: `400 DrawWrongTurnError`, `DrawAlreadyOfferedError`, `DrawNotOfferedErro
 
 ---
 
-## Websockets (planned for 0.13.0)
+## Real-time updates (websockets)
 
-Not built yet; recorded here because the authentication above was designed for
-it. Browsers cannot set an `Authorization` header on a WebSocket, so a socket will
-send its token as its **first message** rather than in the URL, where it would end
-up in access logs. A long-lived socket will re-check its token periodically, so
-that logging out, disabling an account or a token expiring still ends it. The
-check is the same one every HTTP request makes.
+When the server has `websocket.enabled` on (it is off by default), a client can
+open a websocket at `/v1/ws` and be told about every change to the games it
+follows, and about challenges and new games of its own, instead of polling. It
+logs in by sending its token as the first message (browsers cannot set an
+`Authorization` header on a websocket, and a token in the URL would end up in
+access logs); logging out or revoking the token closes the socket at once. The
+REST contract is the same either way: the socket only reports changes, and every
+action is still a request here.
+
+The protocol is specified in [Real-time updates](realtime-websockets.md).
 
 ---
 
@@ -606,7 +611,9 @@ You need HTTP and nothing else. A typical frontend:
 6. **Move**: `POST /v1/games/{id}/moves {"move": …, "expected_version": …}`. On
    `200` replace your state with `result.state`. On a `4xx` show `detail` and keep
    your state.
-7. **See the opponent move**: poll `GET /v1/games/{id}` and watch `version`.
+7. **See the opponent move**: [subscribe to the game over a websocket](realtime-websockets.md)
+   and render each `game` event's `state`. If the server answers the upgrade with
+   `403` (websockets off), poll `GET /v1/games/{id}` and watch `version` instead.
 8. **End states**: `status` `1`/`2` is a win for white/black, `3` a draw;
    `termination` says why.
 

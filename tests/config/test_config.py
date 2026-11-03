@@ -24,6 +24,26 @@ EXPECTED_ENV_NAMES = {
     ("database", "pool_max_size"): "CHESSSNAKE__DATABASE__POOL_MAX_SIZE",
     ("database", "init_schema"): "CHESSSNAKE__DATABASE__INIT_SCHEMA",
     ("database", "sqlite_busy_timeout"): "CHESSSNAKE__DATABASE__SQLITE_BUSY_TIMEOUT",
+    **{
+        ("websocket", key): f"CHESSSNAKE__WEBSOCKET__{key.upper()}"
+        for key in (
+            "enabled",
+            "max_connections",
+            "max_pending_auth",
+            "max_connections_per_user",
+            "max_subscriptions",
+            "auth_timeout_seconds",
+            "reauth_interval_seconds",
+            "send_queue_size",
+            "ping_interval_seconds",
+            "ping_timeout_seconds",
+            "max_message_bytes",
+            "compression",
+            "worker_threads",
+            "shutdown_timeout_seconds",
+            "allowed_origins",
+        )
+    },
     ("client", "api_url"): "CHESSSNAKE__CLIENT__API_URL",
     ("client", "token"): "CHESSSNAKE__CLIENT__TOKEN",
 }
@@ -58,6 +78,10 @@ def test_defaults():
     assert settings.database.pool_min_size == 1
     assert settings.database.pool_max_size == 10
     assert settings.source("api", "port") == "default"
+    # Websockets are opt-in: a server that never heard of them behaves as 0.12 did.
+    assert settings.websocket.enabled is False
+    assert settings.websocket.allowed_origins == ["*"]
+    assert settings.websocket.compression is False
 
 
 # --- Precedence ------------------------------------------------------------
@@ -295,11 +319,19 @@ def test_packaged_default_matches_the_built_in_defaults(tmp_path):
 def test_packaged_default_documents_every_setting():
     """Adding a setting without documenting it in the shipped file fails here."""
     text = config.default_config_text()
+    import re
+
+    # Split into [section] bodies, so a key is only documented where it belongs:
+    # matching the bare word would pass for `port` because the text mentions it.
+    bodies = dict(re.findall(r"^\[(\w+)\]\n(.*?)(?=^\[\w+\]|\Z)", text, re.M | re.S))
     for section, key, _ in config.iter_schema():
-        # Env-only settings are documented by their variable name rather than a
-        # TOML key, since writing them in the file is an error.
-        documented = key in text or env_name(section, key) in text
-        assert documented, f"{section}.{key} is undocumented in the packaged config file"
+        if section == "client":
+            # Env-only settings are documented by their variable name rather than a
+            # TOML key, since writing them in the file is an error.
+            assert env_name(section, key) in text, f"{section}.{key} is undocumented in the packaged config file"
+            continue
+        line = re.compile(rf"^#? ?{key} = ", re.M)
+        assert line.search(bodies.get(section, "")), f"[{section}] {key} is undocumented in the packaged config file"
 
 
 def test_packaged_default_leaves_credentials_unset(tmp_path):
@@ -372,3 +404,63 @@ def test_sql_auth_error_names_the_current_env_var():
 def test_settings_is_constructible_without_any_layers():
     """create_app(Settings()) must work for tests and embedding."""
     assert Settings().api.port == 8000
+
+
+# --- [websocket] --------------------------------------------------------------
+
+
+def test_allowed_origins_from_the_environment_are_comma_separated():
+    settings = resolve(
+        environ={"CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS": " https://Chess.Example/ ,http://localhost:5173"},
+        cwd="/nonexistent",
+    )
+    assert settings.websocket.allowed_origins == ["https://chess.example", "http://localhost:5173"]
+
+
+def test_allowed_origins_from_a_file_are_a_list(tmp_path):
+    path = write(tmp_path, '[websocket]\nallowed_origins = ["https://chess.example"]\n')
+    settings = resolve(config_path=path, environ={}, cwd=tmp_path)
+    assert settings.websocket.allowed_origins == ["https://chess.example"]
+
+
+@pytest.mark.parametrize("value", ["*,https://chess.example", ",", ""])
+def test_allowed_origins_rejects_a_wildcard_mixed_in_or_nothing(value):
+    with pytest.raises(ConfigError, match="allowed_origins"):
+        resolve(environ={"CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS": value}, cwd="/nonexistent")
+
+
+def test_origin_allowed():
+    from chesssnake.config import WebsocketSettings
+
+    anyone = WebsocketSettings()
+    assert anyone.origin_allowed("https://anything.example") and anyone.origin_allowed(None)
+    listed = WebsocketSettings(allowed_origins=["https://chess.example"])
+    assert listed.origin_allowed("https://CHESS.example/")
+    assert not listed.origin_allowed("https://chess.example.evil")
+    assert listed.origin_allowed(None), "no Origin: not a browser, and the token is the gate"
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"MAX_CONNECTIONS": "5", "MAX_CONNECTIONS_PER_USER": "6"},
+        {"MAX_CONNECTIONS": "5", "MAX_PENDING_AUTH": "6"},
+        {"PING_TIMEOUT_SECONDS": "0"},
+        {"AUTH_TIMEOUT_SECONDS": "0"},
+        {"MAX_MESSAGE_BYTES": "100"},
+    ],
+    ids=["per-user-over-total", "pending-over-total", "ping-timeout-zero", "auth-timeout-zero", "tiny-messages"],
+)
+def test_websocket_limits_that_cannot_work_are_refused(env):
+    environ = {f"CHESSSNAKE__WEBSOCKET__{k}": v for k, v in env.items()}
+    with pytest.raises(ConfigError):
+        resolve(environ=environ, cwd="/nonexistent")
+
+
+def test_config_show_prints_origins_comma_joined():
+    settings = resolve(
+        environ={"CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS": "https://a.example,https://b.example"},
+        cwd="/nonexistent",
+    )
+    shown = config.format_settings(settings)
+    assert "allowed_origins" in shown and "https://a.example,https://b.example" in shown

@@ -32,20 +32,24 @@ pytestmark = pytest.mark.integration
 CONCURRENCY = 3
 
 
-def _all_routes():
+def _all_routes(kind=None):
     """
-    Every API route in a built app, however it was included.
+    Every route in a built app, however it was included.
 
     FastAPI keeps included routers as wrappers rather than flattening them into
     ``app.routes``, and the public auth router is included on the app rather than
-    into ``v1``; walking the route contexts finds them all.
+    into ``v1``; walking the route contexts finds them all. The app is built with
+    websockets on, so ``/v1/ws`` is among them.
     """
     from fastapi.routing import APIRoute, iter_route_contexts
 
     from chesssnake.config import Settings
 
-    app = server.create_app(Settings(database={"url": "sqlite:////nonexistent/never-opened.db"}))
-    return [c for c in iter_route_contexts(app.routes) if isinstance(c.route, APIRoute)]
+    kind = kind or APIRoute
+    app = server.create_app(
+        Settings(database={"url": "sqlite:////nonexistent/never-opened.db"}, websocket={"enabled": True})
+    )
+    return [c for c in iter_route_contexts(app.routes) if isinstance(c.route, kind)]
 
 
 def test_health_is_the_only_route_on_the_event_loop():
@@ -67,10 +71,32 @@ def test_health_is_the_only_route_on_the_event_loop():
         "blocking database and rendering calls, so they must be plain `def`."
     )
     # A new route that nobody thought about should trip this, not slip through.
+    # (Websocket routes are not APIRoutes; /v1/ws is checked below.)
     assert len(routes) == 38, (
         f"expected 38 routes, found {len(routes)}; if you added one, confirm it is "
         "`def` and not `async def`, then update this count"
     )
+
+
+def test_the_websocket_route_is_the_only_websocket_route():
+    """
+    ``/v1/ws`` is ``async def`` on purpose: it waits on sockets, and every blocking
+    call it makes goes through ``anyio.to_thread`` on the broker's own limiter.
+    """
+    from fastapi.routing import APIWebSocketRoute
+
+    sockets = _all_routes(APIWebSocketRoute)
+    assert [(c.route.path, inspect.iscoroutinefunction(c.route.endpoint)) for c in sockets] == [("/v1/ws", True)]
+
+
+def test_rest_stays_parallel_while_sockets_are_open(api_client, pair, monkeypatch):
+    """Open, authenticated websockets hold no worker threads: REST still overlaps."""
+    raw, _ = ops.token_create(pair[0], ops.TOKEN_API, name="threadpool")
+    with api_client.websocket_connect("/v1/ws") as first, api_client.websocket_connect("/v1/ws") as second:
+        for ws in (first, second):
+            ws.send_json({"type": "auth", "token": raw})
+            assert ws.receive_json()["type"] == "ready"
+        test_requests_run_in_parallel(api_client, pair, monkeypatch)
 
 
 def test_requests_run_in_parallel(api_client, pair, monkeypatch):

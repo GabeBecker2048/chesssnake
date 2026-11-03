@@ -31,6 +31,8 @@ services:
       #   docker compose -f docker/compose.sqlite.yaml exec api chesssnake user create NAME --admin
       # "open" lets anyone who can reach the server register an account.
       # CHESSSNAKE__API__REGISTRATION: "open"
+      # Live updates over a websocket at /v1/ws (chesssnake play, a web frontend).
+      # CHESSSNAKE__WEBSOCKET__ENABLED: "1"
     ports:
       - "8000:8000"
     volumes:
