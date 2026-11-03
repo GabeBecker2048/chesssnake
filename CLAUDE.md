@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.9.0 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0 — see `VersionHistory.md`).
+`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.9.1 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1 — see `VersionHistory.md`).
 
 The package uses a **`src/` layout**: all importable code lives under `src/chesssnake/` (tests import the installed package, not a repo-root package).
 
@@ -31,10 +31,15 @@ uv run chesssnake init-db                # just create the schema, then exit
 uv run chesssnake config init            # write a commented default config file
 uv run chesssnake config show            # effective settings + where each came from
 
+# Play at the terminal. --local needs nothing but the core install (no server, no
+# requests); without it, --api-url / CHESSSNAKE__CLIENT__API_URL points at an endpoint.
+uv run chesssnake play --local
+uv run chesssnake play --api-url http://localhost:8000 --group 1 --white 10 --black 20 --me 10
+
 # Tests. Both dependency groups install by default, so a bare `uv run pytest` covers
 # both backends; CI's SQLite matrix opts out with --no-group pg (no pgserver wheels).
 uv run pytest                            # everything under tests/
-uv run pytest tests/unit                 # fast, pure-Python engine tests (no DB)
+uv run pytest tests/unit                 # fast, pure-Python engine tests (no DB; incl. the play session + text board)
 uv run pytest tests/integration          # API + remote-Game stack, run against BOTH backends:
                                          # a temp SQLite file and a throwaway Postgres (pgserver)
 CHESSSNAKE_TEST_BACKENDS=sqlite uv run pytest tests/integration   # SQLite only (no pgserver needed)
@@ -77,7 +82,13 @@ The three tiers and where they live:
 2. **Server** (`src/chesssnake/api/server.py`) — a FastAPI app built by `create_app(settings)` that **owns the engine** (the authoritative rules). `/health` is unversioned/open; all game+challenge routes live on a `/v1` `APIRouter` gated by an API-key dependency built per-app from settings (`_api_key_dependency`, active only when `api.require_auth` is true). Mutating routes (`/moves`, `/resign`, `/draw/*`) load the row + its `Moves` history, build an `engine.Game` (via `serialize.game_from_state`), apply the action (which may raise `ChessError`), and persist the result — all inside one `apply_game_change` transaction; they accept an optional `player_id` (validated → `NotYourTurnError`/403) and `expected_version` (→ `VersionConflictError`/409). Read routes: `GET .../` (state), `.../legal-moves`, `.../history`, `.../pgn` (text), `.../fen` (text), `.../image` (PNG). Errors map to JSON `{error_type, detail}` (chess→400, auth→403, not-found→404, challenge/version→409, id→422, sql→500).
 3. **Database** (`src/chesssnake/db/`) — SQLAlchemy Core, backend-agnostic. `db/operations.py` holds the query functions (`game_get_or_create`, `game_get`, `game_archive`, `game_history`, `apply_game_change`, `game_delete`, `current_games`, `game_exists`, `game_record`, `challenge*`) as Core expressions; `db/schema.py` the `MetaData`; `db/engine.py` the engine + `transaction()`/`locked_transaction()`; `db/postgres.py` and `db/sqlite.py` only what differs per dialect; `db/errors.py` the `GameError` types (`GameNotFoundError`, `NotYourTurnError`, `VersionConflictError`, …). The **`Games`** table stores the position as a single `Fen` column plus `Status`/`Draw`/`Termination`/`Version` (no more per-field board columns); the **`Moves`** table stores one row per ply (`San` + `PositionKey`, plus a ply-0 row for the initial position) for PGN and threefold detection. **This layer stays engine-free** — `apply_game_change` runs the caller's `mutate(row, history)` callback (the engine logic) between a locked read and the `UPDATE`, bumping `version` and appending `moves` rows atomically — see the locking note in the `db/` section below.
 
-The wire payloads are defined once in `src/chesssnake/dto.py`: `GameState` (the position as **FEN** + `status`/`version`/`generation`/`draw`/`termination`/names) and `MoveResult` (a move + resulting state, incl. `san`) — stdlib dataclasses, so the client needs no pydantic. The FEN codec is `src/chesssnake/engine/fen.py` (`to_fen`/`from_fen`/`position_key`/`INITIAL_FEN`), and `src/chesssnake/serialize.py` bridges `GameState` ⇄ engine `Game` (`game_from_state` with history, `state_from_game`, `board_and_turn`). `src/chesssnake/cli.py` is the console-script entry point; `src/chesssnake/assets.py` (`asset_path`) centralizes packaged-data lookups.
+There are **three ways to drive the backend**, all hitting the same `/v1` routes and
+the same rules: direct REST calls (any language, a custom frontend), the Python client
+(`Game.remote(...)`), and the terminal client (`chesssnake play`). The CLI is built *on*
+the client, not beside it — see `play.py` below — so adding a gameplay feature to
+`engine` reaches all three without touching any of them.
+
+The wire payloads are defined once in `src/chesssnake/dto.py`: `GameState` (the position as **FEN** + `status`/`version`/`generation`/`draw`/`termination`/names) and `MoveResult` (a move + resulting state, incl. `san`) — stdlib dataclasses, so the client needs no pydantic. The FEN codec is `src/chesssnake/engine/fen.py` (`to_fen`/`from_fen`/`position_key`/`INITIAL_FEN`), and `src/chesssnake/serialize.py` bridges `GameState` ⇄ engine `Game` (`game_from_state` with history, `state_from_game`, `board_and_turn`). `src/chesssnake/cli.py` is the console-script entry point; `src/chesssnake/play.py` holds the `chesssnake play` session loop (see below); `src/chesssnake/assets.py` (`asset_path`) centralizes packaged-data lookups.
 
 When changing **gameplay** behavior, edit `engine` — every tier (local games and the server) inherits it. When changing **persistence or the wire protocol**, edit `db/postgres.py` (SQL) and/or `dto.py` (payloads) + `serialize.py` (bridge), and mirror the endpoint in `api/server.py` + the method in `remote/client.py`.
 
@@ -109,6 +120,7 @@ Full reference: `docs/configuration.md`. The commented default file shipped by `
 - `move.py` — the `Move` class parses/validates one algebraic move against a board.
 - `notation.py` — `FILES`/`RANKS`, coord↔notation helpers, `is_valid_c_notation`, `matches_disambiguation`. `Board.get_coords`/`get_c_notation`/`Move.is_valid_c_notation` are facades delegating here.
 - `image.py` — `render_board(board, white_name, black_name, move=None, perspective=None) -> PIL.Image`; composites cached piece PNGs, 68px tiles, last-move highlight. `perspective=None` → the wide both-orientations image (the bottom name strip is dropped when *both* names are empty); `perspective=Color.WHITE`/`BLACK` (or `"white"`/`"black"`) → a single board from that side (board only, via the shared `_render_side`).
+- `text.py` — `render_text(board, perspective=None, *, figurines=True, coordinates=True, color=False, move=None) -> str`; the **sibling of `image.py`**, same job in text. Has **no dependencies at all**, not even Pillow, which is what lets `chesssnake play --local` work from a core install. `perspective=None` means white's view (there is no sensible side-by-side text form, unlike `render_board`). `color=False` emits **no escape sequence at all**, so output pipes and diffs cleanly — keep it that way, the tests compare plain strings. The last-move highlight only applies when `color` is on.
 - `errors.py` — gameplay exception hierarchy rooted at `ChessError`.
 - `game.py` — the base `Game` controller that `remote/game.py`'s `Game` subclasses. Holds `turn` (Color), `draw` (Color|None), `move_history` (SAN, for PGN) and `position_history` (keys, for threefold). Methods: `move` (records SAN + threefold), `resign`, `draw_*`, `legal_moves`, `pgn`, `fen` (property), `from_fen` (classmethod).
 
@@ -117,6 +129,42 @@ Full reference: `docs/configuration.md`. The commented default file shipped by `
 - `game.py` — `Game(BaseGame)` (built via `Game.local()`/`Game.remote()`) plus module-level challenge functions. The low-level `Game.__init__(*args, client=None, player_id=None, version=None, **kwargs)` is internal — use the factories. For remote games, `move`/`resign`/`draw_*` call the client (sending `player_id` + the tracked `version`) and pass the returned state to `_apply_state` (rebuilds the mirror board via `serialize.board_and_turn` from the FEN, updates `version`); `last_move` is a lightweight `_MoveMarker` for render highlighting. `legal_moves`/`pgn`/`history` proxy to the server when remote, or run the local engine otherwise.
   - Games are keyed by the composite `(group_id, white_id, black_id)` — all BIGINTs. `POST /v1/games` upserts-then-selects.
 - `client.py` — `ApiClient(base_url, session=None, api_key=None)`. Prefixes `/v1`, adds `X-API-Key` when set. `session` defaults to `requests.Session()` but can be **injected** (tests pass a FastAPI `TestClient`). `move()` → `dto.MoveResult`; `get_state`/`get_or_create_game`/`resign`/draw → `dto.GameState`; `legal_moves`/`history` → lists; `pgn`/`fen` → text; `image()` → PNG bytes. **Error mapping** covers both `engine.errors` and `db.errors`: `_build_error_registry` maps class name→class, and `_raise` reconstructs via `cls.__new__(cls); exc.args=(detail,)` so `except PromotionError`/`except VersionConflictError` work.
+
+### `play.py` — the terminal client (`chesssnake play`)
+
+The interactive session: a board, a prompt, and a command table. It is the **third
+way to drive the backend**, and it is built *on* `remote.Game` rather than beside it —
+`Session` talks only to a `Game` and never to HTTP, which is why **one loop plays both
+a local and a remote game**. Anything it does, the client could already do.
+
+- **`Session` takes its two streams as arguments** (`stdin=`, `stdout=`), which is the
+  whole reason this is not inside `cli.py`: `tests/unit/test_play.py` drives the real
+  loop against a real `Game.local()` with `io.StringIO`, so there is **no terminal, no
+  server and no subprocess** in those tests. Keep that property — do not reach for
+  `print()` or `input()` in here.
+- **Unknown input is a move.** `dispatch()` looks the first word up in `DISPATCH` and
+  otherwise hands the whole line to `game.move()`. That is why every command is a
+  lowercase word that cannot collide with algebraic notation.
+- **`actor()` decides whose action it is.** With `--me` it is always that player.
+  Without it, the default is *whoever is to move* — one person at one keyboard playing
+  both sides — except for `accept`/`decline`, which default to the **opponent of the
+  offerer**, since the side to move may well be the player who offered.
+- **`--me` turn-order enforcement is asymmetric, on purpose.** For a **remote** game the
+  server checks it and is the authority, so the session must not duplicate the rule. For
+  a **local** game there is no server to ask and `engine.Game.move()` takes no player id,
+  so `dispatch()` checks `is_players_turn` itself and raises `NotYourTurnError` —
+  otherwise `--me` would silently mean nothing offline.
+- **Errors are normal input.** `ChessError`, `GameError` and `ValueError` are caught per
+  line and printed; only a failure to *reach* the endpoint escapes, and `cli.py` turns
+  that into an exit with the URL in the message rather than a prompt that cannot work.
+- The game-over note fires **on the transition only** (`was_over` vs `is_over`); printing
+  it after every command turned the one line that matters into noise.
+- `cli.py`'s `_run_play` deliberately **never imports `config`**: a local game needs only
+  the core install, and a remote one needs only a URL, which `Game.remote` already reads
+  from `CHESSSNAKE__CLIENT__API_URL`. It hardcodes that variable name (argparse needs it
+  at parser-build time, and importing `remote` would pull Pillow into every
+  `config show`), with `test_play.py::test_cli_env_name_matches_the_client` keeping the
+  copy honest — the same pattern as `remote/game.py` and `db/errors.py`.
 
 ### `api/` — the server (tier 2, **owns the engine**)
 

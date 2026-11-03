@@ -15,6 +15,7 @@ from .move import Move
 from .notation import FILES, get_c_notation, get_coords, is_valid_c_notation
 from .pieces import Bishop, King, Knight, Pawn, Piece, Queen, Rook
 from .square import Square
+from .text import render_text
 
 __all__ = [
     "errors",
@@ -24,6 +25,7 @@ __all__ = [
     "Move",
     "Game",
     "render_board",
+    "render_text",
     "Color",
     "PieceType",
     "GameStatus",
