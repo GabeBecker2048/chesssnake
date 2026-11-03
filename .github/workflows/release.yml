@@ -1,0 +1,159 @@
+# Publish to PyPI when a GitHub release is published.
+#
+# Nothing here needs a secret. Publishing uses PyPI's Trusted Publishing (OIDC):
+# GitHub mints a short-lived identity token for this exact repository, workflow
+# and environment, and PyPI exchanges it for a one-off upload token. There is no
+# API token to store, leak or rotate. The one-time PyPI-side setup is in
+# docs/releasing.md.
+#
+# Triggered by the release being *published*, not by the tag being pushed, so a
+# draft release can be written up and reviewed first and nothing ships until the
+# Publish button. Pre-releases are included deliberately: marking a release as a
+# pre-release on GitHub publishes it to PyPI, where the version number (0.9.1rc1)
+# is what makes pip skip it unless asked.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+# Least privilege by default; the publish job adds the id-token it needs.
+permissions:
+  contents: read
+
+jobs:
+  # The tag is the only thing a human types during a release, and typing it
+  # wrong is the easy mistake: tagging v0.9.2 while pyproject still says 0.9.1
+  # would publish 0.9.1 again (PyPI rejects it) or, worse, publish something
+  # nobody expected. Fail here, before anything is built.
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: The tag must match the version in pyproject.toml
+        id: check
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          project="$(uv run --no-project --with tomli python -c '
+          import tomli, pathlib
+          print(tomli.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])
+          ')"
+          tag="${TAG#v}"
+          echo "pyproject: $project"
+          echo "tag:       $tag"
+          if [ "$project" != "$tag" ]; then
+            echo "::error::Tag '$TAG' does not match pyproject.toml version '$project'." \
+                 "Bump the version and VersionHistory.md, or retag."
+            exit 1
+          fi
+          echo "version=$project" >> "$GITHUB_OUTPUT"
+
+  # ci.yml runs on pushes to main and on pull requests, neither of which covers
+  # "the exact tree this tag points at". A release is the one build where being
+  # sure is worth a couple of minutes, so the gate runs again here.
+  test:
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Lint and types
+        run: |
+          uv run ruff check
+          uv run ruff format --check
+          uv run mypy
+      - name: Full suite, both backends, with the coverage gate
+        run: uv run --extra api --extra client --extra postgres --group pg pytest --cov --cov-fail-under=75
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Build the sdist and wheel
+        run: uv build
+      # twine's check catches a README that PyPI will refuse to render, which is
+      # otherwise only discovered after the upload has already succeeded.
+      - name: Check the metadata renders
+        run: uv run --no-project --with twine twine check dist/*
+      # Prove the wheel is installable and the console script works from it,
+      # rather than from the source tree the tests ran against. This is what
+      # would have caught a missing package-data entry before shipping.
+      - name: The built wheel actually works
+        run: |
+          set -euo pipefail
+          uv venv /tmp/relcheck
+          uv pip install --python /tmp/relcheck/bin/python dist/*.whl
+          /tmp/relcheck/bin/chesssnake --help > /dev/null
+          /tmp/relcheck/bin/python -c "
+          import os
+          from chesssnake import Game
+          from chesssnake.assets import asset_path
+          g = Game.local(white_name='a', black_name='b')
+          g.move('e4')
+          assert g.fen.startswith('rnbqkbnr/pppppppp/8/8/4P3'), g.fen
+          # asset_path returns a str. Every packaged data kind is checked, because
+          # a missing package-data entry is invisible until a user hits it.
+          for asset in ('img/template.png', 'img/blankboard.png', 'Roboto-Black.ttf', 'chesssnake.toml'):
+              assert os.path.isfile(asset_path(asset)), f'{asset} is missing from the wheel'
+          # render() composites the piece PNGs and loads the font, so it exercises
+          # the packaged data rather than just asserting the files are present.
+          g.render()  # actually composite the piece images
+          print('wheel ok')
+          "
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Named so PyPI's trusted publisher can be scoped to it, and so you can add
+    # a required reviewer in Settings -> Environments if you ever want releases
+    # to pause for a human.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/chesssnake
+    permissions:
+      id-token: write # mint the OIDC token Trusted Publishing exchanges
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No `skip-existing`: re-publishing a version that is already on PyPI
+        # should fail loudly rather than succeed quietly and leave you thinking
+        # the new code shipped.
+
+  # Attach the exact files that were uploaded to the GitHub release, so what is
+  # on PyPI and what is on the release page are provably the same artifacts.
+  attach:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Attach the sdist and wheel to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
