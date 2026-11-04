@@ -1095,6 +1095,79 @@ def current_games(player_id, group_id=None):
         return [_game_dict(r, finished=False) for r in conn.execute(stmt).mappings()]
 
 
+#: The most rows one listing call returns (``limit`` is clamped to it).
+LIST_LIMIT_MAX = 200
+
+
+def _validate_limit(limit):
+    if isinstance(limit, bool) or not isinstance(limit, int) or not (1 <= limit <= LIST_LIMIT_MAX):
+        raise errors.UserValidationError(f"limit must be 1 to {LIST_LIMIT_MAX}")
+
+
+def games_live(limit=50):
+    """
+    Every game in progress, in any group, most recently changed first.
+
+    What a spectator browses: any logged-in user may read any game.
+    """
+    _validate_limit(limit)
+    stmt = _active_query().order_by(games.c.updated_at.desc(), games.c.id.desc()).limit(limit)
+    with transaction() as conn:
+        return [_game_dict(r, finished=False) for r in conn.execute(stmt).mappings()]
+
+
+def games_finished(player_id=None, limit=50, before=None):
+    """
+    Archived games, newest first (by id, which only increases).
+
+    :param player_id: Only games this user played, either colour; ``None`` for all.
+    :param before: Only games with an id below this one: pass the last id of a
+        page to get the next.
+    """
+    _validate_limit(limit)
+    validate_ids(*(x for x in (player_id, before) if x is not None))
+    stmt = _finished_query()
+    if player_id is not None:
+        stmt = stmt.where((finished_games.c.white_id == player_id) | (finished_games.c.black_id == player_id))
+    if before is not None:
+        stmt = stmt.where(finished_games.c.id < before)
+    stmt = stmt.order_by(finished_games.c.id.desc()).limit(limit)
+    with transaction() as conn:
+        return [_game_dict(r, finished=True) for r in conn.execute(stmt).mappings()]
+
+
+def users_search(prefix="", limit=20, offset=0):
+    """
+    Users whose name starts with ``prefix`` (ignoring case), ordered by name.
+
+    ``%`` and ``_`` in the prefix match themselves, not anything. An empty prefix
+    lists everyone, a page at a time.
+    """
+    _validate_limit(limit)
+    if not isinstance(prefix, str) or len(prefix) > 64:
+        raise errors.UserValidationError("The search text must be at most 64 characters")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise errors.UserValidationError("offset must be 0 or more")
+    stmt = select(*_USER_COLUMNS)
+    if prefix:
+        stmt = stmt.where(func.lower(users.c.username).startswith(prefix.lower(), autoescape=True))
+    stmt = stmt.order_by(func.lower(users.c.username), users.c.id).limit(limit).offset(offset)
+    with transaction() as conn:
+        rows = list(conn.execute(stmt).mappings())
+        found: dict[int, list] = {int(r["id"]): [] for r in rows}
+        if found:
+            ids_stmt = (
+                select(user_identities.c.user_id, user_identities.c.provider, user_identities.c.external_id)
+                .where(user_identities.c.user_id.in_(list(found)))
+                .order_by(user_identities.c.provider, user_identities.c.external_id)
+            )
+            for ident in conn.execute(ids_stmt).mappings():
+                found[int(ident["user_id"])].append(
+                    {"provider": ident["provider"], "external_id": ident["external_id"]}
+                )
+    return [_user_dict(r, found[int(r["id"])]) for r in rows]
+
+
 def game_record(player1, player2, group_id=0):
     """
     Win/draw/loss record between two players across all their finished games

@@ -1,7 +1,8 @@
 # Guide
 
 Everything beyond the [README](../README.md): the Python API, running games
-through an api-endpoint, playing in a terminal, and deploying with Docker.
+through an api-endpoint, playing in a terminal, and deploying with Docker. Playing
+in a browser has its own page: [the web UI](web-ui.md).
 
 - [The Python API](#the-python-api)
 - [Inspecting game state](#inspecting-game-state)
@@ -431,8 +432,8 @@ against a server still initialising.
 
 ### Exposing it
 
-Every route but `/health` needs a login, so make the first administrator before
-anyone else needs it:
+Every route but `/health` needs a login (the web UI at `/` is a login page until
+you have one), so make the first administrator before anyone else needs it:
 
 ```sh
 docker compose exec chesssnake chesssnake user create yourname --admin

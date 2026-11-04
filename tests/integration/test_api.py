@@ -367,3 +367,19 @@ def test_record(api_client, pair):
 def test_invalid_id_returns_422(api_client, pair):
     resp = api_client.post("/v1/games", json={"group_id": 0, "white_id": 10**19, "black_id": pair[1]})
     assert resp.status_code == 422 and resp.json()["error_type"] == "SQLIdError"
+
+
+def test_a_move_with_its_check_suffix_is_accepted(api_client, game):
+    """The history records "Bb4+"; posting it back used to be a 500."""
+    for mv in ["e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "c3", "Nf6", "d4", "exd4", "cxd4"]:
+        assert api_client.post(f"{game}/moves", json={"move": mv}).status_code == 200
+    resp = api_client.post(f"{game}/moves", json={"move": "Bb4+"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["san"] == "Bb4+" and resp.json()["check"] is True
+
+
+@pytest.mark.parametrize("move", ["K+", "#+", "b+", "eQ"])
+def test_malformed_moves_are_a_400_not_a_500(api_client, game, move):
+    resp = api_client.post(f"{game}/moves", json={"move": move})
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error_type"] == "InvalidNotationError"

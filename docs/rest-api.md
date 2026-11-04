@@ -18,6 +18,7 @@ out, every response you can get, and how a client is expected to interpret them.
 - [Acting in a game](#acting-in-a-game)
 - [Endpoints](#endpoints)
   - [Health](#get-health)
+  - [Server information](#get-v1info)
   - [Accounts and tokens](#accounts-and-tokens)
   - [Users](#users)
   - [Challenges](#challenges)
@@ -125,7 +126,7 @@ Two roles: **user** and **admin**.
 
 | | anonymous | user | admin |
 |---|---|---|---|
-| `GET /health`, log in | yes | yes | yes |
+| `GET /health`, `GET /v1/info`, log in | yes | yes | yes |
 | register | only if `registration = "open"` | n/a | n/a |
 | read users, games, records, PGN, images | no | yes, any | yes |
 | move, offer or answer a draw, resign | no | as themselves, in their own games | as any player |
@@ -376,6 +377,22 @@ Liveness probe. Unversioned and never authenticated.
 
 ---
 
+### `GET /v1/info`
+
+What a client needs to know before it has an account. No token needed.
+
+- **Response** `200 OK`:
+
+  ```json
+  { "version": "0.14.0", "registration": "closed", "websocket": true }
+  ```
+
+- `registration` is `"open"` when anyone may `POST /v1/auth/register`.
+- `websocket` says whether [`/v1/ws`](realtime-websockets.md) is served. When it
+  is `false`, poll instead.
+
+---
+
 ### Accounts and tokens
 
 | Route | Body | Response | Notes |
@@ -397,6 +414,7 @@ Liveness probe. Unversioned and never authenticated.
 |---|---|---|---|
 | `POST /v1/users` | admin | `{username, password?, role?}` | `201 User`. Without a password the account can only use api tokens. |
 | `GET /v1/users?username=` | any | | `200 User` (case does not matter), `404` if none |
+| `GET /v1/users/search?q=&limit=20&offset=0` | any | | `200 {"users": [User]}`: names starting with `q`, ignoring case, ordered by name. An empty `q` lists everyone. `limit` is 1 to 200. |
 | `GET /v1/users/{id}` | any | | `200 User` |
 | `PATCH /v1/users/{id}` | self: `username`; admin: also `role`, `disabled`, `password` | any subset | `200 User`. A non-admin changing anything else, or another account, gets `403`. |
 | `GET /v1/users/{provider}/{external_id}` | admin | | `200 User` linked to that external id, `404` if none |
@@ -471,6 +489,18 @@ player, `422` if both players are the same user.
 
 Games in progress, most recently changed first: `{ "games": [GameState] }`.
 Without `player_id`, your own; without `group_id`, in every group.
+
+#### `GET /v1/games/live?limit=50`
+
+Every game in progress, in **any** group and between any players, most recently
+changed first: `{ "games": [GameState] }`. This is what spectators browse. `limit`
+is 1 to 200.
+
+#### `GET /v1/games/finished?player_id=&limit=50&before=`
+
+Finished games, newest first: `{ "games": [GameState] }`. With `player_id`, only
+that player's games (either colour). To page back, pass the last id you got as
+`before`. `limit` is 1 to 200.
 
 #### `GET /v1/games/between?player1=&player2=&group_id=0&status=all`
 

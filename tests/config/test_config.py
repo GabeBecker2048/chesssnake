@@ -20,6 +20,7 @@ EXPECTED_ENV_NAMES = {
     ("api", "registration"): "CHESSSNAKE__API__REGISTRATION",
     ("api", "session_lifetime_days"): "CHESSSNAKE__API__SESSION_LIFETIME_DAYS",
     ("database", "url"): "CHESSSNAKE__DATABASE__URL",
+    ("web", "enabled"): "CHESSSNAKE__WEB__ENABLED",
     ("database", "pool_min_size"): "CHESSSNAKE__DATABASE__POOL_MIN_SIZE",
     ("database", "pool_max_size"): "CHESSSNAKE__DATABASE__POOL_MAX_SIZE",
     ("database", "init_schema"): "CHESSSNAKE__DATABASE__INIT_SCHEMA",
@@ -82,6 +83,8 @@ def test_defaults():
     assert settings.websocket.enabled is False
     assert settings.websocket.allowed_origins == ["*"]
     assert settings.websocket.compression is False
+    # The web UI, unlike websockets, is on unless turned off.
+    assert settings.web.enabled is True
 
 
 # --- Precedence ------------------------------------------------------------

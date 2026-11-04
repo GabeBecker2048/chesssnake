@@ -230,6 +230,16 @@ class WebsocketSettings(_Section):
         return origin.strip().lower().rstrip("/") in self.allowed_origins
 
 
+class WebSettings(_Section):
+    """The browser frontend, served at ``/`` by the api-endpoint. On unless disabled."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Serve the web UI at / (it uses /v1/ws for live updates when websockets are enabled, "
+        "and polls otherwise).",
+    )
+
+
 class ClientSettings(_Section):
     """
     Fallbacks for remote :class:`chesssnake.Game` clients.
@@ -260,6 +270,7 @@ class Settings(BaseModel):
     api: ApiSettings = ApiSettings()
     database: DatabaseSettings = DatabaseSettings()
     websocket: WebsocketSettings = WebsocketSettings()
+    web: WebSettings = WebSettings()
     client: ClientSettings = ClientSettings()
 
     def advisories(self) -> list[str]:
