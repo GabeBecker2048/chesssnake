@@ -18,6 +18,7 @@ out, every response you can get, and how a client is expected to interpret them.
 - [Acting in a game](#acting-in-a-game)
 - [Endpoints](#endpoints)
   - [Health](#get-health)
+  - [Server information](#get-v1info)
   - [Accounts and tokens](#accounts-and-tokens)
   - [Users](#users)
   - [Challenges](#challenges)
@@ -125,7 +126,7 @@ Two roles: **user** and **admin**.
 
 | | anonymous | user | admin |
 |---|---|---|---|
-| `GET /health`, log in | yes | yes | yes |
+| `GET /health`, `GET /v1/info`, log in | yes | yes | yes |
 | register | only if `registration = "open"` | n/a | n/a |
 | read users, games, records, PGN, images | no | yes, any | yes |
 | move, offer or answer a draw, resign | no | as themselves, in their own games | as any player |
@@ -376,6 +377,22 @@ Liveness probe. Unversioned and never authenticated.
 
 ---
 
+### `GET /v1/info`
+
+What a client needs to know before it has an account. No token needed.
+
+- **Response** `200 OK`:
+
+  ```json
+  { "version": "0.14.0", "registration": "closed", "websocket": true }
+  ```
+
+- `registration` is `"open"` when anyone may `POST /v1/auth/register`.
+- `websocket` says whether [`/v1/ws`](realtime-websockets.md) is served. When it
+  is `false`, poll instead.
+
+---
+
 ### Accounts and tokens
 
 | Route | Body | Response | Notes |
@@ -388,6 +405,15 @@ Liveness probe. Unversioned and never authenticated.
 | `POST /v1/auth/tokens` | `{name, current_password, expires_in_days?}` | `201 LoginResult` | An api token. `name` 1 to 64 characters; `expires_in_days` 1 to 3650, or omit for none. |
 | `GET /v1/auth/tokens` | | `200 {"tokens": [TokenInfo]}` | Your tokens. Admins may add `?user_id=`. |
 | `DELETE /v1/auth/tokens/{id}` | | `204` | Your own token (admins: any). `404` otherwise. |
+| `GET /v1/auth/settings` | | `200 {name: value}` | Your settings, every one with its default filled in: `{"auto_queen": false}`. |
+| `PATCH /v1/auth/settings` | `{name: value, ...}` | `200 {name: value}` | Change some; the rest keep their values. `422` for an unknown name or a value of the wrong type (`1` is not `true`). |
+
+Settings are personal and kept on the server so they follow you to every client.
+The server only stores them; what they do is up to the client. Today there is one:
+
+| Setting | Type | Default | Meaning |
+|---|---|---|---|
+| `auto_queen` | boolean | `false` | The web UI promotes a pawn to a queen without asking which piece. |
 
 ---
 
@@ -397,12 +423,13 @@ Liveness probe. Unversioned and never authenticated.
 |---|---|---|---|
 | `POST /v1/users` | admin | `{username, password?, role?}` | `201 User`. Without a password the account can only use api tokens. |
 | `GET /v1/users?username=` | any | | `200 User` (case does not matter), `404` if none |
+| `GET /v1/users/search?q=&limit=20&offset=0` | any | | `200 {"users": [User]}`: names starting with `q`, ignoring case, ordered by name. An empty `q` lists everyone. `limit` is 1 to 200. |
 | `GET /v1/users/{id}` | any | | `200 User` |
 | `PATCH /v1/users/{id}` | self: `username`; admin: also `role`, `disabled`, `password` | any subset | `200 User`. A non-admin changing anything else, or another account, gets `403`. |
 | `GET /v1/users/{provider}/{external_id}` | admin | | `200 User` linked to that external id, `404` if none |
 | `POST /v1/users/{provider}/{external_id}` | admin | `{username}` | `200 User`: the linked user, **created** (with that username, no password) on first use. Idempotent: the one call a bot needs per interaction. |
 | `PUT /v1/users/{id}/identities/{provider}/{external_id}` | admin | | `200 User`. `409` if that external id belongs to someone else. Linking again is a no-op. |
-| `DELETE /v1/users/{id}/identities/{provider}/{external_id}` | admin | | `200 User` |
+| `DELETE /v1/users/{id}/identities/{provider}/{external_id}` | admin, or the user themselves | | `200 User`. A user may unlink their own ids but never link one: linking asserts the external account is theirs, which only a trusted bot or an admin can vouch for. |
 
 `provider` is a short lowercase name of your choosing (`[a-z0-9_-]`, up to 32
 characters); `external_id` is any token up to 128 characters, stored as text, so
@@ -471,6 +498,18 @@ player, `422` if both players are the same user.
 
 Games in progress, most recently changed first: `{ "games": [GameState] }`.
 Without `player_id`, your own; without `group_id`, in every group.
+
+#### `GET /v1/games/live?limit=50`
+
+Every game in progress, in **any** group and between any players, most recently
+changed first: `{ "games": [GameState] }`. This is what spectators browse. `limit`
+is 1 to 200.
+
+#### `GET /v1/games/finished?player_id=&limit=50&before=`
+
+Finished games, newest first: `{ "games": [GameState] }`. With `player_id`, only
+that player's games (either colour). To page back, pass the last id you got as
+`before`. `limit` is 1 to 200.
 
 #### `GET /v1/games/between?player1=&player2=&group_id=0&status=all`
 

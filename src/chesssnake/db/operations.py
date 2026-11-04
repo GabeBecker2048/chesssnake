@@ -29,6 +29,7 @@ transaction that the hash it was verified against is still the current one.
 """
 
 import hashlib
+import json
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -39,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import errors
 from .engine import backend, locked_transaction, transaction
-from .schema import auth_tokens, challenges, finished_games, games, moves, user_identities, users
+from .schema import auth_tokens, challenges, finished_games, games, moves, user_identities, user_settings, users
 
 #: PostgreSQL BIGINT bounds. SQLite's INTEGER is also a signed 64-bit value, so
 #: the same range applies to both backends.
@@ -699,6 +700,87 @@ def identity_unlink(user_id, provider, external_id):
         return _load_user(conn, _require_user(conn, user_id))
 
 
+# --- User settings -----------------------------------------------------------
+
+#: Every per-user setting and its default. The type of the default is the
+#: setting's type, checked exactly (``True`` is not an int here, nor 1 a bool).
+#: Adding one is adding a line: they live in one JSON column, so it is not a
+#: schema change. Only clients act on them; the server just keeps them.
+USER_SETTING_DEFAULTS: dict[str, Any] = {
+    "auto_queen": False,  # the web UI promotes pawns to a queen without asking
+}
+
+
+def _settings_with_defaults(stored):
+    settings = dict(USER_SETTING_DEFAULTS)
+    for name, value in (stored or {}).items():
+        # A setting since removed, or a value of the wrong type, falls back to the default.
+        if name in settings and type(value) is type(settings[name]):
+            settings[name] = value
+    return settings
+
+
+def user_settings_get(user_id):
+    """
+    Return a user's settings: every setting, defaults filled in.
+
+    :raises errors.UserNotFoundError: If there is no such user.
+    """
+    validate_ids(user_id)
+    with transaction() as conn:
+        _require_user(conn, user_id)
+        raw = conn.execute(select(user_settings.c.settings).where(user_settings.c.user_id == user_id)).scalar()
+    return _settings_with_defaults(json.loads(raw) if raw else {})
+
+
+def user_settings_update(user_id, changes):
+    """
+    Change some of a user's settings; the others keep their values.
+
+    :param changes: ``{name: value}``; every name must be a known setting and
+        every value of that setting's type.
+    :return: All the user's settings afterwards, defaults filled in.
+    :raises errors.UserValidationError: On an unknown setting or a wrong type.
+    :raises errors.UserNotFoundError: If there is no such user.
+    """
+    validate_ids(user_id)
+    if not isinstance(changes, dict):
+        raise errors.UserValidationError("Settings must be an object of {name: value}")
+    for name, value in changes.items():
+        if name not in USER_SETTING_DEFAULTS:
+            raise errors.UserValidationError(
+                f"Unknown setting {name!r}; known: {', '.join(sorted(USER_SETTING_DEFAULTS))}"
+            )
+        wanted = type(USER_SETTING_DEFAULTS[name])
+        if type(value) is not wanted:
+            raise errors.UserValidationError(f"Setting {name!r} must be a {wanted.__name__}")
+    now = _utcnow()
+    # A read-modify-write: two changes to different settings at once must both land.
+    with locked_transaction() as conn:
+        _require_user(conn, user_id)
+        # Make sure the row exists, so there is something to lock on PostgreSQL
+        # (FOR UPDATE locks rows, not their absence); SQLite's BEGIN IMMEDIATE
+        # already serializes the whole thing.
+        conn.execute(
+            backend()
+            .insert(user_settings)
+            .values(user_id=user_id, settings="{}", updated_at=now)
+            .on_conflict_do_nothing(index_elements=["user_id"])
+        )
+        raw = conn.execute(
+            select(user_settings.c.settings).where(user_settings.c.user_id == user_id).with_for_update()
+        ).scalar()
+        stored = json.loads(raw) if raw else {}
+        stored = {name: value for name, value in stored.items() if name in USER_SETTING_DEFAULTS}
+        stored.update(changes)
+        conn.execute(
+            update(user_settings)
+            .where(user_settings.c.user_id == user_id)
+            .values(settings=json.dumps(stored, sort_keys=True), updated_at=now)
+        )
+    return _settings_with_defaults(stored)
+
+
 def user_get_or_create_by_identity(provider, external_id, username):
     """
     Return the user linked to an external id, creating user and link if there is none.
@@ -1093,6 +1175,79 @@ def current_games(player_id, group_id=None):
     stmt = stmt.order_by(games.c.updated_at.desc(), games.c.id.desc())
     with transaction() as conn:
         return [_game_dict(r, finished=False) for r in conn.execute(stmt).mappings()]
+
+
+#: The most rows one listing call returns (``limit`` is clamped to it).
+LIST_LIMIT_MAX = 200
+
+
+def _validate_limit(limit):
+    if isinstance(limit, bool) or not isinstance(limit, int) or not (1 <= limit <= LIST_LIMIT_MAX):
+        raise errors.UserValidationError(f"limit must be 1 to {LIST_LIMIT_MAX}")
+
+
+def games_live(limit=50):
+    """
+    Every game in progress, in any group, most recently changed first.
+
+    What a spectator browses: any logged-in user may read any game.
+    """
+    _validate_limit(limit)
+    stmt = _active_query().order_by(games.c.updated_at.desc(), games.c.id.desc()).limit(limit)
+    with transaction() as conn:
+        return [_game_dict(r, finished=False) for r in conn.execute(stmt).mappings()]
+
+
+def games_finished(player_id=None, limit=50, before=None):
+    """
+    Archived games, newest first (by id, which only increases).
+
+    :param player_id: Only games this user played, either colour; ``None`` for all.
+    :param before: Only games with an id below this one: pass the last id of a
+        page to get the next.
+    """
+    _validate_limit(limit)
+    validate_ids(*(x for x in (player_id, before) if x is not None))
+    stmt = _finished_query()
+    if player_id is not None:
+        stmt = stmt.where((finished_games.c.white_id == player_id) | (finished_games.c.black_id == player_id))
+    if before is not None:
+        stmt = stmt.where(finished_games.c.id < before)
+    stmt = stmt.order_by(finished_games.c.id.desc()).limit(limit)
+    with transaction() as conn:
+        return [_game_dict(r, finished=True) for r in conn.execute(stmt).mappings()]
+
+
+def users_search(prefix="", limit=20, offset=0):
+    """
+    Users whose name starts with ``prefix`` (ignoring case), ordered by name.
+
+    ``%`` and ``_`` in the prefix match themselves, not anything. An empty prefix
+    lists everyone, a page at a time.
+    """
+    _validate_limit(limit)
+    if not isinstance(prefix, str) or len(prefix) > 64:
+        raise errors.UserValidationError("The search text must be at most 64 characters")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise errors.UserValidationError("offset must be 0 or more")
+    stmt = select(*_USER_COLUMNS)
+    if prefix:
+        stmt = stmt.where(func.lower(users.c.username).startswith(prefix.lower(), autoescape=True))
+    stmt = stmt.order_by(func.lower(users.c.username), users.c.id).limit(limit).offset(offset)
+    with transaction() as conn:
+        rows = list(conn.execute(stmt).mappings())
+        found: dict[int, list] = {int(r["id"]): [] for r in rows}
+        if found:
+            ids_stmt = (
+                select(user_identities.c.user_id, user_identities.c.provider, user_identities.c.external_id)
+                .where(user_identities.c.user_id.in_(list(found)))
+                .order_by(user_identities.c.provider, user_identities.c.external_id)
+            )
+            for ident in conn.execute(ids_stmt).mappings():
+                found[int(ident["user_id"])].append(
+                    {"provider": ident["provider"], "external_id": ident["external_id"]}
+                )
+    return [_user_dict(r, found[int(r["id"])]) for r in rows]
 
 
 def game_record(player1, player2, group_id=0):

@@ -61,6 +61,11 @@ class Move:
         # castling may be written with zeros (0-0) or the letter O (O-O); no other move
         # token contains the letter 'O', so normalizing it to '0' is safe.
         move = move.replace("O", "0")
+        # A check or mate suffix ("Bb4+", "Qxf7#") is how the history records a move,
+        # and is_valid_c_notation accepts one, but it says nothing about which move
+        # it is. Parsing it as the destination's rank raised ValueError (a 500 over
+        # REST) for any move copied from the history with its suffix.
+        move = move.rstrip("+#")
 
         # regular movement (not castling)
         if move != "0-0" and move != "0-0-0":

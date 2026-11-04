@@ -55,6 +55,11 @@ class World:
 # 401 everywhere except where a row says otherwise.
 ROUTES = [
     ("GET", "/health", None, {"anon": OK, "outsider": OK, "player": OK, "admin": OK}),
+    # The web UI's page: a static file, and only a client of the routes below.
+    ("GET", "/", None, {"anon": OK, "outsider": OK, "player": OK, "admin": OK}),
+    ("HEAD", "/", None, {"anon": OK, "outsider": OK, "player": OK, "admin": OK}),
+    # What a client must know before it has an account (can it register; is there a websocket).
+    ("GET", "/v1/info", None, {"anon": OK, "outsider": OK, "player": OK, "admin": OK}),
     (
         "POST",
         "/v1/auth/login",
@@ -82,15 +87,19 @@ ROUTES = [
         {"outsider": OK, "player": OK, "admin": 401},
     ),
     ("GET", "/v1/auth/tokens", None, {"outsider": OK, "player": OK, "admin": OK}),
+    ("GET", "/v1/auth/settings", None, {"outsider": OK, "player": OK, "admin": OK}),
+    ("PATCH", "/v1/auth/settings", {"auto_queen": True}, {"outsider": OK, "player": OK, "admin": OK}),
     ("DELETE", "/v1/auth/tokens/{token}", None, {"outsider": 404, "player": OK, "admin": OK}),
     ("POST", "/v1/users", {"username": "dee"}, {"outsider": 403, "player": 403, "admin": OK}),
     ("GET", "/v1/users?username=alice", None, {"outsider": OK, "player": OK, "admin": OK}),
+    ("GET", "/v1/users/search?q=al", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/users/{alice}", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("PATCH", "/v1/users/{alice}", {"username": "alice2"}, {"outsider": 403, "player": OK, "admin": OK}),
     ("GET", "/v1/users/discord/1", None, {"outsider": 403, "player": 403, "admin": OK}),
     ("POST", "/v1/users/discord/2", {"username": "dee"}, {"outsider": 403, "player": 403, "admin": OK}),
     ("PUT", "/v1/users/{alice}/identities/discord/3", None, {"outsider": 403, "player": 403, "admin": OK}),
-    ("DELETE", "/v1/users/{alice}/identities/discord/1", None, {"outsider": 403, "player": 403, "admin": OK}),
+    # Unlinking: your own (alice is the player), or anyone's as an admin. Linking stays admin-only.
+    ("DELETE", "/v1/users/{alice}/identities/discord/1", None, {"outsider": 403, "player": OK, "admin": OK}),
     (
         "POST",
         "/v1/challenges",
@@ -110,6 +119,8 @@ ROUTES = [
     ),
     ("GET", "/v1/games", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/games/between?player1={alice}&player2={alice}", None, {"outsider": OK, "player": OK, "admin": OK}),
+    ("GET", "/v1/games/live", None, {"outsider": OK, "player": OK, "admin": OK}),
+    ("GET", "/v1/games/finished?player_id={alice}", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/games/record?player1={alice}&player2={alice}", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/games/{game}", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("DELETE", "/v1/games/{game}", None, {"outsider": 403, "player": 403, "admin": OK}),
@@ -162,9 +173,9 @@ def test_every_route_is_classified():
     assert classified - declared == set(), "rows for routes that no longer exist"
 
 
-def test_only_health_login_and_register_are_open():
+def test_only_health_info_login_register_and_the_page_are_open():
     public = {path for _m, path, _b, expect in ROUTES if expect.get("anon", 401) != 401}
-    assert public == {"/health", "/v1/auth/login", "/v1/auth/register"}
+    assert public == {"/", "/health", "/v1/info", "/v1/auth/login", "/v1/auth/register"}
 
 
 @pytest.mark.parametrize("role", ROLES)
