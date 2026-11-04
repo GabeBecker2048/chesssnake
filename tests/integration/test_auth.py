@@ -349,3 +349,16 @@ def test_a_saturated_pool_while_authenticating_is_503_not_401(api_client, monkey
     monkeypatch.setattr(db_engine, "get_engine", exhausted)
     resp = api_client.get("/v1/auth/me")
     assert resp.status_code == 503 and resp.json()["error_type"] == "SQLBusyError"
+
+
+def test_a_user_can_unlink_their_own_ids_but_not_link_any(api_client, users, as_user):
+    """Linking proves nothing when you claim it yourself, so only admins (a bot) link; unlinking gives a claim up."""
+    alice, bob = users("alice", "bob")
+    api_client.put(f"/v1/users/{alice}/identities/discord/42")
+    api_client.put(f"/v1/users/{bob}/identities/discord/43")
+    # Not someone else's, and never linking, even to yourself.
+    assert api_client.delete(f"/v1/users/{bob}/identities/discord/43", headers=as_user(alice)).status_code == 403
+    assert api_client.put(f"/v1/users/{alice}/identities/discord/44", headers=as_user(alice)).status_code == 403
+    resp = api_client.delete(f"/v1/users/{alice}/identities/discord/42", headers=as_user(alice))
+    assert resp.status_code == 200 and resp.json()["identities"] == []
+    assert api_client.get(f"/v1/users/{bob}").json()["identities"] == [{"provider": "discord", "external_id": "43"}]

@@ -20,8 +20,3 @@ contents of a version may change before it ships. Shipped versions are in
 - Last bugs and optimizations before the stable release.
 - Last chance for large API changes. After this, a refactor that breaks
   backwards compatibility needs a major version bump.
-
-## 0.14.0 - possible
-
-- Web UI frontend (vibe coded as h*ll).
-- Depends on auth and websockets being settled, so it comes after both.

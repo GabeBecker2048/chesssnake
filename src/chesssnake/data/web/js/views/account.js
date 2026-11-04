@@ -1,12 +1,15 @@
-// Your account: password, logins and api tokens, and logging out.
+// Your account: preferences, linked accounts, password, logins and api tokens,
+// and logging out.
 
 import { del, get, post } from "../api.js";
+import { setting, updateSettings } from "../settings.js";
 import { confirmAction, formatDate, h, replace, revealSecret, showError, toast } from "../ui.js";
 
 export const NAV = "account";
 
 export async function render(main, _params, ctx) {
   const tokens = h("div", { class: "table-wrap" });
+  const linked = h("div", { class: "rows" });
 
   replace(
     main,
@@ -28,6 +31,14 @@ export async function render(main, _params, ctx) {
       h(
         "aside",
         {},
+        preferences(),
+        h(
+          "div",
+          { class: "card" },
+          h("h2", {}, "Linked accounts"),
+          h("p", { class: "muted small" }, "Other accounts that are you, such as Discord: a bot that knows one plays as you. An administrator links them (or a bot's /link command); you can unlink any here."),
+          linked,
+        ),
         passwordForm(),
         h(
           "div",
@@ -47,6 +58,65 @@ export async function render(main, _params, ctx) {
       // gone already: logging out locally is what matters
     }
     ctx.signOut();
+  }
+
+  function preferences() {
+    const autoQueen = h("input", {
+      type: "checkbox",
+      name: "auto_queen",
+      checked: Boolean(setting("auto_queen")),
+      onchange: async () => {
+        const wanted = autoQueen.checked;
+        autoQueen.disabled = true;
+        try {
+          await updateSettings({ auto_queen: wanted });
+          toast(wanted ? "Pawns now promote to a queen automatically" : "You will choose each promotion");
+        } catch (err) {
+          autoQueen.checked = !wanted; // not saved: show what is really in force
+          showError(err);
+        } finally {
+          autoQueen.disabled = false;
+        }
+      },
+    });
+    return h(
+      "div",
+      { class: "card" },
+      h("h2", {}, "Preferences"),
+      h(
+        "label",
+        { class: "check" },
+        autoQueen,
+        h("span", {}, h("strong", {}, "Auto-queen"), h("span", { class: "muted small" }, "Promote pawns to a queen without asking. Off: you pick the piece.")),
+      ),
+      h("p", { class: "muted small" }, "Saved to your account, so it applies in every browser."),
+    );
+  }
+
+  async function loadLinked() {
+    const me = await get("/auth/me");
+    replace(linked);
+    if (!me.identities.length) linked.append(h("p", { class: "muted small" }, "None."));
+    for (const identity of me.identities) {
+      const label = `${identity.provider}: ${identity.external_id}`;
+      linked.append(
+        h(
+          "div",
+          { class: "row" },
+          h("span", { class: "grow identity" }, label),
+          h("button", { class: "small danger", onclick: async () => {
+            if (!(await confirmAction(`Unlink ${label}?`, "A bot that knows this account will no longer play as you. Only an administrator can link it again.", "Unlink"))) return;
+            try {
+              await del(`/users/${ctx.me.id}/identities/${encodeURIComponent(identity.provider)}/${encodeURIComponent(identity.external_id)}`);
+              toast(`Unlinked ${label}`);
+            } catch (err) {
+              showError(err);
+            }
+            loadLinked();
+          } }, "Unlink"),
+        ),
+      );
+    }
   }
 
   async function loadTokens() {
@@ -149,5 +219,5 @@ export async function render(main, _params, ctx) {
     );
   }
 
-  await loadTokens();
+  await Promise.all([loadTokens(), loadLinked()]);
 }

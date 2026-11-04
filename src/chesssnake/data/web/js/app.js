@@ -2,6 +2,7 @@
 
 import { LOGGED_OUT, clearToken, get, token } from "./api.js";
 import { live } from "./live.js";
+import { clearSettings, loadSettings } from "./settings.js";
 import { Scope, go, match } from "./router.js";
 import { h, replace, toast } from "./ui.js";
 import * as account from "./views/account.js";
@@ -83,8 +84,9 @@ async function route() {
   }
 }
 
-function signedIn(user) {
+async function signedIn(user) {
   ctx.me = user;
+  await loadSettings();
   live.start(ctx.info);
   drawTopBar();
   go(location.hash && location.hash !== "#/login" ? location.hash : "#/");
@@ -93,6 +95,7 @@ function signedIn(user) {
 function signOut(message) {
   clearToken();
   live.stop();
+  clearSettings();
   ctx.me = null;
   drawTopBar();
   if (message) toast(message, { kind: "error" });
@@ -130,6 +133,7 @@ async function boot() {
   if (token()) {
     try {
       ctx.me = await get("/auth/me");
+      await loadSettings();
       live.start(ctx.info);
     } catch {
       ctx.me = null; // a 401 cleared the token; anything else, log in again

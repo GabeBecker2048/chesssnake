@@ -1,41 +1,45 @@
 /* chesssnake web UI. No framework: tokens on :root, light and dark. */
 
+/* Colours from the logo: its two board tans (#ffce9e, #d18b47) and black
+   outline. The tans themselves are too light for text, so the accent is a
+   deeper brown of the same hue in light mode and a lighter tan in dark mode;
+   every text pairing below is at least 4.5:1 (WCAG AA). */
 :root {
-  --bg: #f3f1ee;
+  --bg: #f7f1e8;
   --surface: #ffffff;
-  --surface-2: #ece9e4;
-  --border: #d9d4cc;
-  --text: #24211d;
-  --muted: #6d665d;
-  --accent: #3f7d4f;
+  --surface-2: #f1e6d6;
+  --border: #e2d3bf;
+  --text: #2b2118;
+  --muted: #76634f;
+  --accent: #9a5a1c;
   --accent-text: #ffffff;
-  --danger: #b3412e;
-  --warn: #a8710b;
+  --danger: #b03a26;
+  --warn: #9a6a0a;
   --focus: #2f6fd1;
-  /* The board: the same square colours as the API's rendered images. */
+  /* The board: the logo's tans, which are also the API's rendered squares. */
   --sq-light: #ffce9e;
   --sq-dark: #d18b47;
   --sq-last: rgba(255, 165, 0, 0.55);
-  --sq-selected: rgba(63, 125, 79, 0.6);
+  --sq-selected: rgba(110, 62, 18, 0.55);
   --sq-check: radial-gradient(circle, rgba(230, 30, 30, 0.95) 0%, rgba(230, 30, 30, 0.5) 45%, rgba(230, 30, 30, 0) 75%);
-  --dot: rgba(20, 30, 20, 0.28);
+  --dot: rgba(60, 30, 5, 0.32);
   --radius: 6px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --shadow: 0 1px 3px rgba(60, 35, 10, 0.12);
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #1c1b19;
-    --surface: #262421;
-    --surface-2: #302e2a;
-    --border: #3d3a35;
-    --text: #e6e2dc;
-    --muted: #a19a90;
-    --accent: #5a9e6a;
-    --accent-text: #0f1a12;
-    --danger: #e0705c;
-    --warn: #e0a83a;
+    --bg: #1c1814;
+    --surface: #27211b;
+    --surface-2: #322a22;
+    --border: #45392d;
+    --text: #f0e6d8;
+    --muted: #b4a28c;
+    --accent: #e3a465;
+    --accent-text: #1c1814;
+    --danger: #e8826c;
+    --warn: #e6b04a;
     --focus: #7aa7ee;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
@@ -43,16 +47,16 @@
 }
 
 :root[data-theme="dark"] {
-  --bg: #1c1b19;
-  --surface: #262421;
-  --surface-2: #302e2a;
-  --border: #3d3a35;
-  --text: #e6e2dc;
-  --muted: #a19a90;
-  --accent: #5a9e6a;
-  --accent-text: #0f1a12;
-  --danger: #e0705c;
-  --warn: #e0a83a;
+  --bg: #1c1814;
+  --surface: #27211b;
+  --surface-2: #322a22;
+  --border: #45392d;
+  --text: #f0e6d8;
+  --muted: #b4a28c;
+  --accent: #e3a465;
+  --accent-text: #1c1814;
+  --danger: #e8826c;
+  --warn: #e6b04a;
   --focus: #7aa7ee;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
@@ -92,11 +96,12 @@ code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; }
   align-items: center;
   gap: 20px;
   padding: 0 16px;
-  height: 52px;
+  height: 60px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 700; font-size: 1.15rem; color: var(--text); letter-spacing: 0.01em; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.25rem; color: var(--text); letter-spacing: 0.01em; }
+.brand img { width: 44px; height: 44px; display: block; }
 .brand:hover { text-decoration: none; }
 .nav, .account { display: flex; align-items: center; gap: 4px; }
 .account { margin-left: auto; }
@@ -108,15 +113,16 @@ code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; }
 .nav a:hover, .account a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
 .nav a.active, .account a.active { color: var(--text); font-weight: 600; }
 @media (max-width: 560px) {
-  .topbar { flex-wrap: wrap; height: auto; min-height: 52px; gap: 0 6px; padding: 6px 10px; }
+  .topbar { flex-wrap: wrap; height: auto; min-height: 60px; gap: 0 6px; padding: 6px 10px; }
   .nav a, .account a { padding: 6px 7px; }
   .brand { margin-right: 4px; }
+  .brand img { width: 36px; height: 36px; }
 }
 .live-dot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--muted); margin-right: 6px; flex: none;
 }
-.live-dot.live { background: var(--accent); }
+.live-dot.live { background: #3fa45b; } /* green means connected, whatever the theme */
 .live-dot.down { background: var(--warn); }
 
 .page { max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
@@ -343,3 +349,15 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .stats { display: flex; gap: 18px; flex-wrap: wrap; }
 .stats div { display: grid; }
 .stats strong { font-size: 1.2rem; }
+
+/* Linked external ids in the admin panel: each removable, then "+ Link". */
+.identities { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.identity { display: inline-flex; align-items: center; gap: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.identity button { color: var(--muted); }
+.identity button:hover { color: var(--danger); }
+
+/* A checkbox setting: the box, then its name and a line explaining it. */
+label.check { display: flex; align-items: flex-start; gap: 10px; color: var(--text); cursor: pointer; }
+label.check input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); }
+label.check > span { display: grid; gap: 2px; }
+label.check + p { margin-top: 10px; }

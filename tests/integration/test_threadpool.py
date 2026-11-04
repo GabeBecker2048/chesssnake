@@ -72,8 +72,8 @@ def test_health_is_the_only_route_on_the_event_loop():
     )
     # A new route that nobody thought about should trip this, not slip through.
     # (Websocket routes are not APIRoutes; /v1/ws is checked below.)
-    assert len(routes) == 43, (
-        f"expected 43 routes, found {len(routes)}; if you added one, confirm it is "
+    assert len(routes) == 45, (
+        f"expected 45 routes, found {len(routes)}; if you added one, confirm it is "
         "`def` and not `async def`, then update this count"
     )
 
