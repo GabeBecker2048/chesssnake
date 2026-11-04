@@ -20,6 +20,57 @@ def test_pawn_push_moves_piece():
     assert p is not None and p.piecetype.value == "P" and p.color == 0
 
 
+@pytest.mark.parametrize(
+    "fen,push",
+    [
+        # a pawn that has moved cannot advance two squares (found by the web UI in 0.14.0)
+        ("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2", "e6"),
+        ("4k3/8/8/8/8/4P3/8/4K3 w - - 0 1", "e5"),
+        ("4k3/8/4p3/8/8/8/8/4K3 b - - 0 1", "e4"),
+    ],
+)
+def test_a_pawn_off_its_starting_rank_cannot_advance_two(fen, push):
+    g = Game.from_fen(fen)
+    assert push not in [m["san"] for m in g.legal_moves()]
+    with pytest.raises(ChessError.ChessError):
+        g.move(push)
+
+
+def test_a_pawn_on_its_starting_rank_still_advances_two():
+    g = Game()
+    g.move("e4")
+    g.move("e5")
+    assert piece_at(g.board, "e4").color == 0 and piece_at(g.board, "e5").color == 1
+    assert {"d4", "d3"} <= {m["san"] for m in g.legal_moves()}
+
+
+@pytest.mark.parametrize("suffix", ["+", "#"])
+def test_a_move_may_carry_a_check_suffix(suffix):
+    g = Game()
+    for m in ["e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "c3", "Nf6", "d4", "exd4", "cxd4"]:
+        g.move(m)
+    g.move("Bb4" + suffix)  # it is check; the suffix is recorded as the engine sees it
+    assert piece_at(g.board, "b4").piecetype.value == "B"
+    assert g.move_history[-1] == "Bb4+"
+
+
+def test_the_history_can_be_replayed_as_it_was_recorded():
+    g = Game()
+    for m in ["e4", "e5", "Qh5", "Nc6", "Bc4", "Nf6", "Qxf7"]:
+        g.move(m)
+    replay = Game()
+    for san in g.move_history:  # ends in "Qxf7#"
+        replay.move(san)
+    assert replay.fen == g.fen and replay.is_over
+
+
+@pytest.mark.parametrize("move", ["b+", "K#", "#+", "eQ", "P+", "Q#"])
+def test_a_move_too_short_once_its_suffix_is_gone_is_invalid_notation(move):
+    # These used to raise IndexError from the validator (a 500 over REST).
+    with pytest.raises(ChessError.InvalidNotationError):
+        Game().move(move)
+
+
 def test_knight_move():
     g = Game()
     g.move("Nf3")

@@ -100,8 +100,12 @@ def is_valid_c_notation(movename: str) -> bool:
     # cuts off check or checkmate symbol from tail end
     if "+" == movename[-1]:
         movename = movename[:-1]
-    if "#" == movename[-1]:
+    if movename and "#" == movename[-1]:
         movename = movename[:-1]
+    # what is left must still be at least a square ("K+" is not a move); indexing
+    # past the end below raised IndexError, a 500 over REST
+    if len(movename) < 2:
+        return False
 
     # if the move is a castling move, returns true (zeros or the letter O)
     if movename in ("0-0", "0-0-0", "O-O", "O-O-O"):
@@ -117,6 +121,8 @@ def is_valid_c_notation(movename: str) -> bool:
         # if there is a promotion, it is removed from the string
         if movename[-1] in "RNBQ":
             movename = movename[:-1]
+            if len(movename) < 2:
+                return False
 
         # if there is a capture sign as the second letter...
         if movename[1] == "x":

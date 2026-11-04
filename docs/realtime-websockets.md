@@ -36,7 +36,12 @@ served on the same host and port as the REST API, so there is nothing new to
 publish.
 
 With it off, a websocket upgrade to `/v1/ws` is answered with **HTTP 403**. That
-is the one answer that means "not available here; poll instead".
+is the one answer that means "not available here; poll instead". A browser cannot
+see that status (it only reports a failed connection), so `GET /v1/info`, which
+needs no token, also says whether the socket is served: `"websocket": true`.
+
+The [web UI](web-ui.md) is a complete browser client of this protocol, in
+`src/chesssnake/data/web/js/live.js`.
 
 ---
 

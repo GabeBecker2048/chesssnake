@@ -31,6 +31,8 @@ through a REST api-endpoint that many clients can share.
   language needs no chess logic of its own.
 - **Live updates** (opt-in): clients can follow games over a websocket and see
   each move the moment it is made, instead of polling.
+- **A web UI** served by the api-endpoint: play in the browser, watch any game,
+  and manage accounts from an admin panel.
 - Pure Python. Pillow is the only dependency for a local game.
 
 Pronounced "chess-snake", after Python being a kind of snake. Not cheesecake.
@@ -38,15 +40,16 @@ Pronounced "chess-snake", after Python being a kind of snake. Not cheesecake.
 > **Alpha.** Minor versions regularly contain breaking changes. Not recommended
 > for production until 1.0.0.
 
-## Three ways to use it
+## Four ways to use it
 
 | | How | Needs |
 |---|---|---|
 | **Library** | `Game.local(...)` runs the engine in your process | `pip install chesssnake` |
 | **Client + server** | `Game.remote(...)` talks to an api-endpoint, or call the REST routes from any language | `chesssnake[client]`, and a server |
 | **Terminal** | `chesssnake play` | nothing extra |
+| **Browser** | open the api-endpoint's address | a server |
 
-All three share the same rules and the same routes, so a game started in the
+All four share the same rules and the same routes, so a game started in the
 CLI can be continued over REST, and the other way round.
 
 ## Install
@@ -124,8 +127,12 @@ install. For PostgreSQL, hardening notes and what to do before exposing it, see
 
 ### Connect to it
 
-Players are accounts, and a game starts when one challenges another. From a
-terminal, anywhere on the network:
+Players are accounts, and a game starts when one challenges another. The
+simplest way in is a browser: open <http://localhost:8000/> and log in.
+
+![The chesssnake web UI: a game in progress, the board on the left and the moves, draw and resign buttons on the right](https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/web-ui.png)
+
+From a terminal, anywhere on the network:
 
 ```sh
 chesssnake login --api-url http://localhost:8000     # once; the token is remembered
@@ -161,6 +168,7 @@ curl -X POST localhost:8000/v1/games/1/moves -H "Authorization: Bearer $TOKEN" \
 - [The guide](docs/guide.md): the Python API, running an api-endpoint, playing
   in a terminal, and deploying with Docker
 - [REST API reference](docs/rest-api.md): every endpoint, every error code
+- [The web UI](docs/web-ui.md): playing, watching and the admin panel in a browser
 - [Real-time updates](docs/realtime-websockets.md): the websocket protocol, for
   frontends that want moves as they happen
 - [Configuration](docs/configuration.md): every setting and its environment variable

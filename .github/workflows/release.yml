@@ -86,6 +86,17 @@ jobs:
           g.render()
           print('wheel ok')
           "
+          # The web UI is nothing but package data: every file of it in the
+          # source tree must be in the wheel, or the page loads with a 404 in it.
+          /tmp/relcheck/bin/python -c "
+          import os, sys
+          from chesssnake.assets import asset_path
+          src = 'src/chesssnake/data/web'
+          wanted = {os.path.relpath(os.path.join(d, f), src) for d, _, fs in os.walk(src) for f in fs}
+          missing = sorted(p for p in wanted if not os.path.isfile(asset_path('web/' + p)))
+          assert wanted and not missing, f'web UI files missing from the wheel: {missing}'
+          print(f'web ok: {len(wanted)} files')
+          "
 
       - uses: actions/upload-artifact@v4
         with:

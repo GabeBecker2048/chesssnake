@@ -13,8 +13,9 @@ environment variables, and command-line flags, in that order of precedence. Run
 ``chesssnake config show`` to see the effective values and where each came from.
 
 Everything under ``/v1`` needs ``Authorization: Bearer <token>`` except
-``/v1/auth/login`` and ``/v1/auth/register`` (see :mod:`chesssnake.api.auth`);
-``/health`` is unversioned and open. Players are users; games are normally created
+``/v1/auth/login``, ``/v1/auth/register`` and ``/v1/info`` (see
+:mod:`chesssnake.api.auth`); ``/health`` is unversioned and open, and so is the web
+UI at ``/`` (:mod:`chesssnake.api.web`), whose page is only a client of ``/v1``. Players are users; games are normally created
 by one user challenging another and the challenge being accepted, and every game
 is addressed by its id. An administrator can create games directly, manage
 accounts, and act for any player by passing ``player_id``.
@@ -23,9 +24,11 @@ accounts, and act for any player by passing ``player_id``.
 import io
 import logging
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, FastAPI, Request, Response
+from fastapi import APIRouter, Body, Depends, FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, model_validator
 
@@ -48,6 +51,7 @@ from .auth import (
     validate_password,
 )
 from .realtime import Broker, InProcessBroker, websocket_endpoint
+from .web import add_web_routes
 
 logger = logging.getLogger(__name__)
 
@@ -316,9 +320,19 @@ def _public_router(settings: Settings) -> APIRouter:
     directly, NOT into `v1`: a router included into `v1` inherits its auth
     dependency.
     """
-    public = APIRouter(prefix="/v1/auth")
+    public = APIRouter(prefix="/v1")
 
-    @public.post("/register", status_code=201)
+    @public.get("/info")
+    def server_info():
+        # What a client needs to know before it has an account: whether it can
+        # make one, and whether to try the websocket or go straight to polling.
+        return {
+            "version": _version(),
+            "registration": settings.api.registration,
+            "websocket": settings.websocket.enabled,
+        }
+
+    @public.post("/auth/register", status_code=201)
     def register(body: Credentials):
         if settings.api.registration != "open":
             raise errors.ForbiddenError("Registration is closed; ask an administrator for an account")
@@ -330,7 +344,7 @@ def _public_router(settings: Settings) -> APIRouter:
         )
         return _login_result(raw, token, user)
 
-    @public.post("/login")
+    @public.post("/auth/login")
     def log_in(body: Credentials):
         raw, token, user = login(body.username, body.password, settings.api.session_lifetime_days)
         return _login_result(raw, token, user)
@@ -405,6 +419,24 @@ def revoke_token(request: Request, token_id: int, me: Principal = Depends(curren
     return Response(status_code=204)
 
 
+@v1.get("/auth/settings")
+def get_settings(me: Principal = Depends(current_principal)):
+    """Your settings, every one with its default filled in."""
+    return ops.user_settings_get(me.user_id)
+
+
+@v1.patch("/auth/settings")
+def update_settings(changes: dict[str, Any] = Body(...), me: Principal = Depends(current_principal)):
+    """
+    Change some of your settings: ``{"auto_queen": true}``. Returns them all.
+
+    The names and types are checked by the operations layer
+    (``ops.USER_SETTING_DEFAULTS``), so adding a setting does not touch this route.
+    The server only stores them; clients (the web UI) act on them.
+    """
+    return ops.user_settings_update(me.user_id, changes)
+
+
 # --- Users ---
 
 
@@ -419,6 +451,19 @@ def create_user(body: UserCreate, me: Principal = Depends(current_principal)):
 @v1.get("/users")
 def find_user(username: str, me: Principal = Depends(current_principal)):
     return _user_out(_require_user(ops.user_get_by_name(username), f"No user named {username!r}"), me)
+
+
+# Literal, so registered before /users/{user_id}, whose int parameter would
+# otherwise be tried against "search" first.
+@v1.get("/users/search")
+def search_users(
+    q: str = "",
+    limit: int = Query(20, ge=1, le=ops.LIST_LIMIT_MAX),
+    offset: int = Query(0, ge=0),
+    me: Principal = Depends(current_principal),
+):
+    """Users whose name starts with ``q``, ignoring case; an empty ``q`` lists everyone."""
+    return {"users": [_user_out(row, me) for row in ops.users_search(q, limit, offset)]}
 
 
 @v1.get("/users/{user_id}")
@@ -477,7 +522,16 @@ def link_identity(user_id: int, provider: str, external_id: str, me: Principal =
 
 @v1.delete("/users/{user_id}/identities/{provider}/{external_id}")
 def unlink_identity(user_id: int, provider: str, external_id: str, me: Principal = Depends(current_principal)):
-    require_admin(me)
+    """
+    Admins unlink anyone's; a user may unlink their own (but not link one).
+
+    Linking stays admin-only because it asserts that the external account is this
+    user, which nobody can prove by claiming it: a bot that has checked it (a
+    Discord `/link` command, with an admin token) does the linking. Unlinking only
+    gives up a claim, so it is safe to let the user do it.
+    """
+    if user_id != me.user_id:
+        require_admin(me)
     return _user_out(ops.identity_unlink(user_id, provider, external_id), me)
 
 
@@ -575,6 +629,23 @@ def games_between(
     status: Literal["active", "finished", "all"] = "all",
 ):
     rows = ops.games_between(player1, player2, group_id, status)
+    return {"games": [GameState.from_row(row).to_dict() for row in rows]}
+
+
+@v1.get("/games/live")
+def live_games(limit: int = Query(50, ge=1, le=ops.LIST_LIMIT_MAX)):
+    """Every game in progress, in any group, most recently changed first: what spectators browse."""
+    return {"games": [GameState.from_row(row).to_dict() for row in ops.games_live(limit)]}
+
+
+@v1.get("/games/finished")
+def finished_games(
+    player_id: int | None = None,
+    limit: int = Query(50, ge=1, le=ops.LIST_LIMIT_MAX),
+    before: int | None = None,
+):
+    """Finished games, newest first; ``before`` (a game id) pages back, ``player_id`` narrows to one player."""
+    rows = ops.games_finished(player_id, limit, before)
     return {"games": [GameState.from_row(row).to_dict() for row in rows]}
 
 
@@ -753,6 +824,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             if settings.database.init_schema:
                 schema.create_all(engine)
+            else:
+                # A newer release added a table (0.14.0: user_settings). Its routes
+                # would answer 500 until it exists, so say so now instead.
+                missing = schema.missing_tables(engine)
+                if missing:
+                    db_engine.dispose_engine()
+                    raise errors.SQLError(
+                        f"This database is missing tables added by a newer chesssnake ({', '.join(missing)}). "
+                        "Create them with `chesssnake init-db` (existing tables and data are kept), "
+                        "or set database.init_schema = true."
+                    )
         try:
             yield
         finally:
@@ -773,7 +855,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Not on `v1`: its HTTP auth dependency cannot be satisfied by a websocket,
         # which authenticates with its first message instead.
         app.add_api_websocket_route("/v1/ws", websocket_endpoint)
+    if settings.web.enabled:
+        add_web_routes(app)
     return app
+
+
+def _version() -> str:
+    try:
+        return package_version("chesssnake")
+    except PackageNotFoundError:  # running from a source tree that was never installed
+        return "unknown"
 
 
 _app: FastAPI | None = None

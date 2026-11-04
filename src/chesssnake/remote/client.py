@@ -146,6 +146,14 @@ class ApiClient:
     def revoke_token(self, token_id):
         self._request("DELETE", f"/auth/tokens/{token_id}")
 
+    def settings(self) -> dict:
+        """Your per-user settings, e.g. ``{"auto_queen": False}``, defaults filled in."""
+        return self._request("GET", "/auth/settings")
+
+    def update_settings(self, **changes) -> dict:
+        """Change some of your settings (``update_settings(auto_queen=True)``); returns them all."""
+        return self._request("PATCH", "/auth/settings", json=changes)
+
     # --- live updates --------------------------------------------------------
 
     def events(self, games=()):
