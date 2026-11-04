@@ -30,6 +30,7 @@ transaction that the hash it was verified against is still the current one.
 
 import hashlib
 import json
+import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -708,15 +709,43 @@ def identity_unlink(user_id, provider, external_id):
 #: schema change. Only clients act on them; the server just keeps them.
 USER_SETTING_DEFAULTS: dict[str, Any] = {
     "auto_queen": False,  # the web UI promotes pawns to a queen without asking
+    # The web UI's board marks (0.14.2), each "#rrggbb". A highlight is a
+    # right-click; an arrow a right-drag, and a ring a middle-click, use the arrow
+    # colour; Ctrl, Alt and Ctrl+Alt override the colour of any mark.
+    "mark_highlight_color": "#1b7a3a",  # forest green
+    "mark_arrow_color": "#1b7a3a",  # forest green
+    "mark_ctrl_color": "#c42b2b",  # crimson
+    "mark_alt_color": "#7b3fc4",  # violet
+    "mark_ctrl_alt_color": "#0b7e86",  # teal
 }
+
+#: A colour setting's only accepted form. Stored lowercase.
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _setting_value(name, value):
+    """
+    ``value`` checked (and normalised) for setting ``name``, or ``None`` if it is
+    not acceptable. The type of a setting's default is its type, compared exactly
+    (``True`` is not an int here, nor 1 a bool); a ``*_color`` is "#rrggbb".
+    """
+    if type(value) is not type(USER_SETTING_DEFAULTS[name]):
+        return None
+    if name.endswith("_color"):
+        # Colours end up in the web UI's drawing, so they are a strict format,
+        # never free text.
+        return value.lower() if _HEX_COLOR.match(value) else None
+    return value
 
 
 def _settings_with_defaults(stored):
     settings = dict(USER_SETTING_DEFAULTS)
     for name, value in (stored or {}).items():
-        # A setting since removed, or a value of the wrong type, falls back to the default.
-        if name in settings and type(value) is type(settings[name]):
-            settings[name] = value
+        # A setting since removed, or a value no longer acceptable, falls back to the default.
+        if name in settings:
+            checked = _setting_value(name, value)
+            if checked is not None:
+                settings[name] = checked
     return settings
 
 
@@ -746,14 +775,20 @@ def user_settings_update(user_id, changes):
     validate_ids(user_id)
     if not isinstance(changes, dict):
         raise errors.UserValidationError("Settings must be an object of {name: value}")
+    checked = {}
     for name, value in changes.items():
         if name not in USER_SETTING_DEFAULTS:
             raise errors.UserValidationError(
                 f"Unknown setting {name!r}; known: {', '.join(sorted(USER_SETTING_DEFAULTS))}"
             )
-        wanted = type(USER_SETTING_DEFAULTS[name])
-        if type(value) is not wanted:
-            raise errors.UserValidationError(f"Setting {name!r} must be a {wanted.__name__}")
+        normalised = _setting_value(name, value)
+        if normalised is None:
+            wanted = (
+                "a colour as #rrggbb" if name.endswith("_color") else f"a {type(USER_SETTING_DEFAULTS[name]).__name__}"
+            )
+            raise errors.UserValidationError(f"Setting {name!r} must be {wanted}")
+        checked[name] = normalised
+    changes = checked
     now = _utcnow()
     # A read-modify-write: two changes to different settings at once must both land.
     with locked_transaction() as conn:
