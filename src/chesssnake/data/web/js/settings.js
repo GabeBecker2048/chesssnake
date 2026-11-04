@@ -5,7 +5,15 @@
 
 import { get, patch } from "./api.js";
 
-const DEFAULTS = { auto_queen: false };
+/** Every setting's default; the server's `USER_SETTING_DEFAULTS` is the source of truth. */
+export const DEFAULTS = {
+  auto_queen: false,
+  mark_highlight_color: "#1b7a3a",
+  mark_arrow_color: "#1b7a3a",
+  mark_ctrl_color: "#c42b2b",
+  mark_alt_color: "#7b3fc4",
+  mark_ctrl_alt_color: "#0b7e86",
+};
 let current = { ...DEFAULTS };
 
 /** Fetch the logged-in user's settings. On failure the defaults stay in force. */
