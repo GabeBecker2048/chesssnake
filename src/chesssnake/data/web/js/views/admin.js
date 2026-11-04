@@ -155,7 +155,7 @@ async function usersTab(panel, ctx) {
     async function resetPassword() {
       const values = await dialog({
         title: `Reset ${user.username}'s password`,
-        text: "Every login and api token they have is revoked.",
+        text: "Every login and api token they have will be revoked.",
         fields: [{ name: "password", label: "New password", type: "password", autocomplete: "new-password" }],
         submit: "Reset",
         danger: true,
