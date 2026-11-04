@@ -414,6 +414,14 @@ The server only stores them; what they do is up to the client. Today there is on
 | Setting | Type | Default | Meaning |
 |---|---|---|---|
 | `auto_queen` | boolean | `false` | The web UI promotes a pawn to a queen without asking which piece. |
+| `mark_highlight_color` | `"#rrggbb"` | `"#1b7a3a"` | The web UI's square highlights (right-click). |
+| `mark_arrow_color` | `"#rrggbb"` | `"#1b7a3a"` | Its arrows (right-drag) and rings (middle-click). |
+| `mark_ctrl_color` | `"#rrggbb"` | `"#c42b2b"` | Any mark made with Ctrl held. |
+| `mark_alt_color` | `"#rrggbb"` | `"#7b3fc4"` | Any mark made with Alt held. |
+| `mark_ctrl_alt_color` | `"#rrggbb"` | `"#0b7e86"` | Any mark made with Ctrl and Alt held. |
+
+A colour must be exactly `#` and six hex digits (either case); it is stored and
+returned lowercase. Anything else is a `422`.
 
 ---
 

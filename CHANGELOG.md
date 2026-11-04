@@ -6,6 +6,23 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.14.2 - 2026-11-03
+
+### Added
+- Board mark colours are per-user settings: highlights, arrows and rings, and
+  the Ctrl, Alt and new Ctrl+Alt colours. The Account page offers named presets
+  or any rrggbb, with a preview board; they are saved to the account as
+  `#rrggbb` (`mark_*_color` in `/v1/auth/settings`).
+
+### Changed
+- Highlights, arrows and rings are forest green by default; Ctrl gives crimson,
+  Alt violet and Ctrl+Alt teal. The old orange was hard to see on the board.
+
+### Fixed
+- Dragging an arrow off the board no longer makes it vanish or stop: it follows
+  the nearest edge square, and releasing off the board finishes it there. The
+  browser's context menu can no longer open during or just after the drag.
+
 ## 0.14.1 - 2026-11-03
 
 ### Added
