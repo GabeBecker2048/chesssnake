@@ -4,7 +4,9 @@ Since 0.14.0 the api-endpoint serves a website at `/`: open the server's address
 in a browser, log in, and play. It is deliberately simple. Each page does one
 thing, and there is no chat, rating or clock.
 
-![A game in progress in the web UI](web-ui.png)
+![A game in progress in the web UI, with arrows and highlighted squares drawn on the board](web-ui.png)
+
+![The Watch page in dark mode: every game in progress as a live board](web-ui-watch.png)
 
 - [What it does](#what-it-does)
 - [Turning it on and off](#turning-it-on-and-off)
