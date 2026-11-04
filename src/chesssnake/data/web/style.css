@@ -191,7 +191,7 @@ table.list th { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
 table.list tr:last-child td { border-bottom: none; }
 .table-wrap { overflow-x: auto; }
 
-.rows { display: grid; gap: 2px; }
+.rows { display: grid; gap: 2px; grid-template-columns: minmax(0, 1fr); } /* rows may shrink, so long names truncate instead of widening the page */
 .row {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border-radius: var(--radius);
@@ -212,7 +212,7 @@ table.list tr:last-child td { border-bottom: none; }
 
 /* A challenge: text on the left (two lines, wrapping), buttons on the right,
    flush with the card's edges like the heading above it. */
-.challenges { display: grid; }
+.challenges { display: grid; grid-template-columns: minmax(0, 1fr); }
 .challenge {
   display: flex; align-items: center; gap: 12px;
   padding: 10px 0; border-top: 1px solid var(--border);
@@ -285,6 +285,12 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .sq .coord { color: var(--sq-dark); }
 .sq.dark .coord { color: var(--sq-light); }
 .board.mini .coord { display: none; }
+/* Marks (draw.js), never in the way of a click. Highlights sit under the pieces
+   (z-index 0 here, after the squares in tree order, below a piece's 1); arrows
+   and rings over them, still under a promotion picker. */
+.board .drawing { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.board .drawing.under { z-index: 0; }
+.board .drawing.over { z-index: 3; }
 .board.mini { box-shadow: none; border-radius: 2px; }
 
 .drag-piece {

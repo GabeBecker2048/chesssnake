@@ -9,9 +9,16 @@
 // the piece goes back and nothing is sent. The opponent's pieces never move.
 
 import { h, clear } from "./ui.js";
+import { colorFor, createLayers, renderShapes, suppressContextMenu, toggleShape } from "./draw.js";
 import { isDark, parseFen, pieceSrc, squaresFrom } from "./fen.js";
 
 const DRAG_THRESHOLD = 4; // px a pointer travels before a press becomes a drag
+// Marks (draw.js) are deliberately less eager than moving a piece: a right
+// press that travels less than this is a click (a highlight), never an arrow.
+const MARK_DRAG_THRESHOLD = 8;
+// A right or middle press this soon after the last one was released is ignored,
+// so a bouncing button or a twitchy release cannot add or remove a mark.
+const MARK_COOLDOWN_MS = 150;
 const PROMOTION_ORDER = ["Q", "N", "R", "B"];
 
 /** Where the king lands for a castling SAN, and the rook square that also means it. */
@@ -46,14 +53,32 @@ export class Board {
     this.castles = new Map(); // "e1g1" -> rook [from, to], for drawing the move at once
     this.selected = null;
     this.drag = null;
+    this.shapes = []; // highlights, arrows and rings (draw.js)
+    this.marking = null; // a right or middle press in progress (see startMarking)
+    this.lastMarkRelease = -Infinity;
     this.squareEls = new Map();
+    this.layers = mini ? null : createLayers();
     this.build();
-    if (onMove && !mini) {
+    // Every full-size board listens, a spectator's too: anyone may draw arrows.
+    // Moving pieces is still only for a player (`enabled`).
+    if (!mini) {
       this.el.addEventListener("pointerdown", (ev) => this.pointerDown(ev));
       this.el.addEventListener("pointermove", (ev) => this.pointerMove(ev));
       this.el.addEventListener("pointerup", (ev) => this.pointerUp(ev));
-      this.el.addEventListener("pointercancel", () => this.endDrag());
+      this.el.addEventListener("pointercancel", () => {
+        this.endDrag();
+        this.cancelMarking();
+      });
+      // Pointer capture ending without a pointerup (a window grabbed the mouse)
+      // must not leave an arrow stuck to the cursor.
+      this.el.addEventListener("lostpointercapture", () => this.cancelMarking());
+      window.addEventListener("blur", () => this.cancelMarking());
       this.el.addEventListener("contextmenu", (ev) => ev.preventDefault());
+      // A middle press would start the browser's autoscroll (or paste on Linux).
+      this.el.addEventListener("mousedown", (ev) => {
+        if (ev.button === 1) ev.preventDefault();
+      });
+      this.el.addEventListener("auxclick", (ev) => ev.preventDefault());
     }
   }
 
@@ -69,6 +94,87 @@ export class Board {
       this.squareEls.set(square, el);
       this.el.append(el);
     });
+    if (this.layers) {
+      // Under the pieces: before nothing in z-order but the squares (see style.css).
+      this.el.append(this.layers.under, this.layers.over);
+      this.drawShapes();
+    }
+  }
+
+  // --- Arrows and circles -----------------------------------------------------
+
+  drawShapes() {
+    if (this.layers) renderShapes(this.layers, this.shapes, this.orientation, this.marking && this.marking.preview);
+  }
+
+  /** Remove every mark (a left click on the board does this). */
+  clearShapes() {
+    if (!this.shapes.length) return;
+    this.shapes = [];
+    this.drawShapes();
+  }
+
+  /**
+   * A right press (a highlight, or an arrow if it is dragged) or a middle press
+   * (a ring). Nothing is drawn until the release, except an arrow's preview once
+   * the pointer has clearly left the square.
+   */
+  startMarking(ev) {
+    const square = ev.target.closest(".sq")?.dataset.square;
+    if (!square || this.drag) return;
+    ev.preventDefault();
+    if (performance.now() - this.lastMarkRelease < MARK_COOLDOWN_MS) return; // too soon: a bounce
+    this.marking = { button: ev.button, from: square, x: ev.clientX, y: ev.clientY, dragged: false, over: square, preview: null };
+    this.el.setPointerCapture(ev.pointerId);
+  }
+
+  moveMarking(ev) {
+    const m = this.marking;
+    // The button is no longer held but no pointerup came (it was swallowed): end
+    // here, as if released at the last place we saw it.
+    if ((ev.buttons & (m.button === 2 ? 2 : 4)) === 0) {
+      this.finishMarking(ev, { recovered: true });
+      return;
+    }
+    if (m.button !== 2) return; // a middle press only ever makes a ring
+    if (!m.dragged && Math.hypot(ev.clientX - m.x, ev.clientY - m.y) < MARK_DRAG_THRESHOLD) return;
+    m.dragged = true;
+    const over = this.squareAt(ev.clientX, ev.clientY);
+    m.over = over;
+    const preview = over && over !== m.from ? { kind: "arrow", from: m.from, to: over, color: colorFor(ev, "arrow") } : null;
+    const old = m.preview;
+    if (old?.to === preview?.to && old?.color === preview?.color) return;
+    m.preview = preview;
+    this.drawShapes();
+  }
+
+  finishMarking(ev, { recovered = false } = {}) {
+    const m = this.marking;
+    this.marking = null;
+    this.lastMarkRelease = performance.now();
+    suppressContextMenu();
+    let shape = null;
+    if (m.button === 1) {
+      // A ring, only where the press started and only if it is still over that square.
+      const over = recovered ? m.over : this.squareAt(ev.clientX, ev.clientY);
+      if (over === m.from) shape = { kind: "circle", from: m.from, color: colorFor(ev, "circle") };
+    } else if (m.dragged) {
+      // A drag: an arrow if it ends on another square; back on its own square, nothing.
+      const over = recovered ? m.over : this.squareAt(ev.clientX, ev.clientY);
+      if (over && over !== m.from) shape = { kind: "arrow", from: m.from, to: over, color: colorFor(ev, "arrow") };
+    } else if (!recovered) {
+      // A click (it never left the press point): highlight that square.
+      shape = { kind: "square", from: m.from, color: colorFor(ev, "square") };
+    }
+    if (shape) this.shapes = toggleShape(this.shapes, shape);
+    this.drawShapes();
+  }
+
+  cancelMarking() {
+    if (!this.marking) return;
+    this.marking = null;
+    this.lastMarkRelease = performance.now();
+    this.drawShapes();
   }
 
   /** Show a position. lastMove: {from, to} to highlight; check: whether the side to move is in check. */
@@ -171,7 +277,15 @@ export class Board {
   }
 
   pointerDown(ev) {
-    if (ev.button !== 0 || !this.enabled || this.el.querySelector(".promotion")) return;
+    if (this.el.querySelector(".promotion")) return;
+    if (ev.button === 2 || ev.button === 1) {
+      this.startMarking(ev);
+      return;
+    }
+    if (ev.button !== 0) return;
+    this.cancelMarking();
+    this.clearShapes(); // a left click on the board clears the marks
+    if (!this.enabled) return;
     const square = ev.target.closest(".sq")?.dataset.square;
     if (!square) return;
     if (this.selected) {
@@ -195,6 +309,10 @@ export class Board {
   }
 
   pointerMove(ev) {
+    if (this.marking) {
+      this.moveMarking(ev);
+      return;
+    }
     const drag = this.drag;
     if (!drag) return;
     if (!drag.moved) {
@@ -219,6 +337,10 @@ export class Board {
   }
 
   pointerUp(ev) {
+    if (this.marking) {
+      if (ev.button === this.marking.button) this.finishMarking(ev);
+      return;
+    }
     const drag = this.drag;
     if (!drag) return;
     this.endDrag();

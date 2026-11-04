@@ -6,6 +6,19 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.14.1 - 2026-11-03
+
+### Added
+- Marks on the web UI's board, as on chess.com: right-click a square to
+  highlight it, right-drag for an arrow (knight moves bend into an L), and
+  middle-click for a ring. Ctrl or Alt changes the colour; making a mark again
+  removes it, and a left click clears them all. They are private to whoever
+  draws them, spectators included.
+
+### Fixed
+- On a phone, a list row with long usernames (the Watch page's recent games)
+  widened the page instead of shortening the names.
+
 ## 0.14.0 - 2026-11-03
 
 ### Added
