@@ -3,6 +3,7 @@
 
 import { del, get, post } from "../api.js";
 import { setting, updateSettings } from "../settings.js";
+import { markColoursCard } from "./marks.js";
 import { confirmAction, formatDate, h, replace, revealSecret, showError, toast } from "../ui.js";
 
 export const NAV = "account";
@@ -19,6 +20,7 @@ export async function render(main, _params, ctx) {
       h(
         "section",
         {},
+        markColoursCard(),
         h(
           "div",
           { class: "card" },

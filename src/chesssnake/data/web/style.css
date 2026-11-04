@@ -367,3 +367,22 @@ label.check { display: flex; align-items: flex-start; gap: 10px; color: var(--te
 label.check input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--accent); }
 label.check > span { display: grid; gap: 2px; }
 label.check + p { margin-top: 10px; }
+
+/* The Account page's "Board marks" card (views/marks.js). */
+.marks-layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 20px; align-items: start; }
+@media (max-width: 700px) { .marks-layout { grid-template-columns: minmax(0, 1fr); } .mark-preview { max-width: 260px; } }
+.mark-rows { display: grid; gap: 12px; }
+.mark-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
+@media (max-width: 520px) { .mark-row { grid-template-columns: minmax(0, 1fr) auto; } .mark-row .presets { grid-column: 1 / -1; grid-row: 2; } }
+.mark-label { display: grid; line-height: 1.25; }
+.presets { display: flex; flex-wrap: wrap; gap: 5px; }
+.preset {
+  width: 22px; height: 22px; padding: 0; border-radius: 50%;
+  border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border);
+}
+.preset[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--text); }
+.hex-field { display: inline-flex; align-items: center; gap: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); }
+.hex-field input { width: 6.5em; font-family: inherit; padding: 4px 6px; }
+.hex-field input[aria-invalid="true"] { border-color: var(--danger); outline-color: var(--danger); }
+.mark-preview { display: grid; gap: 10px; }
+.mark-preview .board { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2); }

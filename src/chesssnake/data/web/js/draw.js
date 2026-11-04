@@ -8,50 +8,89 @@
 // recolours it. A left click on the board clears everything. Marks belong to
 // whoever draws them: nothing is sent anywhere, and spectators can draw too.
 //
-// Colour: Ctrl for green, Alt for blue, otherwise the mark's own default (red
-// for a highlight, orange for an arrow or ring). Shift is deliberately unused:
-// some browsers (Firefox) always open their own context menu on Shift +
-// right-click, and no page can prevent it.
+// Colours are the user's settings (Account page, stored on the server): one for
+// highlights, one for arrows and rings, and one each for Ctrl, Alt and Ctrl+Alt,
+// which override any mark. By default forest green for every mark, crimson with
+// Ctrl, violet with Alt and teal with both.
+// Shift is deliberately unused: some browsers (Firefox) always open their own
+// context menu on Shift + right-click, and no page can prevent it.
 //
 // Highlights are drawn in an <svg> under the pieces and arrows and rings in one
 // over them, both in square units (viewBox 0 0 8 8) with pointer-events off.
 
 import { squaresFrom } from "./fen.js";
+import { DEFAULTS, setting } from "./settings.js";
 
 const SVG = "http://www.w3.org/2000/svg";
 
-export const COLORS = {
-  red: "#e0442f",
-  orange: "#f39a14",
-  green: "#2e9b45",
-  blue: "#2f6fd1",
-};
+/** Named colours offered on the Account page (any #rrggbb can be typed instead). */
+export const PRESETS = [
+  ["Forest green", "#1b7a3a"],
+  ["Crimson", "#c42b2b"],
+  ["Violet", "#7b3fc4"],
+  ["Teal", "#0b7e86"],
+  ["Royal blue", "#1f5fbf"],
+  ["Red", "#e0442f"],
+  ["Orange", "#f39a14"],
+  ["Charcoal", "#2b2b2b"],
+];
 
-const DEFAULT_COLOR = { square: "red", arrow: "orange", circle: "orange" };
+const HEX = /^#[0-9a-f]{6}$/;
 
-/** The colour a mark gets from the modifier keys held as it is made. */
-export function colorFor(ev, kind) {
-  if (ev.ctrlKey || ev.metaKey) return "green";
-  if (ev.altKey) return "blue";
-  return DEFAULT_COLOR[kind];
+/** A colour safe to put in the drawing: "#rrggbb", or the default when it is anything else. */
+export function safeColor(value, fallback = DEFAULTS.mark_arrow_color) {
+  const v = typeof value === "string" ? value.toLowerCase() : "";
+  return HEX.test(v) ? v : fallback;
+}
+
+/** The user's mark colours (from settings), or `palette` when given (the Account page's preview). */
+function colours(palette) {
+  const get = (name) => safeColor(palette ? palette[name] : setting(name), DEFAULTS[name]);
+  return {
+    square: get("mark_highlight_color"),
+    arrow: get("mark_arrow_color"),
+    ctrl: get("mark_ctrl_color"),
+    alt: get("mark_alt_color"),
+    ctrlAlt: get("mark_ctrl_alt_color"),
+  };
+}
+
+/** The colour a mark of `kind` gets from the modifier keys held as it is made. */
+export function colorFor(ev, kind, palette = null) {
+  const c = colours(palette);
+  const ctrl = ev.ctrlKey || ev.metaKey;
+  if (ctrl && ev.altKey) return c.ctrlAlt;
+  if (ctrl) return c.ctrl;
+  if (ev.altKey) return c.alt;
+  return kind === "square" ? c.square : c.arrow; // rings use the arrow colour
 }
 
 // --- The context menu --------------------------------------------------------
 //
-// Each board stops the menu on itself. This also stops it for a moment after a
-// right-drag ends anywhere, since on some systems the menu event fires on the
-// mouse-up, which may land just off the board.
+// Each board stops the menu on itself. A right-drag can end anywhere on the
+// page, though, and on some systems the menu event fires on the mouse-up, under
+// wherever the pointer is. So the menu is stopped page-wide for the whole of a
+// mark, however it ends (released, cancelled, or its pointerup lost), and for a
+// moment afterwards.
 
+let marksInProgress = 0;
 let suppressMenuUntil = 0;
 
-export function suppressContextMenu(ms = 400) {
+/** A board started a mark: no context menu anywhere until it ends. */
+export function markStarted() {
+  marksInProgress += 1;
+}
+
+/** That mark ended (or was cancelled): still no menu for `ms`. */
+export function markEnded(ms = 400) {
+  marksInProgress = Math.max(0, marksInProgress - 1);
   suppressMenuUntil = performance.now() + ms;
 }
 
 document.addEventListener(
   "contextmenu",
   (ev) => {
-    if (performance.now() < suppressMenuUntil) ev.preventDefault();
+    if (marksInProgress > 0 || performance.now() < suppressMenuUntil) ev.preventDefault();
   },
   true,
 );
@@ -105,6 +144,7 @@ const RING = 0.44;
 const RING_WIDTH = 0.08;
 
 function arrow(group, from, to, color, opacity) {
+  color = safeColor(color);
   const corner = knightCorner(from, to);
   const tail = corner || from;
   const len = Math.hypot(to[0] - tail[0], to[1] - tail[1]);
@@ -117,7 +157,7 @@ function arrow(group, from, to, color, opacity) {
     el("polyline", {
       points: points.map((p) => p.join(",")).join(" "),
       fill: "none",
-      stroke: COLORS[color],
+      stroke: color,
       "stroke-width": LINE,
       "stroke-linecap": "butt",
       "stroke-linejoin": "round",
@@ -128,7 +168,7 @@ function arrow(group, from, to, color, opacity) {
   group.append(
     el("polygon", {
       points: [tip, [base[0] + px, base[1] + py], [base[0] - px, base[1] - py]].map((p) => p.join(",")).join(" "),
-      fill: COLORS[color],
+      fill: color,
       opacity,
     }),
   );
@@ -156,10 +196,10 @@ export function renderShapes(layers, shapes, orientation, preview = null) {
     if (!corner) continue;
     const centre = [corner[0] + 0.5, corner[1] + 0.5];
     if (shape.kind === "square") {
-      layers.under.append(el("rect", { x: corner[0], y: corner[1], width: 1, height: 1, fill: COLORS[shape.color], opacity: 0.75 }));
+      layers.under.append(el("rect", { x: corner[0], y: corner[1], width: 1, height: 1, fill: safeColor(shape.color), opacity: 0.75 }));
     } else if (shape.kind === "circle") {
       layers.over.append(
-        el("circle", { cx: centre[0], cy: centre[1], r: RING, fill: "none", stroke: COLORS[shape.color], "stroke-width": RING_WIDTH, opacity }),
+        el("circle", { cx: centre[0], cy: centre[1], r: RING, fill: "none", stroke: safeColor(shape.color), "stroke-width": RING_WIDTH, opacity }),
       );
     } else if (shape.kind === "arrow") {
       const to = at.get(shape.to);

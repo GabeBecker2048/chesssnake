@@ -9,7 +9,7 @@
 // the piece goes back and nothing is sent. The opponent's pieces never move.
 
 import { h, clear } from "./ui.js";
-import { colorFor, createLayers, renderShapes, suppressContextMenu, toggleShape } from "./draw.js";
+import { colorFor, createLayers, markEnded, markStarted, renderShapes, toggleShape } from "./draw.js";
 import { isDark, parseFen, pieceSrc, squaresFrom } from "./fen.js";
 
 const DRAG_THRESHOLD = 4; // px a pointer travels before a press becomes a drag
@@ -36,8 +36,9 @@ export class Board {
    * @param {"w"|"b"|null} opts.player  whose pieces this viewer may pick up (null: a spectator)
    * @param {(san: string) => void} opts.onMove  called with the chosen move
    * @param {() => boolean} opts.autoQueen  asked at each promotion: queen without the picker?
+   * @param {boolean} opts.marks  show marks on a mini board (the Account page's preview); full-size boards always do
    */
-  constructor({ orientation = "white", mini = false, player = null, onMove = null, autoQueen = () => false } = {}) {
+  constructor({ orientation = "white", mini = false, player = null, onMove = null, autoQueen = () => false, marks = false } = {}) {
     this.autoQueen = autoQueen;
     this.orientation = orientation;
     this.mini = mini;
@@ -57,7 +58,7 @@ export class Board {
     this.marking = null; // a right or middle press in progress (see startMarking)
     this.lastMarkRelease = -Infinity;
     this.squareEls = new Map();
-    this.layers = mini ? null : createLayers();
+    this.layers = mini && !marks ? null : createLayers();
     this.build();
     // Every full-size board listens, a spectator's too: anyone may draw arrows.
     // Moving pieces is still only for a player (`enabled`).
@@ -107,6 +108,12 @@ export class Board {
     if (this.layers) renderShapes(this.layers, this.shapes, this.orientation, this.marking && this.marking.preview);
   }
 
+  /** Show exactly these marks (the Account page's preview draws its own). */
+  setShapes(shapes) {
+    this.shapes = shapes;
+    this.drawShapes();
+  }
+
   /** Remove every mark (a left click on the board does this). */
   clearShapes() {
     if (!this.shapes.length) return;
@@ -125,6 +132,7 @@ export class Board {
     ev.preventDefault();
     if (performance.now() - this.lastMarkRelease < MARK_COOLDOWN_MS) return; // too soon: a bounce
     this.marking = { button: ev.button, from: square, x: ev.clientX, y: ev.clientY, dragged: false, over: square, preview: null };
+    markStarted();
     this.el.setPointerCapture(ev.pointerId);
   }
 
@@ -139,7 +147,8 @@ export class Board {
     if (m.button !== 2) return; // a middle press only ever makes a ring
     if (!m.dragged && Math.hypot(ev.clientX - m.x, ev.clientY - m.y) < MARK_DRAG_THRESHOLD) return;
     m.dragged = true;
-    const over = this.squareAt(ev.clientX, ev.clientY);
+    // Off the board, the arrow follows the nearest edge square rather than vanishing.
+    const over = this.squareNearest(ev.clientX, ev.clientY);
     m.over = over;
     const preview = over && over !== m.from ? { kind: "arrow", from: m.from, to: over, color: colorFor(ev, "arrow") } : null;
     const old = m.preview;
@@ -152,15 +161,16 @@ export class Board {
     const m = this.marking;
     this.marking = null;
     this.lastMarkRelease = performance.now();
-    suppressContextMenu();
+    markEnded();
     let shape = null;
     if (m.button === 1) {
       // A ring, only where the press started and only if it is still over that square.
       const over = recovered ? m.over : this.squareAt(ev.clientX, ev.clientY);
       if (over === m.from) shape = { kind: "circle", from: m.from, color: colorFor(ev, "circle") };
     } else if (m.dragged) {
-      // A drag: an arrow if it ends on another square; back on its own square, nothing.
-      const over = recovered ? m.over : this.squareAt(ev.clientX, ev.clientY);
+      // A drag: an arrow if it ends on another square (released off the board: the
+      // nearest edge square, where the preview was); back on its own square, nothing.
+      const over = recovered ? m.over : this.squareNearest(ev.clientX, ev.clientY);
       if (over && over !== m.from) shape = { kind: "arrow", from: m.from, to: over, color: colorFor(ev, "arrow") };
     } else if (!recovered) {
       // A click (it never left the press point): highlight that square.
@@ -173,6 +183,7 @@ export class Board {
   cancelMarking() {
     if (!this.marking) return;
     this.marking = null;
+    markEnded();
     this.lastMarkRelease = performance.now();
     this.drawShapes();
   }
@@ -262,6 +273,19 @@ export class Board {
   }
 
   // --- Input ----------------------------------------------------------------
+
+  /**
+   * The square under a point, or the nearest one on the board's edge when the
+   * point is off the board. Worked out from the board's box, not the element
+   * under the pointer, so it does not care what the pointer is over.
+   */
+  squareNearest(x, y) {
+    const r = this.el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const col = Math.min(7, Math.max(0, Math.floor(((x - r.left) / r.width) * 8)));
+    const row = Math.min(7, Math.max(0, Math.floor(((y - r.top) / r.height) * 8)));
+    return squaresFrom(this.orientation)[row * 8 + col];
+  }
 
   squareAt(x, y) {
     const el = document.elementFromPoint(x, y)?.closest?.(".sq");

@@ -13,28 +13,37 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
+def defaults(**changes):
+    """Every setting's default, with ``changes`` applied."""
+    from chesssnake.db.operations import USER_SETTING_DEFAULTS
+
+    return {**USER_SETTING_DEFAULTS, **changes}
+
+
 def test_every_setting_has_its_default_until_changed(api_client, users, as_user):
     (alice,) = users("alice")
     resp = api_client.get("/v1/auth/settings", headers=as_user(alice))
     assert resp.status_code == 200
-    assert resp.json() == {"auto_queen": False}
+    assert resp.json() == defaults()
+    assert resp.json()["auto_queen"] is False
+    assert resp.json()["mark_highlight_color"] == "#1b7a3a"
 
 
 def test_a_change_is_kept_and_belongs_to_that_user_only(api_client, users, as_user):
     alice, bob = users("alice", "bob")
     resp = api_client.patch("/v1/auth/settings", json={"auto_queen": True}, headers=as_user(alice))
-    assert resp.status_code == 200 and resp.json() == {"auto_queen": True}
+    assert resp.status_code == 200 and resp.json() == defaults(auto_queen=True)
     # A new login (another browser) sees it; another user does not.
-    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == {"auto_queen": True}
-    assert api_client.get("/v1/auth/settings", headers=as_user(bob)).json() == {"auto_queen": False}
+    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == defaults(auto_queen=True)
+    assert api_client.get("/v1/auth/settings", headers=as_user(bob)).json() == defaults()
     api_client.patch("/v1/auth/settings", json={"auto_queen": False}, headers=as_user(alice))
-    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == {"auto_queen": False}
+    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == defaults()
 
 
 def test_an_empty_change_changes_nothing(api_client, users, as_user):
     (alice,) = users("alice")
     api_client.patch("/v1/auth/settings", json={"auto_queen": True}, headers=as_user(alice))
-    assert api_client.patch("/v1/auth/settings", json={}, headers=as_user(alice)).json() == {"auto_queen": True}
+    assert api_client.patch("/v1/auth/settings", json={}, headers=as_user(alice)).json() == defaults(auto_queen=True)
 
 
 @pytest.mark.parametrize(
@@ -51,15 +60,15 @@ def test_unknown_settings_and_wrong_types_are_422(api_client, users, as_user, bo
     (alice,) = users("alice")
     resp = api_client.patch("/v1/auth/settings", json=body, headers=as_user(alice))
     assert resp.status_code == 422, resp.text
-    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == {"auto_queen": False}
+    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == defaults()
 
 
 def test_the_python_client_reads_and_writes_them(users, user_client):
     (alice,) = users("alice")
     client = user_client(alice)
-    assert client.settings() == {"auto_queen": False}
-    assert client.update_settings(auto_queen=True) == {"auto_queen": True}
-    assert client.settings() == {"auto_queen": True}
+    assert client.settings() == defaults()
+    assert client.update_settings(auto_queen=True) == defaults(auto_queen=True)
+    assert client.settings() == defaults(auto_queen=True)
 
 
 def test_concurrent_first_writes_do_not_collide(api_client, users, as_user):
@@ -77,7 +86,7 @@ def test_concurrent_first_writes_do_not_collide(api_client, users, as_user):
     for t in threads:
         t.join()
     assert statuses == [200] * 6
-    assert api_client.get("/v1/auth/settings", headers=headers).json() == {"auto_queen": True}
+    assert api_client.get("/v1/auth/settings", headers=headers).json() == defaults(auto_queen=True)
 
 
 def test_a_stored_setting_that_no_longer_exists_is_ignored(api_client, users, as_user):
@@ -92,10 +101,10 @@ def test_a_stored_setting_that_no_longer_exists_is_ignored(api_client, users, as
         conn.execute(
             update(schema.user_settings)
             .where(schema.user_settings.c.user_id == alice)
-            .values(settings='{"auto_queen": true, "retired": 5}')
+            .values(settings='{"auto_queen": true, "retired": 5, "mark_arrow_color": "not a colour"}')
         )
-    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == {"auto_queen": True}
-    assert api_client.patch("/v1/auth/settings", json={}, headers=as_user(alice)).json() == {"auto_queen": True}
+    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == defaults(auto_queen=True)
+    assert api_client.patch("/v1/auth/settings", json={}, headers=as_user(alice)).json() == defaults(auto_queen=True)
 
 
 def test_upgrading_a_013_database(api_client, monkeypatch, tmp_path):
@@ -129,3 +138,47 @@ def test_upgrading_a_013_database(api_client, monkeypatch, tmp_path):
     check = create_engine(url)
     assert "user_settings" in inspect(check).get_table_names()
     check.dispose()
+
+
+def test_colours_are_stored_as_lowercase_rrggbb(api_client, users, as_user):
+    (alice,) = users("alice")
+    body = {"mark_arrow_color": "#1B7A3A", "mark_highlight_color": "#e0442f"}
+    resp = api_client.patch("/v1/auth/settings", json=body, headers=as_user(alice))
+    assert resp.status_code == 200
+    assert resp.json() == defaults(mark_arrow_color="#1b7a3a", mark_highlight_color="#e0442f")
+    from sqlalchemy import select
+
+    from chesssnake.db import engine, schema
+
+    with engine.transaction() as conn:
+        raw = conn.execute(
+            select(schema.user_settings.c.settings).where(schema.user_settings.c.user_id == alice)
+        ).scalar()
+    assert '"mark_arrow_color": "#1b7a3a"' in raw
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["7b3fc4", "#7b3fc", "#7b3fc4a", "#gggggg", "violet", "rgb(1,2,3)", "url(#x)", "#7b3fc4;", 123, None, True],
+)
+def test_a_colour_must_be_exactly_hash_rrggbb(api_client, users, as_user, value):
+    (alice,) = users("alice")
+    resp = api_client.patch("/v1/auth/settings", json={"mark_ctrl_color": value}, headers=as_user(alice))
+    assert resp.status_code == 422, resp.text
+    assert "#rrggbb" in resp.json()["detail"] or "must be" in resp.json()["detail"]
+    assert api_client.get("/v1/auth/settings", headers=as_user(alice)).json() == defaults()
+
+
+def test_every_colour_setting_has_a_valid_default():
+    from chesssnake.db.operations import USER_SETTING_DEFAULTS, _setting_value
+
+    colours = {k: v for k, v in USER_SETTING_DEFAULTS.items() if k.endswith("_color")}
+    assert set(colours) == {
+        "mark_highlight_color",
+        "mark_arrow_color",
+        "mark_ctrl_color",
+        "mark_alt_color",
+        "mark_ctrl_alt_color",
+    }
+    for name, value in colours.items():
+        assert _setting_value(name, value) == value
