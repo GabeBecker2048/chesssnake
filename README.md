@@ -14,9 +14,12 @@
 
 </div>
 
-![A finished game of scholar's mate rendered by chesssnake: the same position from both players' points of view, with the mating move highlighted](https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/board.png)
+<p align="center">
+  <a href="https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/web-ui.png"><img src="https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/web-ui.png" width="49%" alt="The chesssnake web UI: a game in progress, the opponent's last move highlighted, arrows and highlighted squares drawn on the board, and the move list beside it"></a>
+  <a href="https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/web-ui-watch.png"><img src="https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/web-ui-watch.png" width="49%" alt="The Watch page in dark mode: five games in progress as live boards, and the latest results"></a>
+</p>
 
-<sub>Rendered by chesssnake itself: `game.save("board.png")` after `1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 4. Qxf7#`. The last move is highlighted, and each player sees the board from their own side.</sub>
+<sub>The web UI that comes with the server: a game in progress with board marks, and the Watch page, where every game in progress updates live (dark theme).</sub>
 
 **A chess engine, a board renderer and a game server in one package.** Play in
 Python, draw the position as a PNG, and keep games in SQLite or PostgreSQL
@@ -77,6 +80,10 @@ game.save("board.png")        # a PNG of the position
 print(game.fen)               # rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2
 ```
 
+![A finished game of scholar's mate rendered by chesssnake: the same position from both players' points of view, with the mating move highlighted](https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/board.png)
+
+<sub>Rendered by chesssnake itself: `game.save("board.png")` after `1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 4. Qxf7#`. The last move is highlighted, and each player sees the board from their own side.</sub>
+
 Or play it in the terminal, with no server:
 
 ```sh
@@ -128,9 +135,8 @@ install. For PostgreSQL, hardening notes and what to do before exposing it, see
 ### Connect to it
 
 Players are accounts, and a game starts when one challenges another. The
-simplest way in is a browser: open <http://localhost:8000/> and log in.
-
-![The chesssnake web UI: a game in progress, the board on the left and the moves, draw and resign buttons on the right](https://raw.githubusercontent.com/GabeBecker2048/chesssnake/main/docs/web-ui.png)
+simplest way in is a browser: open <http://localhost:8000/> and log in (that is the
+web UI pictured at the top).
 
 From a terminal, anywhere on the network:
 

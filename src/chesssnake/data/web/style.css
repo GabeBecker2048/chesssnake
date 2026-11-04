@@ -206,7 +206,7 @@ table.list tr:last-child td { border-bottom: none; }
 .badge.turn { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .badge.warn { color: var(--warn); }
 .badge.danger { color: var(--danger); }
-.swatch { display: inline-block; vertical-align: -1px; width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--muted); flex: none; }
+.swatch { display: inline-block; vertical-align: -1px; width: 11px; height: 11px; border-radius: 50%; border: 1px solid rgba(128, 128, 128, 0.7); flex: none; } /* a dot, not a box: a dark square on a dark page read as an empty checkbox */
 .swatch.white { background: #fafafa; }
 .swatch.black { background: #222; }
 

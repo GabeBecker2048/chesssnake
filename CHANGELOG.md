@@ -6,6 +6,16 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.14.3 - 2026-11-03
+
+### Changed
+- The colour marker beside a player's name is a dot rather than a square,
+  which in dark mode looked like an empty checkbox.
+
+### Fixed
+- The admin panel's reset-password dialog now says the user's logins and api
+  tokens *will be* revoked, before you confirm, not that they are.
+
 ## 0.14.2 - 2026-11-03
 
 ### Added
