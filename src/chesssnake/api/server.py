@@ -28,7 +28,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, FastAPI, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, model_validator
 
@@ -419,6 +419,24 @@ def revoke_token(request: Request, token_id: int, me: Principal = Depends(curren
     return Response(status_code=204)
 
 
+@v1.get("/auth/settings")
+def get_settings(me: Principal = Depends(current_principal)):
+    """Your settings, every one with its default filled in."""
+    return ops.user_settings_get(me.user_id)
+
+
+@v1.patch("/auth/settings")
+def update_settings(changes: dict[str, Any] = Body(...), me: Principal = Depends(current_principal)):
+    """
+    Change some of your settings: ``{"auto_queen": true}``. Returns them all.
+
+    The names and types are checked by the operations layer
+    (``ops.USER_SETTING_DEFAULTS``), so adding a setting does not touch this route.
+    The server only stores them; clients (the web UI) act on them.
+    """
+    return ops.user_settings_update(me.user_id, changes)
+
+
 # --- Users ---
 
 
@@ -504,7 +522,16 @@ def link_identity(user_id: int, provider: str, external_id: str, me: Principal =
 
 @v1.delete("/users/{user_id}/identities/{provider}/{external_id}")
 def unlink_identity(user_id: int, provider: str, external_id: str, me: Principal = Depends(current_principal)):
-    require_admin(me)
+    """
+    Admins unlink anyone's; a user may unlink their own (but not link one).
+
+    Linking stays admin-only because it asserts that the external account is this
+    user, which nobody can prove by claiming it: a bot that has checked it (a
+    Discord `/link` command, with an admin token) does the linking. Unlinking only
+    gives up a claim, so it is safe to let the user do it.
+    """
+    if user_id != me.user_id:
+        require_admin(me)
     return _user_out(ops.identity_unlink(user_id, provider, external_id), me)
 
 
@@ -797,6 +824,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             if settings.database.init_schema:
                 schema.create_all(engine)
+            else:
+                # A newer release added a table (0.14.0: user_settings). Its routes
+                # would answer 500 until it exists, so say so now instead.
+                missing = schema.missing_tables(engine)
+                if missing:
+                    db_engine.dispose_engine()
+                    raise errors.SQLError(
+                        f"This database is missing tables added by a newer chesssnake ({', '.join(missing)}). "
+                        "Create them with `chesssnake init-db` (existing tables and data are kept), "
+                        "or set database.init_schema = true."
+                    )
         try:
             yield
         finally:

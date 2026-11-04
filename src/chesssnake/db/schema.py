@@ -214,9 +214,22 @@ challenges = Table(
 Index("ix_challenges_challenger_id", challenges.c.challenger_id)
 Index("ix_challenges_challenged_id", challenges.c.challenged_id)
 
+#: Per-user settings, one row per user who has changed one (no row: all defaults).
+#: ``settings`` is a JSON object of the values the user has set; the operations
+#: layer validates names and types and fills in the defaults on read. One JSON column rather than a column per setting
+#: so that adding a setting is not a schema change: before 1.0 there are no
+#: migrations, and a changed table makes the server refuse an existing database.
+user_settings = Table(
+    "user_settings",
+    metadata,
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("settings", Text, nullable=False),
+    _timestamp("updated_at"),
+)
+
 #: Every table, in dependency order: a table only references tables before it.
 #: Delete in reverse to empty a database without tripping a foreign key.
-TABLES = (users, user_identities, auth_tokens, games, moves, finished_games, challenges)
+TABLES = (users, user_identities, user_settings, auth_tokens, games, moves, finished_games, challenges)
 
 
 def create_all(engine) -> None:
@@ -256,6 +269,26 @@ def stale_tables(engine) -> list[str]:
             if columns != {column.name for column in table.columns}:
                 stale.append(table.name)
     return stale
+
+
+def missing_tables(engine) -> list[str]:
+    """
+    Name the chesssnake tables an existing chesssnake database does not have yet.
+
+    A release can add a table (0.14.0 added ``user_settings``); unlike a changed
+    one, that needs no reset, only :func:`create_all` (``chesssnake init-db``),
+    which leaves every existing table and row alone. Empty for a database with no
+    chesssnake tables at all: that is a new database, not an old one.
+
+    :param engine: A SQLAlchemy engine.
+    :return: The names of the tables to create.
+    """
+    from sqlalchemy import inspect
+
+    existing = set(inspect(engine).get_table_names())
+    if not existing & {table.name for table in TABLES}:
+        return []
+    return [table.name for table in TABLES if table.name not in existing]
 
 
 def drop_all(engine) -> None:

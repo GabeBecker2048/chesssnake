@@ -56,6 +56,7 @@ chesssnake = [
     "data/web/*.html",
     "data/web/*.css",
     "data/web/*.svg",
+    "data/web/*.png",
     "data/web/js/*.js",
     "data/web/js/views/*.js",
     "py.typed",

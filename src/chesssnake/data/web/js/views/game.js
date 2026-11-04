@@ -3,6 +3,7 @@
 
 import { ApiError, api, del, get, post } from "../api.js";
 import { Board } from "../board.js";
+import { setting } from "../settings.js";
 import { go } from "../router.js";
 import { confirmAction, copy, h, replace, resultText, resultToken, showError, sideToMove, swatch, toast } from "../ui.js";
 
@@ -20,7 +21,12 @@ export async function render(main, params, ctx, scope) {
   let newerGame = null; // a rematch that has started
   let rematch = null; // {kind: "incoming"|"outgoing", challenge}
 
-  const board = new Board({ orientation: myColor || "white", onMove: myColor ? sendMove : null });
+  const board = new Board({
+    orientation: myColor || "white",
+    player: myColor ? myColor[0] : null, // "w" / "b"
+    onMove: myColor ? sendMove : null,
+    autoQueen: () => setting("auto_queen"), // read at each promotion, so a change applies at once
+  });
   const topBar = h("div", { class: "player-bar" });
   const bottomBar = h("div", { class: "player-bar" });
   const status = h("div", { class: "status", role: "status" });
@@ -132,6 +138,7 @@ export async function render(main, params, ctx, scope) {
   async function drawBoard() {
     const check = /[+#]$/.test(sans[sans.length - 1] || "");
     board.setPosition(state.fen, { lastMove, check });
+    board.setEnabled(Boolean(myColor) && state.status === 0);
     let legal = null;
     if (myColor && state.status === 0 && sideToMove(state.fen) === myColor) {
       const asked = state.version;

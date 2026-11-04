@@ -2,7 +2,7 @@
 // action is an ordinary admin-only API call; the server checks the role on each
 // one, so this page only decides what to show.
 
-import { del, get, patch, post } from "../api.js";
+import { api, del, get, patch, post } from "../api.js";
 import { live } from "../live.js";
 import { confirmAction, dialog, formatDate, h, replace, resultToken, showError, timeAgo, toast, userLink } from "../ui.js";
 
@@ -102,7 +102,23 @@ async function usersTab(panel, ctx) {
         h("td", {}, userLink(u.username), h("span", { class: "muted small" }, ` #${u.id}`)),
         h("td", {}, u.role === "admin" ? h("span", { class: "badge" }, "admin") : "user"),
         h("td", {}, u.disabled_at ? h("span", { class: "badge danger" }, "disabled") : "active", u.has_password ? "" : h("span", { class: "muted small" }, " · no password")),
-        h("td", { class: "small" }, u.identities.map((i) => `${i.provider}:${i.external_id}`).join(", ") || h("span", { class: "muted" }, "none")),
+        h(
+          "td",
+          { class: "small" },
+          h(
+            "div",
+            { class: "identities" },
+            u.identities.map((i) =>
+              h(
+                "span",
+                { class: "identity" },
+                `${i.provider}:${i.external_id}`,
+                h("button", { class: "link small", title: `Unlink ${i.provider}:${i.external_id}`, "aria-label": `Unlink ${i.provider} ${i.external_id}`, onclick: () => unlink(i) }, "✕"),
+              ),
+            ),
+            h("button", { class: "link small", onclick: link }, "+ Link"),
+          ),
+        ),
         h("td", { class: "small" }, formatDate(u.created_at)),
         h(
           "td",
@@ -145,6 +161,40 @@ async function usersTab(panel, ctx) {
         danger: true,
       });
       if (values) change({ password: values.password }, "Password reset");
+    }
+
+    // Linking says "this external account (a Discord id) is this user": a bot that
+    // maps members with POST /v1/users/{provider}/{external_id} then acts as them.
+    async function link() {
+      const values = await dialog({
+        title: `Link an account to ${user.username}`,
+        text: "For example provider discord and the member's numeric id. A bot that looks the id up will then act as this user.",
+        fields: [
+          { name: "provider", label: "Provider", value: "discord" },
+          { name: "external_id", label: "External id" },
+        ],
+        submit: "Link",
+      });
+      if (!values) return;
+      const provider = values.provider.trim().toLowerCase();
+      const id = values.external_id.trim();
+      try {
+        draw(await api("PUT", `/users/${user.id}/identities/${encodeURIComponent(provider)}/${encodeURIComponent(id)}`));
+        toast(`Linked ${provider}:${id}`);
+      } catch (err) {
+        showError(err);
+      }
+    }
+
+    async function unlink(identity) {
+      const label = `${identity.provider}:${identity.external_id}`;
+      if (!(await confirmAction(`Unlink ${label}?`, `${user.username} will no longer be found by that id.`, "Unlink"))) return;
+      try {
+        draw(await del(`/users/${user.id}/identities/${encodeURIComponent(identity.provider)}/${encodeURIComponent(identity.external_id)}`));
+        toast(`Unlinked ${label}`);
+      } catch (err) {
+        showError(err);
+      }
     }
 
     async function rename() {

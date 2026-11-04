@@ -24,11 +24,11 @@ an account; otherwise an administrator makes them.
 | Page | What is on it |
 |---|---|
 | **Play** (`#/`) | Your games in progress as small boards, games where it is your move first. Your pending challenges (accept, decline, withdraw), and a form to challenge someone by name, choosing white, black or random. |
-| **Game** (`#/game/41`) | The board, the moves so far, and what you may do: move by **clicking or dragging** a piece (the legal squares are marked), offer, accept or decline a draw, resign, and afterwards **rematch** with colours swapped. Flip the board, or copy or download the PGN. |
+| **Game** (`#/game/41`) | The board, the moves so far, and what you may do: move by **clicking or dragging** a piece (the legal squares are marked; as on other chess sites you can pick up any of your pieces, even out of turn, and a drop anywhere that is not a legal move is ignored), offer, accept or decline a draw, resign, and afterwards **rematch** with colours swapped. Flip the board, or copy or download the PGN. |
 | **Watch** (`#/watch`) | **Every game in progress**, from anyone, as a grid of live boards, and the latest results. Open one to follow it move by move. |
 | **Profile** (`#/user/bob`) | A player's games in progress and finished, your record against them, and a button to challenge them. |
-| **Account** | Change your password; see your logins and api tokens and revoke any of them; make an api token for a script or bot (shown once). |
-| **Admin** | For administrators only. **Users**: search, create, promote or demote, disable or enable, reset a password, rename, see and revoke their tokens. **Games**: start a game between two players, watch or delete any game. **Server**: the version and which features are on. |
+| **Account** | Preferences (**auto-queen**: promote pawns to a queen without the picker; off by default, saved to your account so it applies in every browser). Your **linked accounts** (a Discord id, say), each with an Unlink button; linking is done by an administrator or a bot's `/link` command. Change your password; see your logins and api tokens and revoke any of them; make an api token for a script or bot (shown once). |
+| **Admin** | For administrators only. **Users**: search, create, promote or demote, disable or enable, reset a password, rename, see and revoke their tokens, and link or unlink an external id such as a Discord account. **Games**: start a game between two players, watch or delete any game. **Server**: the version and which features are on. |
 
 A spectator sees the same game page as the players, without the buttons. Any
 logged-in user may watch any game, as any user may read any game over REST.

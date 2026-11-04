@@ -405,6 +405,15 @@ What a client needs to know before it has an account. No token needed.
 | `POST /v1/auth/tokens` | `{name, current_password, expires_in_days?}` | `201 LoginResult` | An api token. `name` 1 to 64 characters; `expires_in_days` 1 to 3650, or omit for none. |
 | `GET /v1/auth/tokens` | | `200 {"tokens": [TokenInfo]}` | Your tokens. Admins may add `?user_id=`. |
 | `DELETE /v1/auth/tokens/{id}` | | `204` | Your own token (admins: any). `404` otherwise. |
+| `GET /v1/auth/settings` | | `200 {name: value}` | Your settings, every one with its default filled in: `{"auto_queen": false}`. |
+| `PATCH /v1/auth/settings` | `{name: value, ...}` | `200 {name: value}` | Change some; the rest keep their values. `422` for an unknown name or a value of the wrong type (`1` is not `true`). |
+
+Settings are personal and kept on the server so they follow you to every client.
+The server only stores them; what they do is up to the client. Today there is one:
+
+| Setting | Type | Default | Meaning |
+|---|---|---|---|
+| `auto_queen` | boolean | `false` | The web UI promotes a pawn to a queen without asking which piece. |
 
 ---
 
@@ -420,7 +429,7 @@ What a client needs to know before it has an account. No token needed.
 | `GET /v1/users/{provider}/{external_id}` | admin | | `200 User` linked to that external id, `404` if none |
 | `POST /v1/users/{provider}/{external_id}` | admin | `{username}` | `200 User`: the linked user, **created** (with that username, no password) on first use. Idempotent: the one call a bot needs per interaction. |
 | `PUT /v1/users/{id}/identities/{provider}/{external_id}` | admin | | `200 User`. `409` if that external id belongs to someone else. Linking again is a no-op. |
-| `DELETE /v1/users/{id}/identities/{provider}/{external_id}` | admin | | `200 User` |
+| `DELETE /v1/users/{id}/identities/{provider}/{external_id}` | admin, or the user themselves | | `200 User`. A user may unlink their own ids but never link one: linking asserts the external account is theirs, which only a trusted bot or an admin can vouch for. |
 
 `provider` is a short lowercase name of your choosing (`[a-z0-9_-]`, up to 32
 characters); `external_id` is any token up to 128 characters, stored as text, so

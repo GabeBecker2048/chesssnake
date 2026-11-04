@@ -195,6 +195,11 @@ This deletes every user and game. `--init-db` on its own never alters existing
 tables, and the server refuses to start on a database from an older chesssnake
 rather than failing part way through a request.
 
+A release that only **adds** a table (0.14.0 added `user_settings`) needs no
+reset: `chesssnake init-db` (or `--init-db`, or `database.init_schema = true`)
+creates it and leaves everything else alone. Without one of those the server
+refuses to start and says which tables are missing.
+
 ## Playing from the terminal
 
 `chesssnake play` is the third way to use the backend: a board and a prompt, with

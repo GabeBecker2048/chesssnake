@@ -67,7 +67,7 @@ def test_every_file_the_page_loads_is_served_with_its_type(api_client):
     assert {"/assets/js/app.js", "/assets/js/views/game.js", "/assets/js/views/admin.js", "/assets/style.css"} <= assets
     every_module = {f"/assets/{p.relative_to(WEB)}" for p in WEB.rglob("*.js")}
     assert every_module <= assets, f"modules nothing imports: {every_module - assets}"
-    types = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
+    types = {".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png"}
     for url in sorted(assets):
         resp = api_client.get(url, headers={"Authorization": ""})
         assert resp.status_code == 200, url

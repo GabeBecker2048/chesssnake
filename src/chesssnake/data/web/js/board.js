@@ -2,6 +2,11 @@
 // what is legal: the game page hands it the server's legal-move list
 // (GET /games/{id}/legal-moves: {from, to, san, promotion}) and it offers
 // exactly those, then hands the chosen move's SAN back to be sent.
+//
+// As on lichess and chess.com, a player can pick up any of their own pieces
+// whenever the game is on (even out of turn, even one with no legal move), and
+// a drop or click anywhere that is not a legal destination is simply ignored:
+// the piece goes back and nothing is sent. The opponent's pieces never move.
 
 import { h, clear } from "./ui.js";
 import { isDark, parseFen, pieceSrc, squaresFrom } from "./fen.js";
@@ -21,12 +26,17 @@ export class Board {
    * @param {object} opts
    * @param {"white"|"black"} opts.orientation  which side is at the bottom
    * @param {boolean} opts.mini   a thumbnail: no coordinates, never interactive
+   * @param {"w"|"b"|null} opts.player  whose pieces this viewer may pick up (null: a spectator)
    * @param {(san: string) => void} opts.onMove  called with the chosen move
+   * @param {() => boolean} opts.autoQueen  asked at each promotion: queen without the picker?
    */
-  constructor({ orientation = "white", mini = false, onMove = null } = {}) {
+  constructor({ orientation = "white", mini = false, player = null, onMove = null, autoQueen = () => false } = {}) {
+    this.autoQueen = autoQueen;
     this.orientation = orientation;
     this.mini = mini;
+    this.player = player;
     this.onMove = onMove;
+    this.enabled = false; // pieces may be picked up (a player, game in progress)
     this.el = h("div", { class: `board${mini ? " mini" : ""}` });
     this.position = { squares: new Map(), turn: "w" };
     this.lastMove = null;
@@ -69,9 +79,29 @@ export class Board {
     this.render();
   }
 
-  /** Offer these moves (the server's list), or none (null): not your turn, or a spectator. */
+  /** Let the player pick up their pieces (the game is on), or not (over, or a spectator). */
+  setEnabled(on) {
+    this.enabled = Boolean(on && this.player && this.onMove && !this.mini);
+    if (!this.enabled) {
+      this.selected = null;
+      this.endDrag();
+    }
+    this.el.classList.toggle("interactive", this.enabled);
+    this.render();
+  }
+
+  /** Whether the piece on a square is one this viewer may pick up. */
+  canPick(square) {
+    const piece = this.position.squares.get(square);
+    return Boolean(this.enabled && piece && piece.color === this.player);
+  }
+
+  /**
+   * Which moves count (the server's list), or none (null): not your turn. Pieces
+   * stay pickable either way; this only decides where a drop does something.
+   */
   setLegal(list) {
-    this.selected = null;
+    if (this.selected && !this.canPick(this.selected)) this.selected = null;
     this.aliases.clear();
     this.castles.clear();
     if (!list || !list.length) {
@@ -93,7 +123,7 @@ export class Board {
         targets.get(to).push(entry);
       }
     }
-    this.el.classList.toggle("interactive", Boolean(this.moves));
+    this.el.classList.toggle("has-moves", Boolean(this.moves));
     this.render();
   }
 
@@ -120,7 +150,7 @@ export class Board {
       cl.toggle("selected", this.selected === square);
       cl.toggle("target", Boolean(targets && targets.has(square)));
       cl.toggle("occupied", Boolean(piece));
-      cl.toggle("movable", Boolean(this.moves && this.moves.has(square)));
+      cl.toggle("movable", this.canPick(square));
       cl.remove("hover");
     }
   }
@@ -141,7 +171,7 @@ export class Board {
   }
 
   pointerDown(ev) {
-    if (ev.button !== 0 || !this.moves || this.el.querySelector(".promotion")) return;
+    if (ev.button !== 0 || !this.enabled || this.el.querySelector(".promotion")) return;
     const square = ev.target.closest(".sq")?.dataset.square;
     if (!square) return;
     if (this.selected) {
@@ -151,7 +181,7 @@ export class Board {
         return;
       }
     }
-    if (this.moves.has(square)) {
+    if (this.canPick(square)) {
       const wasSelected = this.selected === square;
       this.selected = square;
       this.render();
@@ -218,7 +248,12 @@ export class Board {
 
   async tryMove(from, to) {
     const entries = this.moves.get(from).get(to);
-    const entry = entries.length > 1 ? await this.pickPromotion(from, to, entries) : entries[0];
+    let entry = entries[0];
+    if (entries.length > 1) {
+      // A promotion: with auto_queen on, the queen; otherwise ask.
+      const queen = entries.find((e) => e.promotion === "Q");
+      entry = queen && this.autoQueen() ? queen : await this.pickPromotion(from, to, entries);
+    }
     if (!entry) {
       this.selected = null;
       this.render();
@@ -246,8 +281,8 @@ export class Board {
     this.check = /[+#]$/.test(entry.san);
     this.position.turn = this.position.turn === "w" ? "b" : "w";
     this.selected = null;
-    this.moves = null;
-    this.el.classList.remove("interactive");
+    this.moves = null; // until the server's answer brings the next list
+    this.el.classList.remove("has-moves");
     this.render();
   }
 

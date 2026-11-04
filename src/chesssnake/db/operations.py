@@ -29,6 +29,7 @@ transaction that the hash it was verified against is still the current one.
 """
 
 import hashlib
+import json
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -39,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import errors
 from .engine import backend, locked_transaction, transaction
-from .schema import auth_tokens, challenges, finished_games, games, moves, user_identities, users
+from .schema import auth_tokens, challenges, finished_games, games, moves, user_identities, user_settings, users
 
 #: PostgreSQL BIGINT bounds. SQLite's INTEGER is also a signed 64-bit value, so
 #: the same range applies to both backends.
@@ -697,6 +698,87 @@ def identity_unlink(user_id, provider, external_id):
             )
         )
         return _load_user(conn, _require_user(conn, user_id))
+
+
+# --- User settings -----------------------------------------------------------
+
+#: Every per-user setting and its default. The type of the default is the
+#: setting's type, checked exactly (``True`` is not an int here, nor 1 a bool).
+#: Adding one is adding a line: they live in one JSON column, so it is not a
+#: schema change. Only clients act on them; the server just keeps them.
+USER_SETTING_DEFAULTS: dict[str, Any] = {
+    "auto_queen": False,  # the web UI promotes pawns to a queen without asking
+}
+
+
+def _settings_with_defaults(stored):
+    settings = dict(USER_SETTING_DEFAULTS)
+    for name, value in (stored or {}).items():
+        # A setting since removed, or a value of the wrong type, falls back to the default.
+        if name in settings and type(value) is type(settings[name]):
+            settings[name] = value
+    return settings
+
+
+def user_settings_get(user_id):
+    """
+    Return a user's settings: every setting, defaults filled in.
+
+    :raises errors.UserNotFoundError: If there is no such user.
+    """
+    validate_ids(user_id)
+    with transaction() as conn:
+        _require_user(conn, user_id)
+        raw = conn.execute(select(user_settings.c.settings).where(user_settings.c.user_id == user_id)).scalar()
+    return _settings_with_defaults(json.loads(raw) if raw else {})
+
+
+def user_settings_update(user_id, changes):
+    """
+    Change some of a user's settings; the others keep their values.
+
+    :param changes: ``{name: value}``; every name must be a known setting and
+        every value of that setting's type.
+    :return: All the user's settings afterwards, defaults filled in.
+    :raises errors.UserValidationError: On an unknown setting or a wrong type.
+    :raises errors.UserNotFoundError: If there is no such user.
+    """
+    validate_ids(user_id)
+    if not isinstance(changes, dict):
+        raise errors.UserValidationError("Settings must be an object of {name: value}")
+    for name, value in changes.items():
+        if name not in USER_SETTING_DEFAULTS:
+            raise errors.UserValidationError(
+                f"Unknown setting {name!r}; known: {', '.join(sorted(USER_SETTING_DEFAULTS))}"
+            )
+        wanted = type(USER_SETTING_DEFAULTS[name])
+        if type(value) is not wanted:
+            raise errors.UserValidationError(f"Setting {name!r} must be a {wanted.__name__}")
+    now = _utcnow()
+    # A read-modify-write: two changes to different settings at once must both land.
+    with locked_transaction() as conn:
+        _require_user(conn, user_id)
+        # Make sure the row exists, so there is something to lock on PostgreSQL
+        # (FOR UPDATE locks rows, not their absence); SQLite's BEGIN IMMEDIATE
+        # already serializes the whole thing.
+        conn.execute(
+            backend()
+            .insert(user_settings)
+            .values(user_id=user_id, settings="{}", updated_at=now)
+            .on_conflict_do_nothing(index_elements=["user_id"])
+        )
+        raw = conn.execute(
+            select(user_settings.c.settings).where(user_settings.c.user_id == user_id).with_for_update()
+        ).scalar()
+        stored = json.loads(raw) if raw else {}
+        stored = {name: value for name, value in stored.items() if name in USER_SETTING_DEFAULTS}
+        stored.update(changes)
+        conn.execute(
+            update(user_settings)
+            .where(user_settings.c.user_id == user_id)
+            .values(settings=json.dumps(stored, sort_keys=True), updated_at=now)
+        )
+    return _settings_with_defaults(stored)
 
 
 def user_get_or_create_by_identity(provider, external_id, username):

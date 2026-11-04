@@ -58,7 +58,16 @@ def test_identifiers_are_emitted_unquoted(dialect):
 def test_tables_are_listed_in_dependency_order():
     """Teardown deletes in reverse, so a table must come after everything it references."""
     names = [t.name for t in schema.TABLES]
-    assert names == ["users", "user_identities", "auth_tokens", "games", "moves", "finished_games", "challenges"]
+    assert names == [
+        "users",
+        "user_identities",
+        "user_settings",
+        "auth_tokens",
+        "games",
+        "moves",
+        "finished_games",
+        "challenges",
+    ]
     for position, table in enumerate(schema.TABLES):
         for fk in table.foreign_keys:
             assert names.index(fk.column.table.name) < position
@@ -69,6 +78,7 @@ def test_tables_are_listed_in_dependency_order():
     [
         ("users", ["id"]),
         ("user_identities", ["provider", "external_id"]),
+        ("user_settings", ["user_id"]),
         ("auth_tokens", ["id"]),
         ("games", ["id"]),
         ("moves", ["game_id", "ply"]),
@@ -142,6 +152,7 @@ def test_foreign_keys():
         return {(fk.parent.name, fk.column.table.name, fk.ondelete) for fk in table.foreign_keys}
 
     assert targets(schema.user_identities) == {("user_id", "users", "CASCADE")}
+    assert targets(schema.user_settings) == {("user_id", "users", "CASCADE")}
     assert targets(schema.games) == {("white_id", "users", None), ("black_id", "users", None)}
     assert targets(schema.moves) == {("game_id", "games", "CASCADE")}
     assert targets(schema.finished_games) == {("white_id", "users", None), ("black_id", "users", None)}
@@ -309,3 +320,31 @@ def test_the_pair_lock_is_keyed_on_the_unordered_pair():
     finally:
         db_engine.WRITE_TRANSACTION.reset(token)
     assert seen[0] == seen[1] != seen[2]
+
+
+def test_adding_a_table_does_not_make_an_existing_database_stale(tmp_path):
+    """
+    0.14.0 added user_settings. A database from 0.13 lacks it: that must not be
+    "stale" (the server would refuse to start), only created by create_all.
+    """
+    from sqlalchemy import create_engine, inspect
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    old = [t for t in schema.TABLES if t.name != "user_settings"]
+    schema.metadata.create_all(engine, tables=old)
+    assert schema.stale_tables(engine) == []
+    schema.create_all(engine)
+    assert "user_settings" in inspect(engine).get_table_names()
+    engine.dispose()
+
+
+def test_missing_tables_names_only_what_an_existing_database_lacks(tmp_path):
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'db.db'}")
+    assert schema.missing_tables(engine) == []  # a new, empty database is not "missing" anything
+    schema.metadata.create_all(engine, tables=[t for t in schema.TABLES if t.name != "user_settings"])
+    assert schema.missing_tables(engine) == ["user_settings"]
+    schema.create_all(engine)
+    assert schema.missing_tables(engine) == []
+    engine.dispose()

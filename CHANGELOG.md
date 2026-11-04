@@ -10,16 +10,25 @@ documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md
 
 ### Added
 - A web UI, served by the api-endpoint at `/`: log in, challenge someone, play
-  by clicking or dragging pieces, offer draws, resign and rematch. With
-  websockets on, boards update the moment a move is made; without, it polls.
-  On by default; `web.enabled = false` turns it off.
+  by clicking or dragging pieces (with an optional auto-queen), offer draws,
+  resign and rematch. With websockets on, boards update the moment a move is
+  made; without, it polls. On by default; `web.enabled = false` turns it off.
 - Spectating in the browser: a Watch page with every game in progress as a live
   board, and any game can be followed move by move.
 - An admin panel for administrators: create, promote, disable and rename users,
-  reset passwords, revoke tokens, and start or delete games.
+  reset passwords, revoke tokens, link external accounts, and start or delete
+  games.
 - `GET /v1/games/live`, `GET /v1/games/finished` and `GET /v1/users/search` for
   browsing games and players, and `GET /v1/info`, which needs no token, for what
   a server allows (registration, websockets).
+- Per-user settings kept on the server, `GET` and `PATCH /v1/auth/settings`, so
+  they follow the user to every browser. The first is `auto_queen` (off by
+  default), which the web UI uses. They live in a new table: run
+  `chesssnake init-db` (existing data is kept) unless `init_schema` is on.
+
+### Changed
+- A user can unlink their own linked accounts (a Discord id, say); linking
+  them stays with administrators and bots.
 
 ### Fixed
 - A pawn could advance two squares from any rank, not only its starting one.

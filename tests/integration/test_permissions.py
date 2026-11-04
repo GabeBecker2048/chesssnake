@@ -87,6 +87,8 @@ ROUTES = [
         {"outsider": OK, "player": OK, "admin": 401},
     ),
     ("GET", "/v1/auth/tokens", None, {"outsider": OK, "player": OK, "admin": OK}),
+    ("GET", "/v1/auth/settings", None, {"outsider": OK, "player": OK, "admin": OK}),
+    ("PATCH", "/v1/auth/settings", {"auto_queen": True}, {"outsider": OK, "player": OK, "admin": OK}),
     ("DELETE", "/v1/auth/tokens/{token}", None, {"outsider": 404, "player": OK, "admin": OK}),
     ("POST", "/v1/users", {"username": "dee"}, {"outsider": 403, "player": 403, "admin": OK}),
     ("GET", "/v1/users?username=alice", None, {"outsider": OK, "player": OK, "admin": OK}),
@@ -96,7 +98,8 @@ ROUTES = [
     ("GET", "/v1/users/discord/1", None, {"outsider": 403, "player": 403, "admin": OK}),
     ("POST", "/v1/users/discord/2", {"username": "dee"}, {"outsider": 403, "player": 403, "admin": OK}),
     ("PUT", "/v1/users/{alice}/identities/discord/3", None, {"outsider": 403, "player": 403, "admin": OK}),
-    ("DELETE", "/v1/users/{alice}/identities/discord/1", None, {"outsider": 403, "player": 403, "admin": OK}),
+    # Unlinking: your own (alice is the player), or anyone's as an admin. Linking stays admin-only.
+    ("DELETE", "/v1/users/{alice}/identities/discord/1", None, {"outsider": 403, "player": OK, "admin": OK}),
     (
         "POST",
         "/v1/challenges",
