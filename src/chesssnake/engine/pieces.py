@@ -395,13 +395,16 @@ class Pawn(Piece):
             candidates = (board[square.i + behind, square.j + 1], board[square.i + behind, square.j - 1])
             return _find(candidates, PieceType.PAWN, color, file_limit, rank_limit)
 
-        # forward push: the pawn is one square behind, or two if the square between is empty
+        # forward push: the pawn is one square behind, or two if the square between is
+        # empty and the pawn has not moved yet (it is on its starting rank: i 6 for
+        # white, 1 for black)
         one_back = board[square.i + behind, square.j]
         if one_back is not None and one_back.piece is not None:
             return _find([one_back], PieceType.PAWN, color, file_limit, rank_limit)
 
         two_back = board[square.i + behind * 2, square.j]
-        if one_back is not None and one_back.piece is None and two_back is not None:
+        start_row = 6 if color == Color.WHITE else 1
+        if one_back is not None and one_back.piece is None and two_back is not None and two_back.i == start_row:
             return _find([two_back], PieceType.PAWN, color, file_limit, rank_limit)
 
         return []

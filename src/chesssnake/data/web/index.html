@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>chesssnake</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">chesssnake</a>
+    <nav class="nav" id="nav" hidden>
+      <a href="#/" data-nav="play">Play</a>
+      <a href="#/watch" data-nav="watch">Watch</a>
+      <a href="#/admin" data-nav="admin" id="nav-admin" hidden>Admin</a>
+    </nav>
+    <div class="account" id="account" hidden>
+      <span class="live-dot" id="live-dot" title="Connecting"></span>
+      <a href="#/" id="nav-me" data-nav="me"></a>
+      <a href="#/account" data-nav="account">Account</a>
+    </div>
+  </header>
+  <main id="app" class="page">
+    <p class="muted loading">Loading…</p>
+  </main>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <noscript><p class="page">The chesssnake web UI needs JavaScript.</p></noscript>
+</body>
+</html>

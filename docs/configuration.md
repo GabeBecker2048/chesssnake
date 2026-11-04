@@ -74,6 +74,7 @@ reported as a warning rather than silently ignored.
 | `websocket` | `worker_threads` | integer | `4` | Threads for websocket database work, apart from the REST routes' threads. |
 | `websocket` | `shutdown_timeout_seconds` | number | `5` | How long open connections get on shutdown. |
 | `websocket` | `allowed_origins` | list of strings | `["*"]` | Browser origins allowed to connect. Comma-separated in the environment. |
+| `web` | `enabled` | boolean | `true` | Serve the [web UI](web-ui.md) at `/`. See [Web UI](#web-ui). |
 | `client` | `api_url` | string | unset | Base URL a remote `Game` connects to. **Environment only.** |
 | `client` | `token` | string | unset | Bearer token the Python client and `chesssnake play` send, instead of the one `chesssnake login` stored. Secret. **Environment only.** |
 
@@ -198,6 +199,22 @@ poll, so a REST-only deployment does not need to think about this section.
   change, so run a single api-endpoint process when websockets are on.
 
 The protocol is in [Real-time updates](realtime-websockets.md).
+
+## Web UI
+
+The browser frontend is served at `/` unless turned off:
+
+```toml
+[web]
+enabled = false
+```
+
+or `CHESSSNAKE__WEB__ENABLED=0`. It is only a client of `/v1`, so it needs no
+settings of its own. Turn on [`[websocket]`](#websocket) as well and its boards
+update the moment a move is made; without it the page polls every few seconds.
+Since the page is served from the same origin as the websocket, the default
+`allowed_origins = ["*"]` works, and so does a list naming the site's own
+address. See [the web UI](web-ui.md).
 
 ## The config file
 

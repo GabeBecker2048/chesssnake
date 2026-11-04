@@ -235,6 +235,19 @@ allowed_origins = ["*"]
 
 
 #: ===========================================================================
+#: [web] — the browser frontend at /
+#: ===========================================================================
+[web]
+
+#: Serve the web UI at / (the page, its scripts under /assets, and the piece
+#: images). It talks only to the /v1 routes, logged in like any other client.
+#: With [websocket] enabled it updates live; without, it polls every few seconds.
+#: Turn it off for a server that only bots and scripts use.
+#: Values: true, false. Default true.
+enabled = true
+
+
+#: ===========================================================================
 #: [client] — intentionally absent
 #: ===========================================================================
 #: Remote Game clients read only the environment, never this file:
