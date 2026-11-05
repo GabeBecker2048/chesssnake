@@ -6,6 +6,17 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.14.4 - 2026-11-05
+
+### Changed
+- PostgreSQL now uses the psycopg 3 driver, psycopg2's actively developed
+  successor; the `postgres` extra installs `psycopg[binary]`. SQLite
+  deployments are unaffected.
+
+### Removed
+- psycopg2 is no longer supported. A database URL that names it
+  (`postgresql+psycopg2://`) is refused with the fix: use `postgresql://`.
+
 ## 0.14.3 - 2026-11-03
 
 ### Changed
