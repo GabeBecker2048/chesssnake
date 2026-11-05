@@ -227,14 +227,14 @@ def test_game_ids_are_never_reused(file_engine):
 
 
 def test_missing_driver_reports_the_extra_to_install(monkeypatch):
-    """A postgresql:// URL without psycopg2 should say how to fix it."""
+    """A postgresql:// URL without psycopg (3) should say how to fix it."""
     import builtins
 
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name.startswith("psycopg2"):
-            raise ModuleNotFoundError("No module named 'psycopg2'")
+        if name == "psycopg" or name.startswith("psycopg."):
+            raise ModuleNotFoundError("No module named 'psycopg'")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)

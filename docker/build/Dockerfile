@@ -6,7 +6,7 @@
 #   docker build -f docker/build/Dockerfile -t chesssnake .
 #
 # The image carries chesssnake with every optional dependency — the api extra
-# (FastAPI, uvicorn, pydantic, SQLAlchemy), the postgres extra (psycopg2), and
+# (FastAPI, uvicorn, pydantic, SQLAlchemy), the postgres extra (psycopg 3), and
 # the client extra (requests) — so one image serves both the SQLite and the
 # PostgreSQL compose stacks, and can also act as a client for smoke tests. The
 # backend is chosen at runtime by CHESSSNAKE__DATABASE__URL, not at build time.
@@ -31,7 +31,7 @@ WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 
-# Every runtime dependency publishes manylinux wheels (pillow, psycopg2-binary),
+# Every runtime dependency publishes manylinux wheels (pillow, psycopg-binary),
 # so no compiler or -dev headers are needed.
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \

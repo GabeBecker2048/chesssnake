@@ -10,7 +10,7 @@ construct, creating a database — live in :mod:`chesssnake.db.postgres` and
 
 Everything is imported lazily except ``errors``, which is shared with the remote
 client for error mapping (``remote/client.py``). The client extra installs neither
-SQLAlchemy nor psycopg2, so importing them eagerly here would break
+SQLAlchemy nor psycopg, so importing them eagerly here would break
 ``pip install chesssnake[client]``.
 """
 

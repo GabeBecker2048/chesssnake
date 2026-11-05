@@ -33,7 +33,7 @@ def test_empty_url_is_an_auth_error():
     "url,expected",
     [
         ("postgresql://u:pw@h:5432/chess", "postgresql"),
-        ("postgresql+psycopg2://u@h/chess", "postgresql"),
+        ("postgresql+psycopg://u@h/chess", "postgresql"),
         ("sqlite:///chess.db", "sqlite"),
         ("sqlite:////abs/chess.db", "sqlite"),
         ("sqlite://", "sqlite"),
@@ -48,31 +48,38 @@ def test_unsupported_backend_is_rejected():
         db_engine.parse_url("mysql://u@h/chess")
 
 
-def test_bare_postgres_url_names_the_installed_driver():
+def test_bare_postgres_url_uses_psycopg_3():
     """
     SQLAlchemy's default driver for a bare `postgresql://` changed between 2.0
-    (psycopg2) and 2.1 (psycopg v3), so the same URL and the same
-    `chesssnake[api,postgres]` install worked or failed depending on which
-    SQLAlchemy got resolved. It surfaced as `No module named 'psycopg'` from a
-    package that had installed psycopg2. parse_url now names whichever driver
-    is present, so the behaviour does not depend on that default.
+    (psycopg2) and 2.1 (psycopg 3), so parse_url names the driver itself. Since
+    0.14.4 that is always psycopg 3, installed or not (a missing one then fails
+    with the install hint, see test_sqlite.py).
     """
-    import importlib.util
-
-    parsed = db_engine.parse_url("postgresql://u:p@h:5432/chess")
-    installed = next(
-        (d for d in ("psycopg2", "psycopg") if importlib.util.find_spec(d) is not None),
-        None,
-    )
-    if installed is None:
-        pytest.skip("no PostgreSQL driver installed")
-    assert parsed.drivername == f"postgresql+{installed}"
+    assert db_engine.parse_url("postgresql://u:p@h:5432/chess").drivername == "postgresql+psycopg"
 
 
-def test_an_explicit_postgres_driver_is_left_alone():
-    """Naming a driver is a deliberate choice; it must survive parse_url."""
+def test_an_explicit_psycopg_driver_is_kept():
     assert db_engine.parse_url("postgresql+psycopg://u@h/chess").drivername == "postgresql+psycopg"
-    assert db_engine.parse_url("postgresql+psycopg2://u@h/chess").drivername == "postgresql+psycopg2"
+
+
+def test_psycopg2_is_refused_with_the_fix():
+    """psycopg2 is no longer installed or tested, so asking for it fails clearly rather than half-working."""
+    with pytest.raises(errors.SQLError, match="psycopg2 is no longer supported") as raised:
+        db_engine.parse_url("postgresql+psycopg2://u@h/chess")
+    assert "postgresql://" in str(raised.value)
+
+
+def test_the_postgres_extra_installs_psycopg_3():
+    """The driver is what the `postgres` extra and the `pg` test group depend on, and nothing older."""
+    import tomllib
+    from pathlib import Path
+
+    project = tomllib.loads((Path(__file__).resolve().parents[2] / "pyproject.toml").read_text())
+    extra = project["project"]["optional-dependencies"]["postgres"]
+    group = project["dependency-groups"]["pg"]
+    for deps in (extra, group):
+        assert any(d.startswith("psycopg[binary]") for d in deps), deps
+        assert not any(d.startswith("psycopg2") for d in deps), deps
 
 
 def test_sqlite_urls_are_not_given_a_driver():
@@ -166,3 +173,30 @@ def test_postgres_create_database_is_idempotent(backend, database_url):
     target = db_engine.parse_url(database_url).set(database="created_twice")
     postgres.create_database(target)
     assert "already exists" in postgres.create_database(target)
+
+
+def test_postgres_create_database_without_the_privilege_says_so(backend, database_url):
+    """
+    A role without CREATEDB gets SQLSTATE 42501. psycopg 3 exposes the code as
+    `sqlstate` (psycopg2 called it `pgcode`), so this pins the driver switch.
+    """
+    if backend != "postgresql":
+        pytest.skip("PostgreSQL-only")
+    from sqlalchemy import create_engine, text
+
+    from chesssnake.db import postgres
+
+    admin = create_engine(db_engine.parse_url(database_url), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as conn:
+            conn.execute(text("DROP ROLE IF EXISTS no_createdb"))
+            conn.execute(text("CREATE ROLE no_createdb LOGIN NOCREATEDB"))
+        limited = db_engine.parse_url(database_url).set(username="no_createdb", password=None, database="never_made")
+        with pytest.raises(errors.SQLError, match="Insufficient privileges") as raised:
+            postgres.create_database(limited)
+        # The code itself, not only the English "permission denied" fallback.
+        assert raised.value.__cause__.orig.sqlstate == "42501"
+    finally:
+        with admin.connect() as conn:
+            conn.execute(text("DROP ROLE IF EXISTS no_createdb"))
+        admin.dispose()
