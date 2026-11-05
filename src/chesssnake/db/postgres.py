@@ -116,10 +116,11 @@ def create_database(url) -> str:
             conn.execute(text(f"CREATE DATABASE {quoted}"))
             return f"Database '{db_name}' created successfully."
     except SQLAlchemyError as e:
-        # 42501 is insufficient_privilege; the string check is a fallback for
-        # drivers or locales that don't surface the SQLSTATE.
-        pgcode = getattr(getattr(e, "orig", None), "pgcode", None)
-        if pgcode == "42501" or "permission denied" in str(e).lower():
+        # 42501 is insufficient_privilege (psycopg 3 calls the code `sqlstate`;
+        # psycopg2 called it `pgcode`); the string check is a fallback for
+        # locales that translate the message.
+        sqlstate = getattr(getattr(e, "orig", None), "sqlstate", None)
+        if sqlstate == "42501" or "permission denied" in str(e).lower():
             raise errors.SQLError(
                 f"Insufficient privileges to create the database '{db_name}'. "
                 f"Ensure the user has appropriate permissions:\n{e}"
