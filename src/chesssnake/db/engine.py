@@ -17,7 +17,6 @@ lock up front with ``BEGIN IMMEDIATE``. See :func:`locked_transaction`.
 from __future__ import annotations
 
 import contextvars
-import importlib.util
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -89,32 +88,36 @@ def parse_url(url: str | None):
     return _pin_postgres_driver(parsed)
 
 
+#: The one supported PostgreSQL driver: psycopg 3, from the `postgres` extra.
+POSTGRES_DRIVER = "psycopg"
+
+
 def _pin_postgres_driver(parsed):
     """
-    Name the PostgreSQL driver explicitly when the URL does not.
+    Make a PostgreSQL URL use psycopg 3, the one supported driver.
 
     A bare ``postgresql://`` leaves the driver up to SQLAlchemy's default, and
-    that default changed: 2.0 picks psycopg2, 2.1 picks psycopg (v3). So the
-    same URL and the same ``chesssnake[api,postgres]`` install works or fails
-    depending on which SQLAlchemy got resolved, which is not a thing a user can
-    reasonably debug -- it surfaces as ``No module named 'psycopg'`` from a
-    package that installed psycopg2.
-
-    Choosing whichever driver is actually installed removes the dependency on
-    that default, and lets anyone opt into psycopg3 by installing it. A URL that
-    already names a driver (``postgresql+psycopg://``) is left alone.
+    that default changed (2.0 picks psycopg2, 2.1 psycopg 3), so naming it here
+    keeps the behaviour independent of which SQLAlchemy got resolved. Since
+    0.14.4 that driver is always psycopg 3: psycopg2 is in maintenance mode and
+    is no longer installed or tested, so a URL that asks for it is refused with
+    the fix rather than half-working. Other explicit drivers are left alone.
 
     :param parsed: the parsed SQLAlchemy URL.
-    :return: the URL, with a driver named if it is PostgreSQL and had none.
+    :return: the URL, with ``+psycopg`` named if it is a bare PostgreSQL URL.
+    :raises errors.SQLError: If the URL names the psycopg2 driver.
     """
+    if parsed.drivername == "postgresql+psycopg2":
+        raise errors.SQLError(
+            "psycopg2 is no longer supported; chesssnake uses psycopg 3 (`pip install 'chesssnake[api,postgres]'`).\n"
+            "  got:      postgresql+psycopg2://...\n"
+            "  expected: postgresql://...   (or postgresql+psycopg://...)"
+        )
     if parsed.drivername != "postgresql":
         return parsed
-    for driver in ("psycopg2", "psycopg"):
-        if importlib.util.find_spec(driver) is not None:
-            return parsed.set(drivername=f"postgresql+{driver}")
-    # Neither is installed. Leave it as it was so create_engine raises the
+    # Even when psycopg is not installed: create_engine then raises the
     # ModuleNotFoundError that carries the install hint.
-    return parsed
+    return parsed.set(drivername=f"postgresql+{POSTGRES_DRIVER}")
 
 
 def backend_name(url: str) -> str:
@@ -145,7 +148,7 @@ def _engine_kwargs(parsed, pool_min_size: int, pool_max_size: int) -> dict[str, 
         return {"poolclass": StaticPool, "connect_args": {"check_same_thread": False}}
 
     # QueuePool opens connections lazily, so pool_min_size is a floor on what is
-    # kept rather than opened up front (psycopg2's SimpleConnectionPool opened
+    # kept rather than opened up front (the old psycopg2 SimpleConnectionPool opened
     # minconn eagerly).
     kwargs: dict[str, Any] = {
         "pool_size": pool_min_size,
@@ -198,7 +201,7 @@ def create_engine(
         raise errors.SQLError(f"Could not create the database engine: {e}") from e
 
     # Import the dialect shim for BOTH backends, not just SQLite. backend() is
-    # called on every query and would otherwise import postgres.py (and psycopg2)
+    # called on every query and would otherwise import postgres.py (and psycopg)
     # lazily on the first write -- which, now that requests run concurrently,
     # means several threads importing a driver at once and a driver problem
     # surfacing as a 500 mid-traffic instead of a clear failure at startup.
@@ -253,7 +256,7 @@ def backend_module(name: str) -> Any:
     Return the dialect shim module for a backend name.
 
     Imported lazily so that using SQLite never imports the PostgreSQL shim, which
-    would pull in psycopg2 -- the whole point of the separate `postgres` extra.
+    would pull in psycopg -- the whole point of the separate `postgres` extra.
 
     :param name: A backend name, e.g. ``"postgresql"`` or ``"sqlite"``.
     """

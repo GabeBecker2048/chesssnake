@@ -86,7 +86,7 @@ def redact_dsn(dsn: str) -> str:
 
     Showing the host, port, and database name is the whole point of printing a
     DSN back to someone, so only the password is replaced. Handles both the URL
-    and the keyword forms without importing psycopg2 — this module must stay
+    and the keyword forms without importing psycopg — this module must stay
     usable wherever the config is inspected.
 
     :param dsn: A database connection string.

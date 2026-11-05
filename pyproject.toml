@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chesssnake"
-version = "0.14.3"
+version = "0.14.4"
 description = "A robust Chess API and backend"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -42,7 +42,7 @@ api = [
     "argon2-cffi>=23.1",
 ]
 # The PostgreSQL driver. Only needed for postgresql:// database URLs.
-postgres = ["psycopg2-binary>=2.9"]
+postgres = ["psycopg[binary]>=3.2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -83,7 +83,7 @@ dev = [
 # the full supported matrix.
 pg = [
     "pgserver>=0.1.4",
-    "psycopg2-binary>=2.9.12",
+    "psycopg[binary]>=3.2",
 ]
 
 [tool.uv]
