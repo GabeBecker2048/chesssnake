@@ -92,3 +92,17 @@ jobs:
       # authoritative, and fails the build if it drops below the gate.
       - name: Tests with coverage gate
         run: uv run --extra api --extra client --extra postgres --group pg pytest --cov --cov-report=term-missing --cov-fail-under=75
+  # A single check for branch protection to require, so the rule doesn't have to
+  # name every job and matrix entry, and doesn't go stale when they change.
+  all-green:
+    needs: [lint, test, integration-sqlite, integration-postgres, coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo '${{ toJSON(needs) }}'
+          test "${{ needs.lint.result }}" = "success"
+          test "${{ needs.test.result }}" = "success"
+          test "${{ needs.integration-sqlite.result }}" = "success"
+          test "${{ needs.integration-postgres.result }}" = "success"
+          test "${{ needs.coverage.result }}" = "success"
