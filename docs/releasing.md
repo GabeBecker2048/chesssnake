@@ -51,9 +51,12 @@ long-lived credential that can upload on your behalf until you revoke it.
 
 Pushing the tag is the whole release. `scripts/release.sh` re-runs the
 workflow's own checks on your laptop first (version matches, CHANGELOG section
-exists, tree clean, commit on `origin/main`, tag unused), so a mistake costs
-nothing instead of leaving a tag to delete and a red cross on the repo. It then
-creates an annotated tag, dated to the commit, and pushes it.
+exists, on `main` and the same commit as `origin/main`, tree clean, tag unused,
+`uv.lock` current), so a mistake costs nothing instead of leaving a tag to
+delete and a red cross on the repo. It runs no tests: CI ran them on the pull
+request, and the workflow runs them again. It then creates an annotated tag,
+dated to the commit, and pushes it, without asking. The script is identical in
+anchorless, chesssnake and whirligig.
 
 The workflow then, in order:
 
