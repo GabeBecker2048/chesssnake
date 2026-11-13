@@ -245,7 +245,7 @@ a local and a remote game**. Anything it does, the client could already do.
   except for `accept`/`decline`, which default to the **opponent of the offerer**.
 - **Turn-order enforcement is asymmetric, on purpose.** For a **remote** game the
   server checks it and is the authority, so the session must not duplicate the rule. For
-  a **local** game (`--me 0|1`) there is no server to ask, so `dispatch()` checks
+  a **local** game (`--me white|black`, 0/1 before 0.15.2) there is no server to ask, so `dispatch()` checks
   `is_players_turn` itself and raises `NotYourTurnError`.
 - **`sync()` runs before every informational command** (`board`, `fen`, `moves`, `pgn`),
   and this is load-bearing rather than belt-and-braces: `legal_moves`/`pgn`/`history` are

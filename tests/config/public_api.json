@@ -509,7 +509,7 @@
           "--game",
           "--group",
           "--local",
-          "--me",
+          "--me {white,black}",
           "--no-color",
           "--no-live",
           "--perspective {white,black}",

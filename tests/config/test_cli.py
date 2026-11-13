@@ -7,9 +7,11 @@ resolve and print configuration are covered; ``api-endpoint`` is not started
 tested directly through ``_overrides``.
 """
 
+import contextlib
 import io
 import json
 import os
+import sys
 
 import pytest
 
@@ -291,14 +293,29 @@ def test_play_needs_a_game_or_an_opponent(monkeypatch):
 
 
 def test_names_and_me_are_for_local_games_only():
-    for extra in (["--white-name", "Al"], ["--me", "0"]):
+    for extra in (["--white-name", "Al"], ["--me", "white"]):
         with pytest.raises(SystemExit, match="only for --local"):
             main(["play", "--api-url", "http://localhost:1", "--game", "1", *extra])
 
 
-def test_local_me_is_a_side():
-    with pytest.raises(SystemExit, match="--me is 0"):
-        main(["play", "--local", "--me", "7"])
+def test_local_me_is_a_side(capsys):
+    for wrong in ("7", "0"):  # a side by name; the old 0/1 is refused too
+        with pytest.raises(SystemExit):
+            main(["play", "--local", "--me", wrong])
+        assert "invalid choice" in capsys.readouterr().err
+
+
+def test_local_me_plays_that_side_only():
+    script = io.StringIO("e4\nquit\n")
+    with pytest.raises(SystemExit) as done:
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            sys.stdin, saved = script, sys.stdin
+            try:
+                main(["play", "--local", "--me", "black", "--ascii", "--no-color"])
+            finally:
+                sys.stdin = saved
+    assert done.value.code in (0, None)
+    assert "NotYourTurnError" in out.getvalue() or "not your turn" in out.getvalue().lower()
 
 
 def test_a_player_is_an_id_or_a_valid_username(capsys):

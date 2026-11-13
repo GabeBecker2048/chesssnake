@@ -312,7 +312,7 @@ Notes:
   old game, the session says so and `new` accepts or joins it.
 - **An expired login ends the session** with a note to run `chesssnake login`, rather
   than failing on every line.
-- `--white-name`, `--black-name` and `--me` are for `--local` games only.
+- `--white-name`, `--black-name` and `--me white|black` (play only that side) are for `--local` games only.
 - `--ascii` draws pieces as letters, and `--no-color` emits no escape codes at all, both
   useful over a flaky terminal or when piping to a file.
 - **`quit`, Ctrl+D or Ctrl+C** all leave; Ctrl+C exits with status 130 and prints nothing.

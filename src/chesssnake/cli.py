@@ -449,10 +449,8 @@ def _run_play(args):
     if args.local:
         if args.game is not None or args.vs is not None:
             sys.exit("--game and --vs are for games on an api-endpoint, not --local ones")
-        if args.me is not None and args.me not in (0, 1):
-            sys.exit("With --local, --me is 0 (white) or 1 (black)")
         game = Game.local(white_name=args.white_name, black_name=args.black_name)
-        player_id = args.me
+        player_id = {None: None, "white": game.white_id, "black": game.black_id}[args.me]
         events = None
     else:
         if args.white_name or args.black_name or args.me is not None:
@@ -635,7 +633,9 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("--game", type=int, help="the id of the game to play (see `chesssnake games`)")
     play.add_argument("--vs", type=_player, help="play your game in progress against this user")
     play.add_argument("--group", type=int, default=0, help="the group, with --vs (default 0)")
-    play.add_argument("--me", type=int, help="with --local: 0 to play white only, 1 for black")
+    play.add_argument(
+        "--me", choices=("white", "black"), help="with --local: play only this side (default: both, at one keyboard)"
+    )
     play.add_argument("--white-name", dest="white_name", default="", help="display name for white (--local only)")
     play.add_argument("--black-name", dest="black_name", default="", help="display name for black (--local only)")
     play.add_argument(
