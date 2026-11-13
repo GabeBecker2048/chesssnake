@@ -206,11 +206,11 @@ class ApiClient:
 
     def get_user_by_identity(self, provider, external_id) -> User:
         """The user linked to an external id, e.g. ``("discord", "1234")``."""
-        return User.from_dict(self._request("GET", f"/users/{provider}/{external_id}"))
+        return User.from_dict(self._request("GET", f"/identities/{provider}/{external_id}"))
 
     def get_or_create_user_by_identity(self, provider, external_id, username) -> User:
         """The user linked to an external id, created (with ``username``) if there is none."""
-        data = self._request("POST", f"/users/{provider}/{external_id}", json={"username": username})
+        data = self._request("POST", f"/identities/{provider}/{external_id}", json={"username": username})
         return User.from_dict(data)
 
     def link_identity(self, user_id, provider, external_id) -> User:

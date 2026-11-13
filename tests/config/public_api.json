@@ -283,6 +283,7 @@
     },
     "GET /v1/games/{game_id}/legal-moves": {},
     "GET /v1/games/{game_id}/pgn": {},
+    "GET /v1/identities/{provider}/{external_id}": {},
     "GET /v1/info": {},
     "GET /v1/users": {
       "query": [
@@ -296,7 +297,6 @@
         "q"
       ]
     },
-    "GET /v1/users/{provider}/{external_id}": {},
     "GET /v1/users/{user_id}": {},
     "MOUNT /assets": {},
     "MOUNT /assets/pieces": {},
@@ -386,15 +386,15 @@
         "body"
       ]
     },
+    "POST /v1/identities/{provider}/{external_id}": {
+      "body": [
+        "username"
+      ]
+    },
     "POST /v1/users": {
       "body": [
         "password",
         "role",
-        "username"
-      ]
-    },
-    "POST /v1/users/{provider}/{external_id}": {
-      "body": [
         "username"
       ]
     },

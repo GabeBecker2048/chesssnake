@@ -122,7 +122,7 @@ def test_last_admin_cannot_be_demoted_or_disabled(api_client, admin_id, users):
 
 
 def test_identity_get_or_create_is_idempotent(api_client):
-    url = "/v1/users/discord/123456789012345678"
+    url = "/v1/identities/discord/123456789012345678"
     first = api_client.post(url, json={"username": "gabe"})
     assert first.status_code == 200
     user = first.json()
@@ -135,9 +135,9 @@ def test_identity_get_or_create_is_idempotent(api_client):
 
 def test_identity_create_with_a_taken_username_conflicts(api_client, users):
     users("gabe")
-    resp = api_client.post("/v1/users/discord/42", json={"username": "Gabe"})
+    resp = api_client.post("/v1/identities/discord/42", json={"username": "Gabe"})
     assert resp.status_code == 409 and resp.json()["error_type"] == "UserExistsError"
-    assert api_client.get("/v1/users/discord/42").status_code == 404
+    assert api_client.get("/v1/identities/discord/42").status_code == 404
 
 
 def test_link_and_unlink_identities(api_client, users):
@@ -149,7 +149,7 @@ def test_link_and_unlink_identities(api_client, users):
     assert api_client.put(f"/v1/users/{bob}/identities/discord/42").status_code == 409
     unlinked = api_client.delete(f"/v1/users/{alice}/identities/discord/42").json()
     assert unlinked["identities"] == [{"provider": "slack", "external_id": "U024BE7LH"}]
-    assert api_client.get("/v1/users/discord/42").status_code == 404
+    assert api_client.get("/v1/identities/discord/42").status_code == 404
     assert api_client.put(f"/v1/users/{alice}/identities/Discord/42").status_code == 422
 
 

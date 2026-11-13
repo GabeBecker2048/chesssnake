@@ -500,7 +500,7 @@ def update_user(request: Request, user_id: int, body: UserPatch, me: Principal =
     return _user_out(ops.user_get(user_id), me)
 
 
-@v1.get("/users/{provider}/{external_id}")
+@v1.get("/identities/{provider}/{external_id}")
 def get_user_by_identity(provider: str, external_id: str, me: Principal = Depends(current_principal)):
     require_admin(me)
     row = ops.identity_get(provider, external_id)
@@ -508,7 +508,7 @@ def get_user_by_identity(provider: str, external_id: str, me: Principal = Depend
 
 
 # 200, not 201, like POST /v1/games: this is get-or-create, and most calls get.
-@v1.post("/users/{provider}/{external_id}")
+@v1.post("/identities/{provider}/{external_id}")
 def get_or_create_user_by_identity(
     provider: str, external_id: str, body: UsernameBody, me: Principal = Depends(current_principal)
 ):

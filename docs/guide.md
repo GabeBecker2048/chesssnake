@@ -221,7 +221,7 @@ chesssnake user token discord-bot --name bot     # prints the token, once
 
 It then maps each member onto a chesssnake user with one idempotent call
 (`client.get_or_create_user_by_identity("discord", member_id, member_name)`,
-or `POST /v1/users/discord/{member_id}`), and plays for them by passing
+or `POST /v1/identities/discord/{member_id}`), and plays for them by passing
 `player_id`.
 
 ### Upgrading the database

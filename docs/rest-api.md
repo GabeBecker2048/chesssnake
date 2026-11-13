@@ -443,10 +443,12 @@ returned lowercase. Anything else is a `422`.
 | `GET /v1/users/search?q=&limit=20&offset=0` | any | | `200 {"users": [User]}`: names starting with `q`, ignoring case, ordered by name. An empty `q` lists everyone. `limit` is 1 to 200. |
 | `GET /v1/users/{id}` | any | | `200 User` |
 | `PATCH /v1/users/{id}` | self: `username`; admin: also `role`, `disabled`, `password` | any subset | `200 User`. A non-admin changing anything else, or another account, gets `403`. |
-| `GET /v1/users/{provider}/{external_id}` | admin | | `200 User` linked to that external id, `404` if none |
-| `POST /v1/users/{provider}/{external_id}` | admin | `{username}` | `200 User`: the linked user, **created** (with that username, no password) on first use. Idempotent: the one call a bot needs per interaction. |
+| `GET /v1/identities/{provider}/{external_id}` | admin | | `200 User` linked to that external id, `404` if none |
+| `POST /v1/identities/{provider}/{external_id}` | admin | `{username}` | `200 User`: the linked user, **created** (with that username, no password) on first use. Idempotent: the one call a bot needs per interaction. |
 | `PUT /v1/users/{id}/identities/{provider}/{external_id}` | admin | | `200 User`. `409` if that external id belongs to someone else. Linking again is a no-op. |
 | `DELETE /v1/users/{id}/identities/{provider}/{external_id}` | admin, or the user themselves | | `200 User`. A user may unlink their own ids but never link one: linking asserts the external account is theirs, which only a trusted bot or an admin can vouch for. |
+
+The two identity lookups lived at `/v1/users/{provider}/{external_id}` before 0.15.2.
 
 `provider` is a short lowercase name of your choosing (`[a-z0-9_-]`, up to 32
 characters); `external_id` is any token up to 128 characters, stored as text, so
@@ -456,7 +458,7 @@ of providers.
 A bot's usual setup: a dedicated admin account with no password
 (`chesssnake user create discord-bot --admin --no-password` on the server) and an
 api token for it (`chesssnake user token discord-bot --name bot`). It maps each
-Discord member with `POST /v1/users/discord/{member_id}` and acts for them with
+Discord member with `POST /v1/identities/discord/{member_id}` and acts for them with
 `player_id`.
 
 ---
