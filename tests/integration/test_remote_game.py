@@ -97,7 +97,7 @@ def test_challenge_accept_play(players):
     assert isinstance(state, GameState) and (state.white_id, state.black_id) == (bob_id, alice_id)
     as_bob = Game.remote(state, client=bob)
     as_alice = Game.remote(state.id, client=alice)
-    assert (as_bob.wname, as_bob.bname, as_bob.id) == ("bob", "alice", state.id)
+    assert (as_bob.white_name, as_bob.black_name, as_bob.id) == ("bob", "alice", state.id)
 
     result = as_bob.move("e4")
     assert isinstance(result, MoveResult) and result.state.version == 2

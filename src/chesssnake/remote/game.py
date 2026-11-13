@@ -166,8 +166,8 @@ class Game(BaseGame):
         self.version = state.version
         self.generation = state.generation
         self.id = state.id
-        self.wname = state.white_name
-        self.bname = state.black_name
+        self.white_name = state.white_name
+        self.black_name = state.black_name
 
     def _move_result(self, engine_move) -> MoveResult:
         """Wrap an engine ``Move`` (from a local move) into a public ``MoveResult``."""

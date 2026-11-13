@@ -478,7 +478,7 @@ def _run_play(args):
             game = Game.remote(game_id, client=client)
         # You act as yourself. An administrator watching someone else's game acts
         # as whichever side is to move instead, sending that player's id.
-        playing = me.id in (game.wid, game.bid)
+        playing = me.id in (game.white_id, game.black_id)
         player_id = None if (me.is_admin and not playing) else me.id
         events = None if args.no_live else _live_updates(client, game.id, args.refresh)
 

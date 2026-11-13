@@ -47,20 +47,20 @@
       "winner"
     ],
     "Game instance attributes": [
-      "bid",
-      "bname",
+      "black_id",
+      "black_name",
       "board",
       "draw",
       "generation",
-      "gid",
+      "group_id",
       "id",
       "last_move",
       "move_history",
       "player_id",
       "position_history",
       "version",
-      "wid",
-      "wname"
+      "white_id",
+      "white_name"
     ],
     "signatures": {
       "connect": "(api_url=None, *, token=None, username=None, password=None, session=None)",
