@@ -6,6 +6,28 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.15.2 - 2026-11-13
+
+### Added
+- An `api.docs` setting can turn off the interactive API docs (`/docs`,
+  `/redoc`) and the OpenAPI schema; they stay on by default.
+
+### Changed
+- Python names settled before 1.0: `Game`'s `gid`, `wid`, `bid`, `wname` and
+  `bname` are spelled out (`group_id`, `white_id`, ...), its draw methods are
+  `offer_draw`, `accept_draw` and `decline_draw`, and `ApiClient.get_user` takes
+  an id or a username, replacing `user`, `get_user_by_name` and `rename`.
+- On the wire, `MoveResult.en` is `en_passant`, the identity lookups moved to
+  `/v1/identities/{provider}/{external_id}`, and the `SQL...` error types are
+  `DatabaseError`, `DatabaseBusyError`, `InvalidIdError` and
+  `DatabaseNotConfiguredError`.
+- The setting `database.sqlite_busy_timeout` is now `sqlite_busy_timeout_ms`,
+  and `chesssnake play --me` takes `white` or `black` instead of 0 or 1.
+
+### Removed
+- `Game.position_history` is no longer public; it held the engine's internal
+  repetition keys.
+
 ## 0.15.1 - 2026-11-13
 
 ### Added
