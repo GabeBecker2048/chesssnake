@@ -305,7 +305,7 @@ class Game:
         """
         return render_board(self.board, self.white_name, self.black_name, self.last_move, perspective=perspective)
 
-    def draw_offer(self, player_id: int):
+    def offer_draw(self, player_id: int):
         """
         Offers a draw in the game.
 
@@ -328,13 +328,13 @@ class Game:
         elif (self.draw == Color.BLACK and player_id == self.white_id) or (
             self.draw == Color.WHITE and player_id == self.black_id
         ):
-            self.draw_accept(player_id)
+            self.accept_draw(player_id)
         elif not self.is_players_turn(player_id):
             raise ChessError.DrawWrongTurnError()
 
         self.draw = Color.WHITE if player_id == self.white_id else Color.BLACK
 
-    def draw_accept(self, player_id: int):
+    def accept_draw(self, player_id: int):
         """
         Accepts an existing draw offer and ends the game.
 
@@ -358,7 +358,7 @@ class Game:
         self.board.status = GameStatus.DRAW  # Set game status to draw
         self.board.termination = Termination.AGREEMENT
 
-    def draw_decline(self, player_id: int):
+    def decline_draw(self, player_id: int):
         """
         Declines an active draw offer.
 

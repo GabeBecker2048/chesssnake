@@ -708,7 +708,7 @@ def _draw_or_resign(request, game_id, body, me, method):
 
     def mutate(row, history, now):
         game = _load_game(row, history)
-        getattr(game, method)(actor)  # draw_offer / draw_accept / draw_decline / resign
+        getattr(game, method)(actor)  # offer_draw / accept_draw / decline_draw / resign
         return _change(game, row, now)[1]
 
     state = ops.apply_game_change(game_id, mutate, body.expected_version).to_dict()
@@ -722,24 +722,24 @@ def resign(request: Request, game_id: int, body: ActionBody | None = None, me: P
 
 
 @v1.post("/games/{game_id}/draw/offer")
-def draw_offer(
+def offer_draw(
     request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
 ):
-    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_offer")
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "offer_draw")
 
 
 @v1.post("/games/{game_id}/draw/accept")
-def draw_accept(
+def accept_draw(
     request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
 ):
-    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_accept")
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "accept_draw")
 
 
 @v1.post("/games/{game_id}/draw/decline")
-def draw_decline(
+def decline_draw(
     request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
 ):
-    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_decline")
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "decline_draw")
 
 
 @v1.get("/games/{game_id}/legal-moves")

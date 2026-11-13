@@ -205,19 +205,19 @@ class Game(BaseGame):
             return super().resign(player_id if player_id is not None else self.player_id)
         self._remote_action("resign", player_id)
 
-    def draw_offer(self, player_id=None):
+    def offer_draw(self, player_id=None):
         if not self.is_remote:
-            return super().draw_offer(player_id if player_id is not None else self.player_id)
+            return super().offer_draw(player_id if player_id is not None else self.player_id)
         self._remote_action("offer_draw", player_id)
 
-    def draw_accept(self, player_id=None):
+    def accept_draw(self, player_id=None):
         if not self.is_remote:
-            return super().draw_accept(player_id if player_id is not None else self.player_id)
+            return super().accept_draw(player_id if player_id is not None else self.player_id)
         self._remote_action("accept_draw", player_id)
 
-    def draw_decline(self, player_id=None):
+    def decline_draw(self, player_id=None):
         if not self.is_remote:
-            return super().draw_decline(player_id if player_id is not None else self.player_id)
+            return super().decline_draw(player_id if player_id is not None else self.player_id)
         self._remote_action("decline_draw", player_id)
 
     # --- reads -------------------------------------------------------------

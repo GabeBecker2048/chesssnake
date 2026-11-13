@@ -16,10 +16,9 @@
       "connect"
     ],
     "Game members": [
+      "accept_draw",
       "castling_rights",
-      "draw_accept",
-      "draw_decline",
-      "draw_offer",
+      "decline_draw",
       "draw_offered_by",
       "en_passant",
       "fen",
@@ -34,6 +33,7 @@
       "legal_moves",
       "local",
       "move",
+      "offer_draw",
       "pgn",
       "refresh",
       "remote",

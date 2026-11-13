@@ -153,10 +153,10 @@ def test_resign_and_winner(match):
 
 def test_draw_by_agreement(match):
     white, black = match
-    white.draw_offer()
+    white.offer_draw()
     black.refresh()
     assert black.draw_offered_by == Color.WHITE
-    black.draw_accept()
+    black.accept_draw()
     assert black.result == GameStatus.DRAW
 
 

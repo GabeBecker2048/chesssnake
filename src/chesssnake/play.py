@@ -308,21 +308,21 @@ class Session:
         """Offer a draw."""
         if not self.allow_action():
             return
-        self.game.draw_offer(self.actor())
+        self.game.offer_draw(self.actor())
         self.show()
 
     def do_accept(self, _arg):
         """Accept the outstanding draw offer."""
         if not self.allow_action():
             return
-        self.game.draw_accept(self.actor(responding=True))
+        self.game.accept_draw(self.actor(responding=True))
         self.show()
 
     def do_decline(self, _arg):
         """Decline the outstanding draw offer."""
         if not self.allow_action():
             return
-        self.game.draw_decline(self.actor(responding=True))
+        self.game.decline_draw(self.actor(responding=True))
         self.show()
 
     def do_resign(self, _arg):
