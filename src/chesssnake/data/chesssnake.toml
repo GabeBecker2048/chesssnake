@@ -137,7 +137,7 @@ init_schema = false
 #: a request may briefly wait its turn; raise this if you see lock errors under
 #: load. Ignored on PostgreSQL, which locks per row instead.
 #: Values: integer milliseconds >= 0. Default 5000 (five seconds).
-sqlite_busy_timeout = 5000
+sqlite_busy_timeout_ms = 5000
 
 
 #: ===========================================================================

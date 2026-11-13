@@ -141,7 +141,7 @@ def _database(settings):
         settings.database.url,
         pool_min_size=settings.database.pool_min_size,
         pool_max_size=settings.database.pool_max_size,
-        sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
+        sqlite_busy_timeout=settings.database.sqlite_busy_timeout_ms,
     )
     try:
         yield engine

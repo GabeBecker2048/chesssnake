@@ -396,7 +396,7 @@ Backend-agnostic SQLAlchemy Core. The `database.url` scheme picks the backend; t
 the rule that the `game_get_or_create` bug in 0.10.0 broke. Under a plain deferred
 `BEGIN`, SQLite starts the connection as a reader and must upgrade to a writer for the
 write; if another writer holds the lock it refuses that upgrade with SQLITE_BUSY
-**immediately**, because `sqlite_busy_timeout` does not apply to the upgrade path. The
+**immediately**, because the busy timeout (`database.sqlite_busy_timeout_ms`) does not apply to the upgrade path. The
 symptom is a 500 `database is locked` on an ordinary request. `apply_game_change`,
 `challenge_create`, `challenge_accept`, `game_get_or_create`, `user_create`,
 `user_rename`, `user_set_role`, `user_set_disabled`, `user_set_password`,

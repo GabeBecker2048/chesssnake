@@ -831,7 +831,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 settings.database.url,
                 pool_min_size=settings.database.pool_min_size,
                 pool_max_size=settings.database.pool_max_size,
-                sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
+                sqlite_busy_timeout=settings.database.sqlite_busy_timeout_ms,
             )
             # Refuse to serve a database from an older chesssnake rather than
             # failing on the first request that touches a changed table: there are
