@@ -56,6 +56,8 @@ uv run pytest tests/config               # config + CLI; needs pydantic but no d
 uv run pytest tests/unit/test_rules.py::test_en_passant_capture  # a single test
 uv run pytest tests/unit -m slow         # deep perft + 200 more differential games (~40 s; CI's engine-deep job)
 uv run python scripts/bench_engine.py    # engine speed; see docs/benchmarks.md
+uv run python scripts/bench_vs_python_chess.py   # engine vs python-chess (dev-only reference)
+uv run python scripts/bench_server.py URL     # a running api-endpoint over HTTP (open registration, throwaway DB)
 
 # Add/remove dependencies (edits pyproject.toml + uv.lock)
 uv add <pkg>
