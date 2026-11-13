@@ -132,6 +132,17 @@ it, publishes the package to PyPI and the container image to
   (Gabe, 2026-11-03). A schema change in a pre-1.0 version drops and recreates; do
   not plan, propose or build migration tooling for one. Gabe is currently the only
   deployment. This changes at 1.0.0, which is the release that promises stability.
+- **From 1.0.0 to the end of 1.x: minor database changes only** (Gabe, 2026-11-13). Adding a
+  table, column or index is fine; a large migration needs a major version bump. A minor
+  change still needs a way to apply it to a live database without `init-db --drop`, which
+  does not exist yet (`create_all` adds missing tables but never alters one, and the server
+  refuses to start on a stale table), so the first schema change after 1.0.0 must bring that
+  mechanism with it, kept as small as the changes it serves.
+- **The public surface is pinned**: the engine by `tests/unit/test_public_engine_api.py`,
+  everything else (Python API, REST routes, settings, CLI) by `tests/config/test_public_api.py`
+  against `tests/config/public_api.json`. A failure there means the API changed; regenerate
+  the JSON only after deciding the change is intended (`uv run python -m
+  tests.config.test_public_api --write`), and review its diff like code.
 
 ## Three-tier architecture
 
@@ -191,6 +202,7 @@ Full reference: `docs/configuration.md`. The commented default file shipped by `
   - **Legality comes from pins, not trial, when not in check** (0.15.1; the trial test was 85% of generation time). `_legal_iter()` (behind `_legal()` and `_has_legal_move()`): if the king is in check or missing, every ply goes through `_is_legal`; otherwise `_pins(color, king)` scans the 8 lines from the king once (first own piece, then an enemy rook/queen on a rank or file or bishop/queen on a diagonal: pinned, allowed squares = the line up to and including the pinner), and then unpinned non-king plies are legal, pinned ones only along their line, normal king moves only to `not _attacked(to)` (sound because, not being in check, no attack runs through the king's own square). **Castling and en passant still use `_is_legal`**: rare, and en passant can uncover a rank check by removing two pawns. `_legal_by_trial()` is the reference; `tests/unit/test_legal_fast_path.py` asserts the two agree at every ply of 40 games and in hand-picked pin/check/e.p. positions.
   - **Hot paths index per-colour tuples** (`PAWNS`/`KNIGHTS`/.../`KINGS[color]`, `OPPONENT[color]`), never `PIECES[type, color]` or `color.opponent`: `Enum.__hash__` and the property are Python-level and were about a fifth of `_attacked`. Same reason `_pseudo` picks slider rays by `is` tests rather than the `SLIDER_RAYS` dict (which only the diagnosis still uses).
   - `_castle_ok(color, side)` is the one castling rule, used by generation and by the parser's diagnostics: the right, king and rook home, squares between empty, **king not in check, crossed square (f or d) not attacked**; the destination is caught by the legality test. 0.14.4 checked neither the king's own square nor d1/d8.
+  - **Threefold repetition and the fifty-move rule end the game automatically** (Gabe's decision, 2026-11-13), as do checkmate, stalemate and insufficient material. FIDE makes those two a player's claim (with automatic draws only at fivefold and seventy-five moves); chesssnake deliberately does not, and python-chess's `outcome(claim_draw=True)` is the comparison the differential tests use for that reason. Do not "fix" this toward FIDE without asking.
   - `move(text)`: syntax → game over → `_parse.resolve` against the legal list → `_san.san` → `_make` → `_update_outcome` (mate, stalemate, insufficient material, fifty-move; threefold is `Game`'s, since it holds the history) → suffix → push `(ply, undo, Move)` for `undo()`.
   - `_position_key()` is the threefold identity: placement, side, castling, and the ep square **only when a legal en-passant capture exists** (FIDE's rule, and python-chess's). These keys are stored in the `moves` table.
   - `Board._from_grid(grid, turn, castling, en_passant)` skips FEN validation; it exists for `tests/unit/conftest.py`'s `make_board`, which builds kingless positions.

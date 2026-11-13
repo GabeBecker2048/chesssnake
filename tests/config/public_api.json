@@ -1,0 +1,681 @@
+{
+  "python": {
+    "chesssnake.__all__": [
+      "ApiClient",
+      "Challenge",
+      "Color",
+      "Game",
+      "GameState",
+      "GameStatus",
+      "LoginResult",
+      "MoveResult",
+      "PieceType",
+      "Termination",
+      "TokenInfo",
+      "User",
+      "connect"
+    ],
+    "Game members": [
+      "castling_rights",
+      "draw_accept",
+      "draw_decline",
+      "draw_offer",
+      "draw_offered_by",
+      "en_passant",
+      "fen",
+      "from_fen",
+      "from_state",
+      "fullmove_number",
+      "halfmove_clock",
+      "history",
+      "is_over",
+      "is_players_turn",
+      "is_remote",
+      "legal_moves",
+      "local",
+      "move",
+      "pgn",
+      "refresh",
+      "remote",
+      "render",
+      "resign",
+      "result",
+      "save",
+      "termination",
+      "to_move",
+      "turn",
+      "winner"
+    ],
+    "Game instance attributes": [
+      "bid",
+      "bname",
+      "board",
+      "draw",
+      "generation",
+      "gid",
+      "id",
+      "last_move",
+      "move_history",
+      "player_id",
+      "position_history",
+      "version",
+      "wid",
+      "wname"
+    ],
+    "signatures": {
+      "connect": "(api_url=None, *, token=None, username=None, password=None, session=None)",
+      "Game.local": "(white_name: str = '', black_name: str = '') -> 'Game'",
+      "Game.remote": "(game_id, *, client=None, api_url: str | None = None, token: str | None = None, player_id: 'int | str | None' = None) -> 'Game'",
+      "Game.from_state": "(state: chesssnake.dto.GameState, *, client, player_id=None) -> 'Game'"
+    },
+    "ApiClient": {
+      "accept_challenge": "(self, challenge_id, *, player_id=None) -> chesssnake.dto.GameState",
+      "accept_draw": "(self, game_id, player_id=None, expected_version=None) -> chesssnake.dto.GameState",
+      "challenge": "(self, opponent, group_id=0, color='random', *, player_id=None) -> chesssnake.dto.Challenge",
+      "challenges": "(self, direction='all', user_id=None) -> list[chesssnake.dto.Challenge]",
+      "change_password": "(self, current_password, new_password)",
+      "create_game": "(self, white, black, group_id=0) -> chesssnake.dto.GameState",
+      "create_token": "(self, name, current_password, expires_in_days=None) -> chesssnake.dto.LoginResult",
+      "create_user": "(self, username, password=None, role='user') -> chesssnake.dto.User",
+      "current_games": "(self, player=None, group_id=None) -> list[chesssnake.dto.GameState]",
+      "decline_challenge": "(self, challenge_id)",
+      "decline_draw": "(self, game_id, player_id=None, expected_version=None) -> chesssnake.dto.GameState",
+      "delete_game": "(self, game_id)",
+      "events": "(self, games=())",
+      "fen": "(self, game_id) -> str",
+      "games_between": "(self, player1, player2, group_id=0, status='all') -> list[chesssnake.dto.GameState]",
+      "get_challenge": "(self, challenge_id) -> chesssnake.dto.Challenge",
+      "get_game": "(self, game_id) -> chesssnake.dto.GameState",
+      "get_or_create_user_by_identity": "(self, provider, external_id, username) -> chesssnake.dto.User",
+      "get_user": "(self, user_id) -> chesssnake.dto.User",
+      "get_user_by_identity": "(self, provider, external_id) -> chesssnake.dto.User",
+      "get_user_by_name": "(self, username) -> chesssnake.dto.User",
+      "history": "(self, game_id)",
+      "image": "(self, game_id, perspective=None) -> bytes",
+      "legal_moves": "(self, game_id)",
+      "link_identity": "(self, user_id, provider, external_id) -> chesssnake.dto.User",
+      "login": "(self, username, password) -> chesssnake.dto.LoginResult",
+      "logout": "(self)",
+      "me": "(self) -> chesssnake.dto.User",
+      "move": "(self, game_id, move, player_id=None, expected_version=None) -> chesssnake.dto.MoveResult",
+      "offer_draw": "(self, game_id, player_id=None, expected_version=None) -> chesssnake.dto.GameState",
+      "pgn": "(self, game_id) -> str",
+      "record": "(self, player1, player2, group_id=0) -> dict",
+      "register": "(self, username, password) -> chesssnake.dto.LoginResult",
+      "rename": "(self, user_id, username) -> chesssnake.dto.User",
+      "resign": "(self, game_id, player_id=None, expected_version=None) -> chesssnake.dto.GameState",
+      "resolve": "(self, who) -> int",
+      "revoke_token": "(self, token_id)",
+      "settings": "(self) -> dict",
+      "tokens": "(self, user_id=None) -> list[chesssnake.dto.TokenInfo]",
+      "unlink_identity": "(self, user_id, provider, external_id) -> chesssnake.dto.User",
+      "update_settings": "(self, **changes) -> dict",
+      "update_user": "(self, user_id, *, username=None, role=None, disabled=None, password=None) -> chesssnake.dto.User",
+      "user": "(self, who) -> chesssnake.dto.User",
+      "withdraw_challenge": "(self, challenge_id)"
+    },
+    "payloads": {
+      "Challenge": [
+        "id",
+        "group_id",
+        "challenger_id",
+        "challenger_name",
+        "challenged_id",
+        "challenged_name",
+        "color",
+        "created_at"
+      ],
+      "GameState": [
+        "fen",
+        "status",
+        "version",
+        "generation",
+        "draw",
+        "termination",
+        "id",
+        "group_id",
+        "white_id",
+        "black_id",
+        "white_name",
+        "black_name",
+        "started_at",
+        "updated_at"
+      ],
+      "LoginResult": [
+        "token",
+        "token_info",
+        "user"
+      ],
+      "MoveResult": [
+        "state",
+        "from_square",
+        "to_square",
+        "san",
+        "check",
+        "castle",
+        "promotion",
+        "en",
+        "legal_moves"
+      ],
+      "TokenInfo": [
+        "id",
+        "kind",
+        "name",
+        "created_at",
+        "expires_at"
+      ],
+      "User": [
+        "id",
+        "username",
+        "role",
+        "created_at",
+        "disabled_at",
+        "identities",
+        "has_password"
+      ]
+    },
+    "EventStream": [
+      "close",
+      "drain",
+      "fileno",
+      "subscribe",
+      "unsubscribe"
+    ],
+    "error types": {
+      "chess (400)": [
+        "CaptureOwnPieceError",
+        "ChessError",
+        "DrawAlreadyOfferedError",
+        "DrawNotOfferedError",
+        "DrawWrongTurnError",
+        "GameOverError",
+        "IllegalMoveError",
+        "InvalidCastleError",
+        "InvalidNotationError",
+        "MoveIntoCheckError",
+        "MultiplePiecesFoundError",
+        "NothingToCaptureError",
+        "PieceNotFoundError",
+        "PieceOnSquareError",
+        "PromotionError"
+      ],
+      "game": [
+        "AuthError",
+        "ChallengeError",
+        "ChallengeNotFoundError",
+        "ForbiddenError",
+        "GameError",
+        "GameNotFoundError",
+        "NotYourTurnError",
+        "SQLAuthError",
+        "SQLBusyError",
+        "SQLError",
+        "SQLIdError",
+        "TokenNotFoundError",
+        "UserExistsError",
+        "UserNotFoundError",
+        "UserValidationError",
+        "VersionConflictError"
+      ]
+    }
+  },
+  "rest": {
+    "DELETE /v1/auth/tokens/{token_id}": {},
+    "DELETE /v1/challenges/{challenge_id}": {},
+    "DELETE /v1/games/{game_id}": {},
+    "DELETE /v1/users/{user_id}/identities/{provider}/{external_id}": {},
+    "GET /": {},
+    "GET /docs": {},
+    "GET /docs/oauth2-redirect": {},
+    "GET /health": {},
+    "GET /openapi.json": {},
+    "GET /redoc": {},
+    "GET /v1/auth/me": {},
+    "GET /v1/auth/settings": {},
+    "GET /v1/auth/tokens": {
+      "query": [
+        "user_id"
+      ]
+    },
+    "GET /v1/challenges": {
+      "query": [
+        "direction",
+        "user_id"
+      ]
+    },
+    "GET /v1/challenges/{challenge_id}": {},
+    "GET /v1/games": {
+      "query": [
+        "group_id",
+        "player_id"
+      ]
+    },
+    "GET /v1/games/between": {
+      "query": [
+        "group_id",
+        "player1",
+        "player2",
+        "status"
+      ]
+    },
+    "GET /v1/games/finished": {
+      "query": [
+        "before",
+        "limit",
+        "player_id"
+      ]
+    },
+    "GET /v1/games/live": {
+      "query": [
+        "limit"
+      ]
+    },
+    "GET /v1/games/record": {
+      "query": [
+        "group_id",
+        "player1",
+        "player2"
+      ]
+    },
+    "GET /v1/games/{game_id}": {},
+    "GET /v1/games/{game_id}/fen": {},
+    "GET /v1/games/{game_id}/history": {},
+    "GET /v1/games/{game_id}/image": {
+      "query": [
+        "perspective"
+      ]
+    },
+    "GET /v1/games/{game_id}/legal-moves": {},
+    "GET /v1/games/{game_id}/pgn": {},
+    "GET /v1/info": {},
+    "GET /v1/users": {
+      "query": [
+        "username"
+      ]
+    },
+    "GET /v1/users/search": {
+      "query": [
+        "limit",
+        "offset",
+        "q"
+      ]
+    },
+    "GET /v1/users/{provider}/{external_id}": {},
+    "GET /v1/users/{user_id}": {},
+    "MOUNT /assets": {},
+    "MOUNT /assets/pieces": {},
+    "PATCH /v1/auth/settings": {
+      "body": [
+        "changes"
+      ]
+    },
+    "PATCH /v1/users/{user_id}": {
+      "body": [
+        "disabled",
+        "password",
+        "role",
+        "username"
+      ]
+    },
+    "POST /v1/auth/login": {
+      "body": [
+        "password",
+        "username"
+      ]
+    },
+    "POST /v1/auth/logout": {},
+    "POST /v1/auth/password": {
+      "body": [
+        "current_password",
+        "new_password"
+      ]
+    },
+    "POST /v1/auth/register": {
+      "body": [
+        "password",
+        "username"
+      ]
+    },
+    "POST /v1/auth/tokens": {
+      "body": [
+        "current_password",
+        "expires_in_days",
+        "name"
+      ]
+    },
+    "POST /v1/challenges": {
+      "body": [
+        "color",
+        "group_id",
+        "opponent_id",
+        "player_id"
+      ]
+    },
+    "POST /v1/challenges/{challenge_id}/accept": {
+      "body": [
+        "body"
+      ]
+    },
+    "POST /v1/games": {
+      "body": [
+        "black_id",
+        "group_id",
+        "white_id"
+      ]
+    },
+    "POST /v1/games/{game_id}/draw/accept": {
+      "body": [
+        "body"
+      ]
+    },
+    "POST /v1/games/{game_id}/draw/decline": {
+      "body": [
+        "body"
+      ]
+    },
+    "POST /v1/games/{game_id}/draw/offer": {
+      "body": [
+        "body"
+      ]
+    },
+    "POST /v1/games/{game_id}/moves": {
+      "body": [
+        "expected_version",
+        "move",
+        "player_id"
+      ]
+    },
+    "POST /v1/games/{game_id}/resign": {
+      "body": [
+        "body"
+      ]
+    },
+    "POST /v1/users": {
+      "body": [
+        "password",
+        "role",
+        "username"
+      ]
+    },
+    "POST /v1/users/{provider}/{external_id}": {
+      "body": [
+        "username"
+      ]
+    },
+    "PUT /v1/users/{user_id}/identities/{provider}/{external_id}": {},
+    "WS /v1/ws": {}
+  },
+  "config and cli": {
+    "settings": {
+      "api.host": "CHESSSNAKE__API__HOST",
+      "api.port": "CHESSSNAKE__API__PORT",
+      "api.registration": "CHESSSNAKE__API__REGISTRATION",
+      "api.session_lifetime_days": "CHESSSNAKE__API__SESSION_LIFETIME_DAYS",
+      "database.url": "CHESSSNAKE__DATABASE__URL",
+      "database.pool_min_size": "CHESSSNAKE__DATABASE__POOL_MIN_SIZE",
+      "database.pool_max_size": "CHESSSNAKE__DATABASE__POOL_MAX_SIZE",
+      "database.init_schema": "CHESSSNAKE__DATABASE__INIT_SCHEMA",
+      "database.sqlite_busy_timeout": "CHESSSNAKE__DATABASE__SQLITE_BUSY_TIMEOUT",
+      "websocket.enabled": "CHESSSNAKE__WEBSOCKET__ENABLED",
+      "websocket.max_connections": "CHESSSNAKE__WEBSOCKET__MAX_CONNECTIONS",
+      "websocket.max_pending_auth": "CHESSSNAKE__WEBSOCKET__MAX_PENDING_AUTH",
+      "websocket.max_connections_per_user": "CHESSSNAKE__WEBSOCKET__MAX_CONNECTIONS_PER_USER",
+      "websocket.max_subscriptions": "CHESSSNAKE__WEBSOCKET__MAX_SUBSCRIPTIONS",
+      "websocket.auth_timeout_seconds": "CHESSSNAKE__WEBSOCKET__AUTH_TIMEOUT_SECONDS",
+      "websocket.reauth_interval_seconds": "CHESSSNAKE__WEBSOCKET__REAUTH_INTERVAL_SECONDS",
+      "websocket.send_queue_size": "CHESSSNAKE__WEBSOCKET__SEND_QUEUE_SIZE",
+      "websocket.ping_interval_seconds": "CHESSSNAKE__WEBSOCKET__PING_INTERVAL_SECONDS",
+      "websocket.ping_timeout_seconds": "CHESSSNAKE__WEBSOCKET__PING_TIMEOUT_SECONDS",
+      "websocket.max_message_bytes": "CHESSSNAKE__WEBSOCKET__MAX_MESSAGE_BYTES",
+      "websocket.compression": "CHESSSNAKE__WEBSOCKET__COMPRESSION",
+      "websocket.worker_threads": "CHESSSNAKE__WEBSOCKET__WORKER_THREADS",
+      "websocket.shutdown_timeout_seconds": "CHESSSNAKE__WEBSOCKET__SHUTDOWN_TIMEOUT_SECONDS",
+      "websocket.allowed_origins": "CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS",
+      "web.enabled": "CHESSSNAKE__WEB__ENABLED",
+      "client.api_url": "CHESSSNAKE__CLIENT__API_URL",
+      "client.token": "CHESSSNAKE__CLIENT__TOKEN"
+    },
+    "commands": {
+      "login": {
+        "arguments": [
+          "username"
+        ],
+        "options": [
+          "--api-url",
+          "--password-stdin",
+          "--token"
+        ]
+      },
+      "logout": {
+        "arguments": [],
+        "options": [
+          "--api-url",
+          "--token"
+        ]
+      },
+      "whoami": {
+        "arguments": [],
+        "options": [
+          "--api-url",
+          "--token"
+        ]
+      },
+      "games": {
+        "arguments": [],
+        "options": [
+          "--api-url",
+          "--group",
+          "--token"
+        ]
+      },
+      "challenge": {
+        "arguments": [
+          "opponent"
+        ],
+        "options": [
+          "--api-url",
+          "--color {white,black,random}",
+          "--group",
+          "--token"
+        ]
+      },
+      "challenges": {
+        "arguments": [],
+        "options": [
+          "--api-url",
+          "--token"
+        ]
+      },
+      "accept": {
+        "arguments": [
+          "challenge"
+        ],
+        "options": [
+          "--api-url",
+          "--token"
+        ]
+      },
+      "decline": {
+        "arguments": [
+          "challenge"
+        ],
+        "options": [
+          "--api-url",
+          "--token"
+        ]
+      },
+      "play": {
+        "arguments": [],
+        "options": [
+          "--api-url",
+          "--ascii",
+          "--black-name",
+          "--game",
+          "--group",
+          "--local",
+          "--me",
+          "--no-color",
+          "--no-live",
+          "--perspective {white,black}",
+          "--refresh",
+          "--token",
+          "--vs",
+          "--white-name"
+        ]
+      },
+      "api-endpoint": {
+        "arguments": [],
+        "options": [
+          "--config",
+          "--database-url",
+          "--host",
+          "--init-db",
+          "--port",
+          "--registration {closed,open}",
+          "-o, --set"
+        ]
+      },
+      "init-db": {
+        "arguments": [],
+        "options": [
+          "--config",
+          "--create-database",
+          "--database-url",
+          "--drop",
+          "-o, --set"
+        ]
+      },
+      "user": {
+        "arguments": [],
+        "options": [],
+        "subcommands": {
+          "create": {
+            "arguments": [
+              "username"
+            ],
+            "options": [
+              "--admin",
+              "--config",
+              "--database-url",
+              "--no-password",
+              "--password-stdin",
+              "-o, --set"
+            ]
+          },
+          "show": {
+            "arguments": [
+              "user"
+            ],
+            "options": [
+              "--config",
+              "--database-url",
+              "-o, --set"
+            ]
+          },
+          "set-role": {
+            "arguments": [
+              "user",
+              "role {user,admin}"
+            ],
+            "options": [
+              "--config",
+              "--database-url",
+              "-o, --set"
+            ]
+          },
+          "rename": {
+            "arguments": [
+              "user",
+              "username"
+            ],
+            "options": [
+              "--config",
+              "--database-url",
+              "-o, --set"
+            ]
+          },
+          "link": {
+            "arguments": [
+              "user",
+              "provider",
+              "external_id"
+            ],
+            "options": [
+              "--config",
+              "--database-url",
+              "-o, --set"
+            ]
+          },
+          "set-password": {
+            "arguments": [
+              "user"
+            ],
+            "options": [
+              "--config",
+              "--database-url",
+              "--password-stdin",
+              "-o, --set"
+            ]
+          },
+          "disable": {
+            "arguments": [
+              "user"
+            ],
+            "options": [
+              "--config",
+              "--database-url",
+              "-o, --set"
+            ]
+          },
+          "enable": {
+            "arguments": [
+              "user"
+            ],
+            "options": [
+              "--config",
+              "--database-url",
+              "-o, --set"
+            ]
+          },
+          "token": {
+            "arguments": [
+              "user"
+            ],
+            "options": [
+              "--config",
+              "--database-url",
+              "--expires-days",
+              "--name",
+              "-o, --set"
+            ]
+          }
+        }
+      },
+      "config": {
+        "arguments": [],
+        "options": [],
+        "subcommands": {
+          "show": {
+            "arguments": [],
+            "options": [
+              "--config",
+              "--database-url",
+              "--format {table,json}",
+              "--host",
+              "--port",
+              "--registration {closed,open}",
+              "--show-secrets",
+              "-o, --set"
+            ]
+          },
+          "init": {
+            "arguments": [],
+            "options": [
+              "--force"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

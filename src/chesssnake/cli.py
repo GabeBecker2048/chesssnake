@@ -560,7 +560,14 @@ def _add_setting_flags(parser):
     parser.add_argument("--database-url", dest="database_url", help="database connection string")
 
 
-def main(argv=None):
+def build_parser() -> argparse.ArgumentParser:
+    """
+    The whole command line: every subcommand, argument and option.
+
+    Separate from :func:`main` so the command-line surface can be inspected
+    without running anything: ``tests/config/test_public_api.py`` pins it, since
+    commands and flags end up in scripts and compose files.
+    """
     parser = argparse.ArgumentParser(prog="chesssnake", description="chesssnake command-line interface")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -746,8 +753,11 @@ def main(argv=None):
     )
     init.add_argument("--force", action="store_true", help="overwrite an existing config file")
     init.set_defaults(func=_run_config_init)
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     try:
         args.func(args)
     except KeyboardInterrupt:
