@@ -24,6 +24,7 @@ accounts, and act for any player by passing ``player_id``.
 import io
 import logging
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, Literal
@@ -37,7 +38,7 @@ from ..db import engine as db_engine
 from ..db import errors, schema
 from ..db import operations as ops
 from ..dto import COLORS, ROLES, Challenge, GameState, LoginResult, MoveResult, TokenInfo, User
-from ..engine import INITIAL_FEN
+from ..engine import INITIAL_FEN, Board
 from ..engine import Game as EngineGame
 from ..engine import errors as chess_errors
 from ..serialize import game_from_state, state_from_game
@@ -762,11 +763,29 @@ def fen(game_id: int):
     return PlainTextResponse(_require_game(game_id)["fen"])
 
 
+@lru_cache(maxsize=64)
+def _board_png(fen: str, white_name: str, black_name: str, perspective: str | None) -> bytes:
+    """
+    The PNG for a position, cached: the 64 most recent images, about 100 KB each.
+
+    These four values are everything the image shows (a server image has no
+    last-move highlight), so the key is complete, and a rename or a move gives a new
+    key. Repeated views of a position, from spectators, refreshes or a bot posting
+    the board again, skip rendering and encoding (together about 40 ms).
+    ``compress_level=1`` encodes a third faster than PNG's default for about a
+    tenth more bytes.
+    """
+    game = EngineGame(board=Board.from_fen(fen), white_name=white_name, black_name=black_name)
+    buffer = io.BytesIO()
+    game.render(perspective=perspective).save(buffer, format="PNG", compress_level=1)
+    return buffer.getvalue()
+
+
 @v1.get("/games/{game_id}/image")
 def game_image(game_id: int, perspective: Literal["white", "black"] | None = None):
-    buffer = io.BytesIO()
-    _load_game(_require_game(game_id)).render(perspective=perspective).save(buffer, format="PNG")
-    return Response(content=buffer.getvalue(), media_type="image/png")
+    row = _require_game(game_id)
+    png = _board_png(row["fen"], row["white_name"] or "", row["black_name"] or "", perspective)
+    return Response(content=png, media_type="image/png")
 
 
 # --- Application factory ---------------------------------------------------

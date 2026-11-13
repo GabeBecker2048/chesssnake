@@ -32,3 +32,15 @@ def test_single_perspective_is_one_board():
 def test_perspective_accepts_color_or_string():
     g = Game()
     assert g.render(perspective="white").size == g.render(perspective=Color.WHITE).size
+
+
+def test_cached_backgrounds_are_never_drawn_on():
+    """Renders copy the decoded background images; a highlight must not stay behind."""
+    g = Game(white_name="A", black_name="B")
+    plain = g.render().tobytes()
+    g.move("e4")  # last_move is set, so the next render highlights e2 and e4
+    g.render()
+    g.render(perspective="white")
+    g.board.undo()
+    g.last_move = None
+    assert g.render().tobytes() == plain

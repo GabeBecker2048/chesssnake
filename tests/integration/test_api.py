@@ -273,6 +273,16 @@ def test_image_perspective(api_client, game):
     assert api_client.get(f"{game}/image", params={"perspective": "sideways"}).status_code == 422
 
 
+def test_image_is_cached_by_what_it_shows(api_client, game, pair):
+    first = api_client.get(f"{game}/image").content
+    assert api_client.get(f"{game}/image").content == first  # same position: same bytes
+    api_client.post(f"{game}/moves", json={"move": "e4"})
+    moved = api_client.get(f"{game}/image").content
+    assert moved != first  # a move is a new key
+    api_client.patch(f"/v1/users/{pair[0]}", json={"username": "renamed"})
+    assert api_client.get(f"{game}/image").content != moved  # so is a rename (the names are drawn)
+
+
 # --- the archive -------------------------------------------------------------
 
 
