@@ -1,609 +1,591 @@
-"""The `Board`: the 8x8 grid plus move/undo and check/mate detection."""
+"""The `Board`: a chess position, its legal moves, and the rules that end a game.
 
-import copy
-from contextlib import contextmanager
+Inside, the board is a list of 64 squares (index ``i * 8 + j``, a8 first; see
+:mod:`chesssnake.engine._notation`) holding :class:`Piece` values or ``None``.
+Moves are generated straight from precomputed tables and tested for legality by
+playing them in place and taking them back (make/unmake), never by copying the
+board. None of that is public: the public surface is square names, :class:`Piece`
+and :class:`Move` values, and the query methods below, so the inside can change
+(a bitboard engine is planned for 0.16.0) without breaking callers.
+"""
 
-from . import errors, notation
+from . import _fen, _parse, _san, errors
+from ._notation import NAMES, index, is_valid_notation
 from .enums import Color, GameStatus, PieceType, Termination
 from .move import Move
-from .pieces import Bishop, King, Knight, Pawn, Queen, Rook
-from .san import to_san
-from .square import Square
+from .piece import PIECES, Piece
 
-# The four pieces a pawn may promote to.
-_PROMOTIONS = ("Q", "R", "B", "N")
+WHITE, BLACK = Color.WHITE, Color.BLACK
+PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING = (
+    PieceType.PAWN,
+    PieceType.KNIGHT,
+    PieceType.BISHOP,
+    PieceType.ROOK,
+    PieceType.QUEEN,
+    PieceType.KING,
+)
 
-# Castling-rights letters lost when a piece leaves (or is captured on) a key square.
-# Keyed by (i, j): the king home squares (both rights) and the four rook corners.
-_CASTLE_MASK = {
-    (7, 4): "KQ",  # white king home (e1)
-    (0, 4): "kq",  # black king home (e8)
-    (7, 7): "K",  # white king-side rook (h1)
-    (7, 0): "Q",  # white queen-side rook (a1)
-    (0, 7): "k",  # black king-side rook (h8)
-    (0, 0): "q",  # black queen-side rook (a8)
-}
+# --- precomputed tables ----------------------------------------------------------
+# Row deltas grow toward rank 1 (i increases downward), column deltas toward file h.
+
+
+def _on_board(i, j):
+    return 0 <= i < 8 and 0 <= j < 8
+
+
+def _ray(idx, di, dj):
+    i, j = divmod(idx, 8)
+    out = []
+    i, j = i + di, j + dj
+    while _on_board(i, j):
+        out.append(i * 8 + j)
+        i, j = i + di, j + dj
+    return tuple(out)
+
+
+def _steps(idx, deltas):
+    i, j = divmod(idx, 8)
+    return tuple((i + di) * 8 + (j + dj) for di, dj in deltas if _on_board(i + di, j + dj))
+
+
+_ORTHOGONAL = ((1, 0), (-1, 0), (0, 1), (0, -1))
+_DIAGONAL = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+_KNIGHT_JUMPS = ((2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2))
+
+# For each square, the non-empty rays outward (nearest square first).
+ORTHOGONAL_RAYS = tuple(tuple(r for r in (_ray(s, *d) for d in _ORTHOGONAL) if r) for s in range(64))
+DIAGONAL_RAYS = tuple(tuple(r for r in (_ray(s, *d) for d in _DIAGONAL) if r) for s in range(64))
+QUEEN_RAYS = tuple(ORTHOGONAL_RAYS[s] + DIAGONAL_RAYS[s] for s in range(64))
+KNIGHT_TARGETS = tuple(_steps(s, _KNIGHT_JUMPS) for s in range(64))
+KING_TARGETS = tuple(_steps(s, _ORTHOGONAL + _DIAGONAL) for s in range(64))
+# PAWN_ATTACKS[color][s]: the squares a pawn of ``color`` standing on ``s`` attacks.
+PAWN_ATTACKS = (
+    tuple(_steps(s, ((-1, -1), (-1, 1))) for s in range(64)),  # white moves up the board
+    tuple(_steps(s, ((1, -1), (1, 1))) for s in range(64)),  # black moves down
+)
+
+SLIDER_RAYS = {ROOK: ORTHOGONAL_RAYS, BISHOP: DIAGONAL_RAYS, QUEEN: QUEEN_RAYS}
+
+# What a pawn may promote to, in the order moves are listed.
+PROMOTIONS = (QUEEN, ROOK, BISHOP, KNIGHT)
+
+# Move flags (the fourth field of a ply).
+NORMAL, DOUBLE_STEP, EN_PASSANT, CASTLE_K, CASTLE_Q = range(5)
+
+# Castling rights lost when a piece leaves, or is captured on, one of these squares.
+_CASTLE_MASK = {60: "KQ", 4: "kq", 63: "K", 56: "Q", 7: "k", 0: "q"}
 
 
 class Board:
     """
-    Represents a chessboard and its related operations.
+    A chess position: the pieces, the side to move, castling and en-passant rights,
+    the clocks, and whether the game has ended.
 
-    The `Board` class encapsulates the 8x8 grid of a chessboard and provides methods for a
-    variety of essential chess operations. It handles initializing the board, querying individual
-    squares, moving pieces, undoing moves, detecting special conditions (e.g., check, checkmate,
-    and stalemate), and interacting with pieces on the board.
+    Build one with ``Board()`` (the starting position) or :meth:`from_fen`. It changes
+    only through :meth:`move` and :meth:`undo`. Squares are named in algebraic form
+    (``"e4"``) everywhere.
 
-    :ivar board: An 8x8 grid (list of lists) where each element is a `Square` object that
-        represents a square on the chessboard.
-    :type board: list[list[Square]]
-    :ivar en_passant: The FEN en-passant target square as an algebraic string (e.g.
-        ``"e3"``) — the square a pawn *skipped* on its last double step, onto which an
-        opposing pawn may capture — or ``None`` when no en-passant capture is available.
-    :type en_passant: str or None
-    :ivar castling: The FEN castling-availability field as a letters string (a subset of
-        ``"KQkq"``, or ``""`` when neither side may castle).
-    :type castling: str
-    :ivar status: The :class:`~chesssnake.engine.enums.GameStatus`
-        (``IN_PLAY``/``WHITE_WON``/``BLACK_WON``/``DRAW``). Set inside :meth:`move`.
-    :type status: GameStatus
-    :ivar termination: Why a finished game ended
-        (:class:`~chesssnake.engine.enums.Termination`), or ``None`` while in play.
-    :type termination: Termination or None
+    The six FEN fields are plain attributes, kept in FEN's own form:
+
+    :ivar turn: The :class:`Color` to move.
+    :ivar castling: The castling rights still available, a subset of ``"KQkq"``
+        (``""`` when none).
+    :ivar en_passant: The en-passant target square (the square a pawn skipped on its
+        last double step, e.g. ``"e3"``), or ``None``.
     :ivar halfmove_clock: Plies since the last pawn move or capture (fifty-move rule).
-    :type halfmove_clock: int
-    :ivar fullmove_number: The move number (starts at 1, increments after Black).
-    :type fullmove_number: int
+    :ivar fullmove_number: The move number; starts at 1, increments after Black moves.
+
+    And the outcome, set by :meth:`move` when a move ends the game by rule:
+
+    :ivar status: The :class:`GameStatus`.
+    :ivar termination: Why the game ended (:class:`Termination`), or ``None`` in play.
+        Threefold repetition needs the game's history, so
+        :class:`~chesssnake.engine.game.Game` applies that one.
     """
 
-    def __init__(self, board=None, en_passant=None, castling="KQkq"):
+    def __init__(self, fen: "str | None" = None):
         """
-        Initializes the chessboard.
-
-        If no board is provided, a default board is created with all pieces
-        arranged in their standard chess starting positions.
-
-        :param board: Optional pre-constructed 8x8 grid of `Square` objects. If not
-            provided, a new chessboard is constructed in the standard starting layout.
-        :type board: list[list[Square]] or None
-        :param en_passant: Optional FEN en-passant target square (algebraic string,
-            e.g. ``"e3"``), used for handling "en passant" captures. Default is `None`.
-        :type en_passant: str or None
-        :param castling: The FEN castling-availability letters (subset of ``"KQkq"``,
-            or ``""`` for none). Defaults to full rights (the starting position).
-        :type castling: str
+        :param fen: A FEN position, or ``None`` for the standard starting position.
+        :raises ValueError: if ``fen`` is not a valid FEN (the message says why).
         """
-        if board is None:
-            # creates board
-            board = []
+        self._load(*_fen.parse(_fen.INITIAL_FEN if fen is None else fen))
 
-            # sets up back rank template with same index as j
-            backrank = ["R", "N", "B", "Q", "K", "B", "N", "R"]
+    @classmethod
+    def from_fen(cls, fen: str) -> "Board":
+        """
+        The position described by a FEN string.
 
-            # vertical
-            for i in range(8):
-                # adds new rank
-                board.append([])
+        :raises ValueError: if ``fen`` is not a valid FEN (the message says why).
+        """
+        return cls(fen)
 
-                # horizontal
-                for j in range(8):
-                    # black backrank
-                    if i == 0:
-                        if backrank[j] == "R":
-                            piece = Rook(1)
-                        elif backrank[j] == "N":
-                            piece = Knight(1)
-                        elif backrank[j] == "B":
-                            piece = Bishop(1)
-                        elif backrank[j] == "Q":
-                            piece = Queen(1)
-                        elif backrank[j] == "K":
-                            piece = King(1)
-                        else:
-                            piece = None
+    @classmethod
+    def _from_grid(cls, grid, turn=WHITE, castling="", en_passant=None) -> "Board":
+        """A board from a 64-entry grid, skipping FEN validation (internal and tests:
+        it allows positions without kings)."""
+        board = cls.__new__(cls)
+        board._load(
+            [PIECES[p.type, p.color] if p is not None else None for p in grid], Color(turn), castling, en_passant, 0, 1
+        )
+        return board
 
-                        board[i].append(Square(i, j, piece=piece))
-
-                    # black pawns
-                    elif i == 1:
-                        board[i].append(Square(i, j, piece=Pawn(1)))
-
-                    # white pawns
-                    elif i == 6:
-                        board[i].append(Square(i, j, piece=Pawn(0)))
-
-                    # white backrank
-                    elif i == 7:
-                        if backrank[j] == "R":
-                            piece = Rook(0)
-                        elif backrank[j] == "N":
-                            piece = Knight(0)
-                        elif backrank[j] == "B":
-                            piece = Bishop(0)
-                        elif backrank[j] == "Q":
-                            piece = Queen(0)
-                        elif backrank[j] == "K":
-                            piece = King(0)
-                        else:
-                            piece = None
-
-                        board[i].append(Square(i, j, piece=piece))
-
-                    # empty squares
-                    else:
-                        board[i].append(Square(i, j))
-
-        self.board = board
-        # FEN en-passant target as an algebraic string (the skipped square), or None.
+    def _load(self, grid, turn, castling, en_passant, halfmove, fullmove):
+        self._grid: list[Piece | None] = grid
+        self.turn: Color = turn
+        self.castling: str = castling
         self.en_passant: str | None = en_passant
-        # FEN castling-availability letters (subset of "KQkq"; "" when none).
-        self.castling: str = "" if castling == "-" else castling
-        self.status = GameStatus.IN_PLAY
+        self.halfmove_clock: int = halfmove
+        self.fullmove_number: int = fullmove
+        self.status: GameStatus = GameStatus.IN_PLAY
         self.termination: Termination | None = None
-        # FEN clocks: halfmove counts plies since the last pawn move or capture
-        # (for the fifty-move rule); fullmove starts at 1 and increments after Black.
-        self.halfmove_clock = 0
-        self.fullmove_number = 1
+        # each side's king square (None in a kingless test position)
+        self._kings: list[int | None] = [None, None]
+        for idx, piece in enumerate(grid):
+            if piece is not None and piece.type is KING:
+                self._kings[piece.color] = idx
+        # (ply, undo record, Move) for every move played, for undo()
+        self._stack: list = []
 
-    @contextmanager
-    def lifted(self, square):
+    # --- reading the position -----------------------------------------------------
+
+    @property
+    def fen(self) -> str:
+        """The position as a FEN string."""
+        return _fen.write(self)
+
+    def piece_at(self, square: str) -> "Piece | None":
         """
-        Context manager that temporarily removes the piece on ``square``.
+        The piece on ``square`` (e.g. ``"e4"``), or ``None`` if it is empty.
 
-        The piece is restored when the block exits (even on exception), making
-        "remove piece, inspect board, put it back" analyses exception-safe.
+        :raises ValueError: if ``square`` is not a square name.
         """
-        piece = square.piece
-        square.piece = None
-        try:
-            yield
-        finally:
-            square.piece = piece
+        return self._grid[index(square)]
 
-    def __iter__(self):
+    def pieces(self, piece_type: PieceType, color: Color) -> list[str]:
         """
-        Allows iteration over the board's rows.
+        The squares holding pieces of one type and color, a8 to h1 rank by rank.
 
-        Each iteration yields one of the 8 rows (lists of `Square` objects) in the board.
-
-        :return: Iterator over the rows of the board.
-        :rtype: iter
+        ``board.pieces(PieceType.KNIGHT, Color.WHITE)`` is ``["b1", "g1"]`` at the start.
         """
-        return iter(self.board)
+        wanted = PIECES[PieceType(piece_type), Color(color)]
+        return [NAMES[idx] for idx, piece in enumerate(self._grid) if piece is wanted]
 
-    def __getitem__(self, pos):
+    def is_attacked(self, square: str, by: Color) -> bool:
         """
-        Retrieves a specific `Square` object on the chessboard based on its coordinates.
+        Whether any piece of color ``by`` attacks ``square``, whatever stands on it.
 
-        :param pos: Tuple `(i, j)` representing the row and column of the square.
-        :type pos: tuple[int, int]
-        :return: The `Square` object located at the specified coordinates, or `None`
-            if the coordinates are out of bounds.
-        :rtype: Square or None
+        Pins do not matter here: a pinned piece still attacks.
+
+        :raises ValueError: if ``square`` is not a square name.
         """
-        i, j = pos
-        if (i > 7) or (i < 0) or (j > 7) or (j < 0):
-            return None
+        return self._attacked(index(square), Color(by))
 
-        return self.board[i][j]
+    def is_check(self) -> bool:
+        """Whether the side to move is in check."""
+        king = self._kings[self.turn]
+        return king is not None and self._attacked(king, self.turn.opponent)
 
-    # returns a string that can be printed for a nice looking text-based board
-    def __str__(self):
+    def is_checkmate(self) -> bool:
+        """Whether the side to move is checkmated."""
+        return self.is_check() and not self._has_legal_move()
+
+    def is_stalemate(self) -> bool:
+        """Whether the side to move is stalemated (not in check, no legal move)."""
+        return not self.is_check() and not self._has_legal_move()
+
+    def is_insufficient_material(self) -> bool:
         """
-        Converts the board into a human-readable string format.
+        Whether neither side has enough material to checkmate.
 
-        Each square is represented by its piece symbol (if present) and color
-        (e.g., 'P0' for a white pawn, 'K1' for a black king). Empty squares are
-        represented as `--`.
-
-        :return: A string representation of the chessboard.
-        :rtype: str
+        Covers the standard dead positions: king against king, king and one minor
+        piece against king, and kings with bishops that all stand on one square color.
+        Any pawn, rook or queen means mate is still possible.
         """
-        out = ""
+        minors = 0
+        bishop_square_colors = set()
+        bishops = 0
+        for idx, piece in enumerate(self._grid):
+            if piece is None or piece.type is KING:
+                continue
+            if piece.type in (PAWN, ROOK, QUEEN):
+                return False
+            minors += 1
+            if piece.type is BISHOP:
+                bishops += 1
+                bishop_square_colors.add((idx // 8 + idx % 8) % 2)
+        if minors <= 1:
+            return True
+        return minors == bishops and len(bishop_square_colors) == 1
 
-        for i in range(0, 8):
-            out += str(8 - i) + "\t"
-            for j in range(0, 8):
-                if self[i, j].piece is not None:
-                    out += self[i, j].piece.piecetype.value
-                    out += str(int(self[i, j].piece.color))
-                    out += " "
-                else:
-                    out += "-- "
-            out += "\n"
-        out += "\n\ta  b  c  d  e  f  g  h\n"
+    def legal_moves(self) -> list[dict]:
+        """
+        Every legal move for the side to move.
 
+        Each entry is ``{"from", "to", "san", "promotion"}``: square names, the move
+        in chesssnake notation (which :meth:`move` accepts back), and the promotion
+        letter or ``None``. Castling has ``"to": None`` and ``"san"`` ``"0-0"`` or
+        ``"0-0-0"``. This is also the shape of the REST ``legal-moves`` response.
+
+        :rtype: list[dict]
+        """
+        legal = self._legal()
+        out = []
+        for ply, san in zip(legal, _san.sans(self, legal)):
+            frm, to, promo, flag = ply
+            castle = flag >= CASTLE_K
+            out.append(
+                {
+                    "from": NAMES[frm],
+                    "to": None if castle else NAMES[to],
+                    "san": san,
+                    "promotion": promo.value if promo is not None else None,
+                }
+            )
         return out
 
-    def move(self, move, player, detect_outcome=True):
+    # --- changing the position ----------------------------------------------------
+
+    def move(self, move: str) -> Move:
         """
-        Executes a move on the chessboard.
+        Play a move for the side to move.
 
-        Updates the game state (`status`) in the event of checkmate or stalemate.
+        Accepts SAN (``e4``, ``Nf3``, ``exd5``, ``Nbd2``, ``e8=Q`` or ``e8Q``, ``O-O`` or
+        ``0-0``, with or without ``+``/``#``) and UCI (``e2e4``, ``e7e8q``, castling as
+        the king's move ``e1g1``). Afterwards, :attr:`status` and :attr:`termination`
+        record a checkmate, stalemate, insufficient material or the fifty-move rule.
 
-        Raises an exception if the move is invalid.
-
-        :param move: The move object representing the player's action.
-        :type move: Move
-        :param player: The current player's color (0 for white, 1 for black).
-        :type player: int
-        :param detect_outcome: Whether to update ``status``/``termination`` afterwards.
-            Internal: :meth:`_has_legal_move` applies candidate moves to a throwaway
-            board purely to see whether they are legal, and outcome detection would
-            recurse back into it. Callers should leave this ``True``.
-        :type detect_outcome: bool
-        :return: The executed move object for reference.
-        :rtype: Move
-        :raises errors.MoveIntoCheckError: If the move would put the player in check.
-        :raises errors.PromotionError: If an invalid promotion is attempted or a promotion is required.
-        :raises errors.InvalidCastleError: If an invalid castling move is attempted.
-        :raises errors.PieceNotFoundError: If no eligible piece is found for the move.
-        :raises errors.MultiplePiecesFoundError: If more than one matching piece is found.
-        :raises errors.NothingToCaptureError: If no opposing piece exists on the target square.
-        :raises errors.CaptureOwnPieceError: If a piece of the same color exists on the target square.
-        :raises errors.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
+        :param move: The move string.
+        :return: The :class:`Move` played.
+        :raises errors.InvalidNotationError: If the string is not a move at all.
+        :raises errors.GameOverError: If the game has already ended.
+        :raises errors.MoveIntoCheckError: If the move would leave the king in check.
+        :raises errors.PromotionError: If a promotion is missing, or given where none is possible.
+        :raises errors.InvalidCastleError: If castling that way is not allowed.
+        :raises errors.PieceNotFoundError: If no piece of that kind can reach the square.
+        :raises errors.MultiplePiecesFoundError: If more than one can and the move does not say which.
+        :raises errors.NothingToCaptureError: If a capture names an empty square.
+        :raises errors.CaptureOwnPieceError: If a capture names a square holding an own piece.
+        :raises errors.PieceOnSquareError: If a non-capture names an occupied square.
+        :raises errors.IllegalMoveError: If a UCI move is not legal for any other reason.
         """
-        player = Color(player)
-        prev_ep = self.en_passant
+        if not is_valid_notation(move):
+            raise errors.InvalidNotationError(move)
+        if self.status != GameStatus.IN_PLAY:
+            raise errors.GameOverError()
 
-        # makes the move object
-        m = Move(move, player, self)
+        legal = self._legal()
+        ply = _parse.resolve(self, move.strip(), legal)
+        san = _san.san(self, ply, legal)
+        frm, to, promo, flag = ply
+        mover = self.turn
+        piece = self._grid[frm]
+        assert piece is not None
+        captured = PIECES[PAWN, mover.opponent] if flag == EN_PASSANT else self._grid[to]
 
-        # if en passant, delete the old piece
-        if m.en:
-            x = 1 if player == Color.WHITE else -1
-            self[m.to.i + x, m.to.j].piece = None
+        undo = self._make(ply)
+        self._update_outcome(mover)
+        if self.termination is Termination.CHECKMATE:
+            san += "#"
+        elif self.is_check():
+            san += "+"
 
-        # moving the rook for castling
-        if m.castle is not None:
-            x = 7 if player == Color.WHITE else 0
-            j1 = 7 if m.castle == "K" else 0
-            j2 = 5 if m.castle == "K" else 3
-            self[x, j1].piece = None
-            self[x, j2].piece = Rook(player)
+        played = Move(
+            from_square=NAMES[frm],
+            to_square=NAMES[to],
+            piece=piece,
+            san=san,
+            promotion=promo,
+            captured=captured,
+            castle="K" if flag == CASTLE_K else "Q" if flag == CASTLE_Q else None,
+            en_passant=flag == EN_PASSANT,
+        )
+        self._stack.append((ply, undo, played))
+        return played
 
-        # pawn promotions
-        new_piece = m.piece
-        if m.promotion is not None:
-            if m.promotion == "Q":
-                new_piece = Queen(player)
-            elif m.promotion == "R":
-                new_piece = Rook(player)
-            elif m.promotion == "B":
-                new_piece = Bishop(player)
-            elif m.promotion == "N":
-                new_piece = Knight(player)
+    def undo(self) -> Move:
+        """
+        Take back the last move played on this board, restoring everything
+        (pieces, rights, clocks, outcome).
 
-        # detect a capture (for the halfmove clock) before the target is overwritten
-        is_capture = self[m.to.i, m.to.j].piece is not None or m.en
-        is_pawn_move = m.piece.piecetype == PieceType.PAWN
+        :return: The :class:`Move` taken back.
+        :raises IndexError: if no move has been played on this board.
+        """
+        if not self._stack:
+            raise IndexError("no move to undo")
+        ply, undo, played = self._stack.pop()
+        self._unmake(ply, undo)
+        return played
 
-        # sets the board correctly
-        self[m.prev.i, m.prev.j].piece = None
-        self[m.to.i, m.to.j].piece = new_piece
+    def copy(self) -> "Board":
+        """An independent copy of this board, including its undo history."""
+        other = Board.__new__(Board)
+        other.__dict__.update(self.__dict__)
+        other._grid = list(self._grid)
+        other._kings = list(self._kings)
+        other._stack = list(self._stack)
+        return other
 
-        # if the player is moving into check, we undo the move and raise an error
-        if self.check_for_check(player):
-            self.undo_move(m, player, prev_ep)
-            raise errors.MoveIntoCheckError
+    def __str__(self) -> str:
+        from .text import render_text
 
-        # en passant is only available for the single move after a double step: unless
-        # this move set a new target (Move parsing does so on a two-square advance), clear it
-        if prev_ep is not None and self.en_passant == prev_ep:
-            self.en_passant = None
+        return render_text(self, figurines=False)
 
-        # update castling rights: a king/rook leaving — or an enemy capturing on — a key
-        # square drops the associated right(s). Done after the move-into-check undo above,
-        # so undo_move never has to restore rights.
-        for si, sj in ((m.prev.i, m.prev.j), (m.to.i, m.to.j)):
-            for ch in _CASTLE_MASK.get((si, sj), ""):
-                self.castling = self.castling.replace(ch, "")
+    def __repr__(self) -> str:
+        return f"Board({self.fen!r})"
 
-        # FEN clocks
-        self.halfmove_clock = 0 if (is_pawn_move or is_capture) else self.halfmove_clock + 1
-        if player == Color.BLACK:
-            self.fullmove_number += 1
+    # --- the engine (internal) ----------------------------------------------------
 
-        if not detect_outcome:
-            return m
-
-        # update the game outcome from the rules the board can see by itself
-        # (threefold repetition is applied by Game.move, which holds the history)
-        opponent = player.opponent
-        if self.check_for_mate(opponent):
-            self.status = GameStatus.won_by(player)
-            self.termination = Termination.CHECKMATE
-        elif not self.check_for_check(opponent) and self.check_for_stalemate(opponent):
-            self.status = GameStatus.DRAW
-            self.termination = Termination.STALEMATE
-        elif self.insufficient_material():
+    def _update_outcome(self, mover: Color) -> None:
+        """Set status/termination after ``mover`` moved (threefold is Game's job)."""
+        if not self._has_legal_move():
+            if self.is_check():
+                self.status = GameStatus.won_by(mover)
+                self.termination = Termination.CHECKMATE
+            else:
+                self.status = GameStatus.DRAW
+                self.termination = Termination.STALEMATE
+        elif self.is_insufficient_material():
             self.status = GameStatus.DRAW
             self.termination = Termination.INSUFFICIENT_MATERIAL
         elif self.halfmove_clock >= 100:
             self.status = GameStatus.DRAW
             self.termination = Termination.FIFTY_MOVE
 
-        return m
-
-    def insufficient_material(self):
-        """
-        Whether neither side has enough material to force checkmate.
-
-        Covers the standard dead positions: K vs K, K vs K + a single minor, and
-        K+B vs K+B with both bishops on same-colored squares. Any pawn, rook, or
-        queen means mate is still possible.
-
-        :rtype: bool
-        """
-        minors = 0
-        bishop_square_colors = []
-        for rank in self:
-            for square in rank:
-                piece = square.piece
-                if piece is None or piece.piecetype == PieceType.KING:
-                    continue
-                if piece.piecetype in (PieceType.PAWN, PieceType.ROOK, PieceType.QUEEN):
-                    return False
-                minors += 1
-                if piece.piecetype == PieceType.BISHOP:
-                    bishop_square_colors.append(square.color)
-
-        if minors <= 1:
-            return True
-        # K+B vs K+B (or same-side bishops) all on one square color can't mate
-        return minors == len(bishop_square_colors) and len(set(bishop_square_colors)) == 1
-
-    def undo_move(self, move, player, prev_ep):
-        """
-        Reverses a previously executed move on the chessboard.
-
-        Essentially restores the board's state to what it was before a move,
-        including restoring captured pieces and undoing special moves
-        (e.g., castling and "en passant").
-
-        :param move: The move object to undo.
-        :type move: Move
-        :param player: The player's color (0 for white, 1 for black).
-        :type player: int
-        :param prev_ep: The FEN en-passant target string prior to the move, restored
-            here. (Castling rights are updated only after this undo path, so they never
-            need restoring.)
-        :type prev_ep: str or None
-        """
-        # restores the en-passant target to what it was before
-        player = Color(player)
-        self.en_passant = prev_ep
-
-        # if en passant, places back the old piece
-        if move.en:
-            x = 1 if player == Color.WHITE else -1
-            self[move.to.i + x, move.to.j].piece = Pawn(player.opponent)
-
-        # moving the rook for castling
-        if move.castle is not None:
-            x = 7 if player == Color.WHITE else 0
-            j1 = 7 if move.castle == "K" else 0
-            j2 = 5 if move.castle == "K" else 3
-            self[x, j1].piece = Rook(player)
-            self[x, j2].piece = None
-
-        # sets the board correctly
-        self[move.prev.i, move.prev.j].piece = move.piece
-        self[move.to.i, move.to.j].piece = None
-
-    # returns the first square found containing the king of the specified color
-    def find_king(self, color):
-        """
-        Finds the `Square` containing the King of the specified color.
-
-        Searches the board to locate the King for a given player.
-
-        :param color: The color of the King to locate (0 for white, 1 for black).
-        :type color: int
-        :return: The `Square` where the King is located, or `None` if the King
-            could not be found.
-        :rtype: Square or None
-        """
-        color = Color(color)
-        for x in range(8):
-            # if color is white, search from bottom up
-            # if color is black, search from top down
-            i = 7 - x if color == Color.WHITE else x
-
-            # search from right to left (it is common to kingside castle, which is towards the right)
-            for j in range(7, -1, -1):
-                if (
-                    self[i, j].piece is not None
-                    and self[i, j].piece.piecetype == PieceType.KING
-                    and self[i, j].piece.color == color
-                ):
-                    return self[i, j]
-
-        return None
-
-    # returns a list of squares that have pieces that are threatening the given square for the given player
-    def threats_on(self, square, player):
-        """
-        Determines all opposing pieces currently threatening a given square.
-
-        A piece is considered "threatening" if it can legally capture the square (does not account for pinning).
-
-        :param square: The target square to analyze.
-        :type square: Square
-        :param player: The player being threatened (0 for white, 1 for black).
-        :type player: int
-        :return: A list of squares that contain pieces threatening the specified square.
-        :rtype: list[Square]
-        """
-        opponent = Color(player).opponent
-
-        threats = []
-        threats.extend(Pawn.find_all(self, square, opponent, capture=True))
-        threats.extend(Rook.find_all(self, square, opponent))
-        threats.extend(Knight.find_all(self, square, opponent))
-        threats.extend(Bishop.find_all(self, square, opponent))
-        threats.extend(Queen.find_all(self, square, opponent))
-        threats.extend(King.find_all(self, square, opponent))
-        return threats
-
-    # returns true if given player is in check
-    # returns false otherwise
-    def check_for_check(self, player):
-        """
-        Determines if the player's King is currently in check.
-
-        A King is in check if one or more opposing pieces are threatening its square.
-
-        :param player: The player to check (0 for white, 1 for black).
-        :type player: int
-        :return: `True` if the player's King is in check, otherwise `False`.
-        :rtype: bool
-        """
-        king_square = self.find_king(player)
-        if king_square is None:
-            return False
-
-        return len(self.threats_on(king_square, player)) > 0
-
-    def _has_legal_move(self, player):
-        """
-        Whether ``player`` has at least one fully-legal move.
-
-        Candidates are generated pseudo-legally and confirmed by applying them to a
-        throwaway copy, which is the same machinery :meth:`legal_moves` uses — so
-        pins, discovered checks, castling through check, and en passant are all
-        judged by the real move logic rather than a second implementation of it.
-        Returns as soon as one move is found, so the common (non-terminal) case
-        stops almost immediately.
-
-        :param player: The player to test (0 for white, 1 for black).
-        :type player: int
-        :rtype: bool
-        """
-        player = Color(player)
-        last_rank = 0 if player == Color.WHITE else 7
-
-        for rank in self:
-            for square in rank:
-                piece = square.piece
-                if piece is None or piece.color != player:
-                    continue
-                for to in self._pseudo_targets(square, piece):
-                    promotions = _PROMOTIONS if (piece.piecetype == PieceType.PAWN and to.i == last_rank) else (None,)
-                    for promo in promotions:
-                        trial = copy.deepcopy(self)
-                        try:
-                            # detect_outcome=False: we only care whether the move is
-                            # legal, and outcome detection would recurse back here.
-                            trial.move(to_san(self, square, to, piece, promotion=promo), player, detect_outcome=False)
-                        except errors.ChessError:
-                            continue
+    def _attacked(self, idx: int, by: Color) -> bool:
+        """Whether a piece of color ``by`` attacks square ``idx``."""
+        grid = self._grid
+        knight, king = PIECES[KNIGHT, by], PIECES[KING, by]
+        for s in KNIGHT_TARGETS[idx]:
+            if grid[s] is knight:
+                return True
+        pawn = PIECES[PAWN, by]
+        # a pawn of ``by`` attacks idx from where an opposing pawn on idx would attack
+        for s in PAWN_ATTACKS[by.opponent][idx]:
+            if grid[s] is pawn:
+                return True
+        for s in KING_TARGETS[idx]:
+            if grid[s] is king:
+                return True
+        queen = PIECES[QUEEN, by]
+        rook = PIECES[ROOK, by]
+        for ray in ORTHOGONAL_RAYS[idx]:
+            for s in ray:
+                piece = grid[s]
+                if piece is not None:
+                    if piece is rook or piece is queen:
                         return True
+                    break
+        bishop = PIECES[BISHOP, by]
+        for ray in DIAGONAL_RAYS[idx]:
+            for s in ray:
+                piece = grid[s]
+                if piece is not None:
+                    if piece is bishop or piece is queen:
+                        return True
+                    break
         return False
 
-    # returns true if the given player is in checkmate
-    # returns false otherwise
-    def check_for_mate(self, player):
+    def _castle_ok(self, color: Color, side: str) -> bool:
         """
-        Determines if the player is in checkmate.
+        Whether ``color`` may castle on ``side`` (``"K"`` or ``"Q"``), short of the
+        king's destination being attacked, which the legality test catches.
 
-        A player is in checkmate if the King is in check and no legal moves can
-        remove it from check — which is exactly what this tests. It previously
-        reimplemented that as a bespoke analysis (can the king step away, can the
-        checker be captured, can the check be blocked), which missed cases the move
-        logic already handles: most visibly, it counted the king as able to capture
-        a *defended* checker, so scholar's mate was reported as check rather than
-        mate.
-
-        :param player: The player to check for checkmate (0 for white, 1 for black).
-        :type player: int
-        :return: `True` if the player's King is in checkmate, otherwise `False`.
-        :rtype: bool
+        Needs the right, king and rook on their home squares, the squares between
+        empty, the king not in check, and the square it crosses not attacked. (On the
+        queenside, b1/b8 must be empty but may be attacked: the king never crosses it.)
         """
-        player = Color(player)
-        return self.check_for_check(player) and not self._has_legal_move(player)
+        right = side if color is WHITE else side.lower()
+        if right not in self.castling:
+            return False
+        row = 56 if color is WHITE else 0
+        grid = self._grid
+        king_sq = row + 4
+        if grid[king_sq] is not PIECES[KING, color]:
+            return False
+        between: tuple[int, ...]
+        if side == "K":
+            rook_sq, between, crossed = row + 7, (row + 5, row + 6), row + 5
+        else:
+            rook_sq, between, crossed = row, (row + 1, row + 2, row + 3), row + 3
+        if grid[rook_sq] is not PIECES[ROOK, color]:
+            return False
+        if any(grid[s] is not None for s in between):
+            return False
+        opponent = color.opponent
+        return not self._attacked(king_sq, opponent) and not self._attacked(crossed, opponent)
 
-    # returns true if the given player is in stalemate (can't move any of their pieces)
-    # returns false otherwise
-    def check_for_stalemate(self, player):
+    def _pseudo(self, color: Color) -> list[tuple]:
         """
-        Determines if the player is in stalemate.
-
-        A player is in stalemate if they are not in check and have no legal moves
-        remaining. This tests only the "no legal moves" half; callers pair it with
-        :meth:`check_for_check`, as :meth:`move` does.
-
-        Note this counts moves that are legal, not merely available: a piece that is
-        pinned to its own king cannot move, which the previous ``can_move`` scan did
-        not account for.
-
-        :param player: The player to check for stalemate (0 for white, 1 for black).
-        :type player: int
-        :return: `True` if the player has no legal move, otherwise `False`.
-        :rtype: bool
+        Every pseudo-legal ply for ``color``: moves the pieces can make, before asking
+        whether the king is left in check. A ply is ``(from, to, promotion, flag)``.
         """
-        return not self._has_legal_move(player)
+        grid = self._grid
+        out: list[tuple] = []
+        append = out.append
+        opponent = color.opponent
+        if color is WHITE:
+            forward, start_row, last_row = -8, 6, 0
+        else:
+            forward, start_row, last_row = 8, 1, 7
+        ep = index(self.en_passant) if self.en_passant is not None else -1
+        enemy_pawn = PIECES[PAWN, opponent]
 
-    def _pseudo_targets(self, square, piece):
-        """Candidate destination squares for ``piece`` (a superset of legal moves)."""
-        targets = list(piece.threatens(square, self))
-        if piece.piecetype == PieceType.PAWN:
-            # threatens() only covers diagonal attacks; add the forward pushes.
-            forward = -1 if piece.color == Color.WHITE else 1
-            for step in (1, 2):
-                ahead = self[square.i + forward * step, square.j]
-                if ahead is not None:
-                    targets.append(ahead)
-        return targets
+        for frm, piece in enumerate(grid):
+            if piece is None or piece.color is not color:
+                continue
+            kind = piece.type
+            if kind is PAWN:
+                one = frm + forward
+                if grid[one] is None:
+                    if one // 8 == last_row:
+                        for promo in PROMOTIONS:
+                            append((frm, one, promo, NORMAL))
+                    else:
+                        append((frm, one, None, NORMAL))
+                        if frm // 8 == start_row and grid[one + forward] is None:
+                            append((frm, one + forward, None, DOUBLE_STEP))
+                for to in PAWN_ATTACKS[color][frm]:
+                    target = grid[to]
+                    if target is not None:
+                        if target.color is opponent:
+                            if to // 8 == last_row:
+                                for promo in PROMOTIONS:
+                                    append((frm, to, promo, NORMAL))
+                            else:
+                                append((frm, to, None, NORMAL))
+                    elif to == ep and grid[to - forward] is enemy_pawn:
+                        append((frm, to, None, EN_PASSANT))
+            elif kind is KNIGHT or kind is KING:
+                for to in (KNIGHT_TARGETS if kind is KNIGHT else KING_TARGETS)[frm]:
+                    target = grid[to]
+                    if target is None or target.color is opponent:
+                        append((frm, to, None, NORMAL))
+            else:
+                for ray in SLIDER_RAYS[kind][frm]:
+                    for to in ray:
+                        target = grid[to]
+                        if target is None:
+                            append((frm, to, None, NORMAL))
+                        else:
+                            if target.color is opponent:
+                                append((frm, to, None, NORMAL))
+                            break
 
-    def legal_moves(self, turn):
+        if self.castling:
+            row = 56 if color is WHITE else 0
+            if self._castle_ok(color, "K"):
+                append((row + 4, row + 6, None, CASTLE_K))
+            if self._castle_ok(color, "Q"):
+                append((row + 4, row + 2, None, CASTLE_Q))
+        return out
+
+    def _make(self, ply: tuple) -> tuple:
+        """Play ``ply`` in place for the side to move; return what :meth:`_unmake` needs."""
+        frm, to, promo, flag = ply
+        grid = self._grid
+        color = self.turn
+        piece = grid[frm]
+        assert piece is not None
+        captured = grid[to]
+        undo = (
+            captured,
+            self.castling,
+            self.en_passant,
+            self.halfmove_clock,
+            self.fullmove_number,
+            self.status,
+            self.termination,
+            self._kings[color],
+        )
+
+        if flag == EN_PASSANT:
+            grid[to + 8 if color is WHITE else to - 8] = None
+        elif flag == CASTLE_K:
+            grid[frm + 1], grid[frm + 3] = grid[frm + 3], None
+        elif flag == CASTLE_Q:
+            grid[frm - 1], grid[frm - 4] = grid[frm - 4], None
+
+        grid[to] = PIECES[promo, color] if promo is not None else piece
+        grid[frm] = None
+        if piece.type is KING:
+            self._kings[color] = to
+
+        self.en_passant = NAMES[(frm + to) // 2] if flag == DOUBLE_STEP else None
+        if self.castling:
+            for s in (frm, to):
+                lost = _CASTLE_MASK.get(s)
+                if lost:
+                    for letter in lost:
+                        self.castling = self.castling.replace(letter, "")
+        if piece.type is PAWN or captured is not None:
+            self.halfmove_clock = 0
+        else:
+            self.halfmove_clock += 1
+        if color is BLACK:
+            self.fullmove_number += 1
+        self.turn = color.opponent
+        return undo
+
+    def _unmake(self, ply: tuple, undo: tuple) -> None:
+        """Take back ``ply``, the last move made, using the record :meth:`_make` returned."""
+        frm, to, promo, flag = ply
+        captured, castling, en_passant, halfmove, fullmove, status, termination, king = undo
+        color = self.turn.opponent  # the side that made the move
+        grid = self._grid
+
+        grid[frm] = PIECES[PAWN, color] if promo is not None else grid[to]
+        grid[to] = captured
+        if flag == EN_PASSANT:
+            grid[to + 8 if color is WHITE else to - 8] = PIECES[PAWN, color.opponent]
+        elif flag == CASTLE_K:
+            grid[frm + 3], grid[frm + 1] = grid[frm + 1], None
+        elif flag == CASTLE_Q:
+            grid[frm - 4], grid[frm - 1] = grid[frm - 1], None
+
+        self._kings[color] = king
+        self.turn = color
+        self.castling = castling
+        self.en_passant = en_passant
+        self.halfmove_clock = halfmove
+        self.fullmove_number = fullmove
+        self.status = status
+        self.termination = termination
+
+    def _is_legal(self, ply: tuple) -> bool:
+        """Whether pseudo-legal ``ply`` leaves the mover's king out of check."""
+        color = self.turn
+        undo = self._make(ply)
+        king = self._kings[color]
+        legal = king is None or not self._attacked(king, color.opponent)
+        self._unmake(ply, undo)
+        return legal
+
+    def _legal(self) -> list[tuple]:
+        """Every legal ply for the side to move."""
+        return [ply for ply in self._pseudo(self.turn) if self._is_legal(ply)]
+
+    def _has_legal_move(self) -> bool:
+        """Whether the side to move has any legal move (stops at the first)."""
+        return any(self._is_legal(ply) for ply in self._pseudo(self.turn))
+
+    def _position_key(self) -> str:
         """
-        Enumerate every fully-legal move for ``turn`` in the current position.
-
-        Each entry is ``{"from", "to", "san", "promotion"}`` where ``san`` is a move
-        string that can be handed straight back to :meth:`move` / the moves endpoint.
-        Candidates are generated pseudo-legally and then confirmed by actually
-        applying them to a throwaway copy (so castling, en passant, promotion, and
-        self-check are all validated by the real move logic).
-
-        :param turn: the side to move (0 white / 1 black).
-        :rtype: list[dict]
+        The identity of the position for repetition: placement, side to move,
+        castling rights and en-passant square. As FIDE counts it, the en-passant
+        square only counts when a legal en-passant capture exists.
         """
-        turn = Color(turn)
-        moves = []
-
-        def _accept(san):
-            trial = copy.deepcopy(self)
-            try:
-                trial.move(san, turn, detect_outcome=False)
-            except errors.ChessError:
-                return False
-            return True
-
-        for rank in self:
-            for square in rank:
-                piece = square.piece
-                if piece is None or piece.color != turn:
-                    continue
-                last_rank = 0 if turn == Color.WHITE else 7
-                for to in self._pseudo_targets(square, piece):
-                    promotions = _PROMOTIONS if (piece.piecetype == PieceType.PAWN and to.i == last_rank) else (None,)
-                    for promo in promotions:
-                        san = to_san(self, square, to, piece, promotion=promo)
-                        if _accept(san):
-                            moves.append(
-                                {"from": square.c_notation, "to": to.c_notation, "san": san, "promotion": promo}
-                            )
-
-        # castling is generated from the king, not from target squares
-        king_square = self.find_king(turn)
-        if king_square is not None:
-            for san in ("0-0", "0-0-0"):
-                if _accept(san):
-                    moves.append({"from": king_square.c_notation, "to": None, "san": san, "promotion": None})
-
-        return moves
-
-    # coord<->notation helpers live in notation.py; kept here as facades
-    get_coords = staticmethod(notation.get_coords)
-    get_c_notation = staticmethod(notation.get_c_notation)
+        ep = "-"
+        if self.en_passant is not None:
+            target = index(self.en_passant)
+            pawn = PIECES[PAWN, self.turn]
+            victim = target + 8 if self.turn is WHITE else target - 8
+            attackers = (
+                PAWN_ATTACKS[self.turn.opponent][target]
+                if self._grid[victim] is PIECES[PAWN, self.turn.opponent]
+                else ()
+            )
+            for frm in attackers:
+                if self._grid[frm] is pawn and self._is_legal((frm, target, None, EN_PASSANT)):
+                    ep = self.en_passant
+                    break
+        return f"{_fen.placement(self._grid)} {'w' if self.turn is WHITE else 'b'} {self.castling or '-'} {ep}"

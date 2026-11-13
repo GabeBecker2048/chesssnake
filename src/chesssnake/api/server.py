@@ -37,7 +37,8 @@ from ..db import engine as db_engine
 from ..db import errors, schema
 from ..db import operations as ops
 from ..dto import COLORS, ROLES, Challenge, GameState, LoginResult, MoveResult, TokenInfo, User
-from ..engine import INITIAL_FEN, from_fen, position_key
+from ..engine import INITIAL_FEN
+from ..engine import Game as EngineGame
 from ..engine import errors as chess_errors
 from ..serialize import game_from_state, state_from_game
 from .auth import (
@@ -56,7 +57,7 @@ from .web import add_web_routes
 logger = logging.getLogger(__name__)
 
 # Precompute the starting position's repetition key (engine-derived) for new games.
-_INITIAL_KEY = position_key(*from_fen(INITIAL_FEN))
+_INITIAL_KEY = EngineGame().position_history[0]  # the starting position's repetition key
 
 #: Longest name an api token may be given.
 TOKEN_NAME_MAX = 64
@@ -683,13 +684,13 @@ def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = De
         state, change = _change(game, row, now, new_moves=[(history["max_ply"] + 1, san, game.position_history[-1])])
         change.result = MoveResult(
             state=state,
-            from_square=m.prev.c_notation,
-            to_square=m.to.c_notation,
+            from_square=m.from_square,
+            to_square=m.to_square,
             san=san,
-            check=game.board.check_for_check(game.turn),
+            check=game.board.is_check(),
             castle=m.castle,
-            promotion=m.promotion,
-            en=m.en,
+            promotion=m.promotion.value if m.promotion is not None else None,
+            en=m.en_passant,
         )
         return change
 

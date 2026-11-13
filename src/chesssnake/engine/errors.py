@@ -50,11 +50,11 @@ class PieceOnSquareError(ChessError):
     concerning square occupancy in chess games.
     """
 
-    def __init__(self, square, is_same_color):
+    def __init__(self, square: str, is_same_color: bool):
         if is_same_color:
-            super().__init__(f"There is already a piece on {square.c_notation}")
+            super().__init__(f"There is already a piece on {square}")
         else:
-            super().__init__(f"There is already a piece on {square.c_notation} (possible failure to specify a capture)")
+            super().__init__(f"There is already a piece on {square} (possible failure to specify a capture)")
 
 
 class NothingToCaptureError(ChessError):
@@ -66,8 +66,8 @@ class NothingToCaptureError(ChessError):
     where no piece is present.
     """
 
-    def __init__(self, square):
-        super().__init__(f"There is not a piece to capture on {square.c_notation}")
+    def __init__(self, square: str):
+        super().__init__(f"There is not a piece to capture on {square}")
 
 
 class CaptureOwnPieceError(ChessError):
@@ -78,10 +78,8 @@ class CaptureOwnPieceError(ChessError):
     by attempting to capture one of their own pieces.
     """
 
-    def __init__(self, square):
-        super().__init__(
-            f"The piece on {square.c_notation} belongs to the player. Players cannot capture their own pieces"
-        )
+    def __init__(self, square: str):
+        super().__init__(f"The piece on {square} belongs to the player. Players cannot capture their own pieces")
 
 
 class PieceNotFoundError(ChessError):
@@ -94,9 +92,9 @@ class PieceNotFoundError(ChessError):
     or informational purposes.
     """
 
-    def __init__(self, square, piecetype):
+    def __init__(self, square: str, piecetype):
         piece = PieceType(piecetype).full_name
-        super().__init__(f"No {piece}s can move to {square.c_notation}")
+        super().__init__(f"No {piece}s can move to {square}")
 
 
 class MultiplePiecesFoundError(ChessError):
@@ -109,11 +107,11 @@ class MultiplePiecesFoundError(ChessError):
     provides detailed information about the conflicting pieces and their positions.
     """
 
-    def __init__(self, square, found):
-        piece = PieceType(found[0].piece.piecetype).full_name
-        message = f"Multiple {piece}s can move to {square.c_notation}. The {piece}s are:"
-        for psquare in found:
-            message += f"\n\ton {psquare.c_notation}"
+    def __init__(self, square: str, found: "list[str]", piecetype):
+        piece = PieceType(piecetype).full_name
+        message = f"Multiple {piece}s can move to {square}. The {piece}s are:"
+        for origin in found:
+            message += f"\n\ton {origin}"
 
         super().__init__(message)
 
@@ -166,6 +164,16 @@ class MoveIntoCheckError(ChessError):
 
     def __init__(self):
         super().__init__("Making that move would put you in check")
+
+
+class IllegalMoveError(ChessError):
+    """
+    Raised when a move in UCI form (``e2e4``) is not legal and none of the more
+    specific errors explains why, e.g. a knight asked to move like a bishop.
+    """
+
+    def __init__(self, move: str, reason: "str | None" = None):
+        super().__init__(f'"{move}" is not a legal move' + (f": {reason}" if reason else ""))
 
 
 class DrawWrongTurnError(ChessError):

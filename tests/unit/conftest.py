@@ -2,13 +2,10 @@
 
 import pytest
 
-from chesssnake.engine import Board, Square
-from chesssnake.engine.pieces import Bishop, King, Knight, Pawn, Queen, Rook
-
-_PIECE_CLASSES = {"R": Rook, "N": Knight, "B": Bishop, "Q": Queen, "K": King, "P": Pawn}
+from chesssnake.engine import Board, Color, Piece
 
 
-def _make_board(pieces, en_passant=None, castling=False):
+def _make_board(pieces, en_passant=None, castling=False, turn=Color.WHITE):
     """
     Build a ``Board`` from a sparse piece layout.
 
@@ -21,13 +18,13 @@ def _make_board(pieces, en_passant=None, castling=False):
         castling is possible for correctly-placed home kings/rooks). Defaults to
         ``False`` — no castling rights, which avoids accidental castling in
         constructed positions.
+    :param turn: the side to move (``Game(board=..., turn=...)`` can also set it).
     """
-    grid = [[Square(i, j) for j in range(8)] for i in range(8)]
+    grid = [None] * 64
     for (i, j), token in pieces.items():
-        cls = _PIECE_CLASSES[token[0]]
-        color = int(token[1])
-        grid[i][j] = Square(i, j, piece=cls(color))
-    return Board(board=grid, en_passant=en_passant, castling="KQkq" if castling else "")
+        letter = token[0] if token[1] == "0" else token[0].lower()
+        grid[i * 8 + j] = Piece.from_symbol(letter)
+    return Board._from_grid(grid, turn=turn, en_passant=en_passant, castling="KQkq" if castling else "")
 
 
 @pytest.fixture

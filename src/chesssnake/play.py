@@ -556,15 +556,8 @@ class Session:
 
     def _mark_move(self, move) -> None:
         """Highlight the move the stream announced, as a local move would be."""
-        try:
-            from .engine import Board, Square
-            from .remote.game import _MoveMarker
-
-            i1, j1 = Board.get_coords(move["from"])
-            i2, j2 = Board.get_coords(move["to"])
-            self.game.last_move = _MoveMarker(Square(i1, j1), Square(i2, j2))
-        except Exception:
-            pass  # castling has no single destination square; no highlight then
+        # the renderers read a {"from", "to"} mapping directly (castling's "to" is None)
+        self.game.last_move = move if isinstance(move, dict) else None
 
     def _wait_live(self, fd):
         """

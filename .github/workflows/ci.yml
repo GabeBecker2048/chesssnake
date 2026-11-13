@@ -38,9 +38,23 @@ jobs:
       # Unit tests only need the core package + pytest (no DB / server deps), so
       # run them lightweight across the whole supported version matrix.
       # --no-default-groups, not --no-dev: `pg` is a default group as well, and
-      # its pgserver has no wheels beyond cp311/cp312.
+      # its pgserver has no wheels beyond cp311/cp312. python-chess is the test
+      # oracle for the differential engine tests (GPL, test only, never shipped);
+      # without it those tests would skip, so it is installed here explicitly.
       - name: Unit tests
-        run: uv run --no-default-groups --with pytest --python ${{ matrix.python-version }} pytest tests/unit
+        run: uv run --no-default-groups --with pytest --with "chess>=1.11.2" --python ${{ matrix.python-version }} pytest tests/unit
+
+  engine-deep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      # Deep perft and 200 more seeded random games against python-chess: under a
+      # minute, but too slow to run on every local `pytest`, so marked slow.
+      - name: Deep perft and long differential runs
+        run: uv run --no-default-groups --with pytest --with "chess>=1.11.2" pytest tests/unit -m slow
 
   integration-sqlite:
     name: integration sqlite (py${{ matrix.python-version }})
@@ -95,7 +109,7 @@ jobs:
   # A single check for branch protection to require, so the rule doesn't have to
   # name every job and matrix entry, and doesn't go stale when they change.
   all-green:
-    needs: [lint, test, integration-sqlite, integration-postgres, coverage]
+    needs: [lint, test, engine-deep, integration-sqlite, integration-postgres, coverage]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -103,6 +117,7 @@ jobs:
           echo '${{ toJSON(needs) }}'
           test "${{ needs.lint.result }}" = "success"
           test "${{ needs.test.result }}" = "success"
+          test "${{ needs.engine-deep.result }}" = "success"
           test "${{ needs.integration-sqlite.result }}" = "success"
           test "${{ needs.integration-postgres.result }}" = "success"
           test "${{ needs.coverage.result }}" = "success"

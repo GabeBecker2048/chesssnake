@@ -12,8 +12,8 @@ block and a terminal that gets the widths right; letters (``N``) work on
 anything, including a pipe into a file.
 """
 
+from ._notation import move_squares
 from .enums import Color
-from .square import Square
 
 # Figurine glyphs, keyed by FEN letter (uppercase = white). Deliberately NOT a
 # PieceType lookup: FEN case is already the colour, so one flat table covers
@@ -67,35 +67,8 @@ def _perspective_color(perspective):
 
 
 def _letter(piece) -> str:
-    """The FEN letter for ``piece`` — uppercase for white, lowercase for black."""
-    letter = piece.piecetype.value
-    return letter if piece.color == Color.WHITE else letter.lower()
-
-
-def _squares(move):
-    """
-    The pair of algebraic squares a move touched, for highlighting.
-
-    Two shapes are accepted because two exist: ``prev``/``to`` attributes holding
-    :class:`~chesssnake.engine.square.Square` objects (an engine
-    :class:`~chesssnake.engine.move.Move`, and the marker the remote client keeps
-    after a move), or a ``{"from": "e2", "to": "e4"}`` mapping as the REST
-    payloads carry. Anything else highlights nothing rather than raising —
-    a decoration must never break the board.
-
-    :param move: the move to locate, or ``None``.
-    :return: a set of algebraic square names, empty when there are none to find.
-    """
-    if move is None:
-        return set()
-    if isinstance(move, dict):
-        return {value for key in ("from", "to") if isinstance(value := move.get(key), str)}
-    out = set()
-    for attr in ("prev", "to"):
-        value = getattr(move, attr, None)
-        if isinstance(value, Square):
-            out.add(f"{_FILES[value.j]}{8 - value.i}")
-    return out
+    """The FEN letter for ``piece``: uppercase for white, lowercase for black."""
+    return piece.symbol
 
 
 def render_text(
@@ -128,14 +101,13 @@ def render_text(
     side = _perspective_color(perspective)
     rows = range(8) if side == Color.WHITE else range(7, -1, -1)
     cols = range(8) if side == Color.WHITE else range(7, -1, -1)
-    touched = _squares(move) if color else set()
+    touched = move_squares(move) if color else set()
 
     lines = []
     for i in rows:
         cells = []
         for j in cols:
-            square = board[i, j]
-            piece = None if square is None else square.piece
+            piece = board._grid[i * 8 + j]
             if piece is None:
                 glyph = " " if color else EMPTY
             else:

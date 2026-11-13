@@ -28,22 +28,10 @@ import os
 
 from ..db import errors
 from ..dto import GameState, MoveResult
-from ..engine import Board, Square
 from ..engine.enums import Color
 from ..engine.game import Game as BaseGame
 from ..serialize import board_and_turn
 from . import credentials
-
-
-class _MoveMarker:
-    """Minimal last-move holder (prev/to squares) for render highlighting."""
-
-    __slots__ = ("prev", "to")
-
-    def __init__(self, prev, to):
-        self.prev = prev
-        self.to = to
-
 
 # Environment fallbacks for remote games. These must equal
 # ``config.env_name("client", ...)``; a test asserts it, because this module
@@ -187,13 +175,13 @@ class Game(BaseGame):
 
         return MoveResult(
             state=state_from_game(self, self.version or 0, self.generation or 1, id=self.id),
-            from_square=engine_move.prev.c_notation,
-            to_square=engine_move.to.c_notation,
+            from_square=engine_move.from_square,
+            to_square=engine_move.to_square,
             san=self.move_history[-1],
-            check=self.board.check_for_check(self.turn),
+            check=self.board.is_check(),
             castle=engine_move.castle,
-            promotion=engine_move.promotion,
-            en=engine_move.en,
+            promotion=engine_move.promotion.value if engine_move.promotion is not None else None,
+            en=engine_move.en_passant,
         )
 
     # --- gameplay (local runs the engine; remote delegates to the server) --
@@ -204,9 +192,7 @@ class Game(BaseGame):
 
         result = self._client.move(self.id, move, self.player_id, self.version)
         self._apply_state(result.state)
-        i1, j1 = Board.get_coords(result.from_square)
-        i2, j2 = Board.get_coords(result.to_square)
-        self.last_move = _MoveMarker(Square(i1, j1), Square(i2, j2))  # type: ignore[assignment]
+        self.last_move = result  # its from_square/to_square drive the render highlight
         return result
 
     def _remote_action(self, method, player_id):

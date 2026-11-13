@@ -5,10 +5,9 @@ from functools import cache
 from PIL import Image, ImageDraw, ImageFont
 
 from ..assets import asset_path
+from ._notation import FILES, index, move_squares
 from .board import Board
 from .enums import Color
-from .move import Move
-from .notation import FILES
 
 # The rendered board uses 68x68 pixel tiles; a full board is 8 tiles square.
 TILE = 68
@@ -41,7 +40,7 @@ def _render_side(grid, small_font, flip, highlights):
     """
     Render a single 8x8 board image from an already-oriented ``grid`` of squares.
 
-    :param grid: 8x8 list of :class:`Square` rows in display order (top row first).
+    :param grid: 8 rows of 8 :class:`Piece` (or ``None``) in display order (top row first).
     :param flip: ``True`` for the black-oriented board (mirrored rank/file labels).
     :param highlights: ``(row, col)`` grid positions to shade for the last move.
     """
@@ -53,9 +52,9 @@ def _render_side(grid, small_font, flip, highlights):
     draw = ImageDraw.Draw(board_img)
     for x in range(8):
         for y in range(8):
-            piece = grid[x][y].piece
+            piece = grid[x][y]
             if piece is not None:
-                board_img.alpha_composite(_piece_image(piece.piecetype.value, int(piece.color)), (TILE * y, TILE * x))
+                board_img.alpha_composite(_piece_image(piece.type.value, int(piece.color)), (TILE * y, TILE * x))
 
             # rank number down the left edge
             if y == 0:
@@ -70,9 +69,7 @@ def _render_side(grid, small_font, flip, highlights):
     return board_img
 
 
-def render_board(
-    board: Board, white_name: str = "", black_name: str = "", move: "Move | None" = None, perspective=None
-):
+def render_board(board: Board, white_name: str = "", black_name: str = "", move=None, perspective=None):
     """
     Render the board to a :class:`PIL.Image.Image`.
 
@@ -86,38 +83,29 @@ def render_board(
     :param board: The board to render (after the move has been applied).
     :param white_name: White's name (truncated to 10 chars; wide view only).
     :param black_name: Black's name (truncated to 10 chars; wide view only).
-    :param move: The most recent move, whose squares are highlighted, or ``None``.
+    :param move: The most recent move, whose squares are highlighted, or ``None``: a
+        :class:`Move`, a :class:`~chesssnake.dto.MoveResult`, or a ``{"from", "to"}`` dict.
     :param perspective: ``None`` for the wide both-sides view, or a color/``"white"``/
         ``"black"`` for a single-perspective board.
     :rtype: PIL.Image.Image
     """
     small_font = ImageFont.truetype(asset_path("Roboto-Black.ttf"), 15)
 
+    rows = [board._grid[i * 8 : i * 8 + 8] for i in range(8)]
+    white_grid = rows
+    black_grid = [list(reversed(row)) for row in reversed(rows)]
+    touched = [divmod(index(sq), 8) for sq in move_squares(move)]
+    white_highlights = touched
+    black_highlights = [(7 - i, 7 - j) for i, j in touched]
+
     # single-perspective: one board, no names
     if perspective is not None:
-        color = _as_color(perspective)
-        if color == Color.WHITE:
-            grid, flip = board.board, False
-            highlights = [(sq.i, sq.j) for sq in (move.prev, move.to)] if move is not None else []
-        else:
-            grid = [list(reversed(row)) for row in reversed(board.board)]
-            flip = True
-            highlights = [(7 - sq.i, 7 - sq.j) for sq in (move.prev, move.to)] if move is not None else []
-        return _render_side(grid, small_font, flip, highlights)
+        if _as_color(perspective) == Color.WHITE:
+            return _render_side(white_grid, small_font, False, white_highlights)
+        return _render_side(black_grid, small_font, True, black_highlights)
 
     # wide view: both perspectives + names
     template = Image.open(asset_path("img/template.png"))
-
-    # the last move's squares, expressed in each board's own (row, col) coordinates
-    white_highlights, black_highlights = [], []
-    if move is not None:
-        for square in (move.prev, move.to):
-            white_highlights.append((square.i, square.j))
-            black_highlights.append((7 - square.i, 7 - square.j))
-
-    white_grid = board.board
-    black_grid = [list(reversed(row)) for row in reversed(board.board)]
-
     template.alpha_composite(_render_side(white_grid, small_font, False, white_highlights), (0, 0))
     template.alpha_composite(_render_side(black_grid, small_font, True, black_highlights), (646, 0))
 
