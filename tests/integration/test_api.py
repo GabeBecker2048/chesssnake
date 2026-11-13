@@ -50,6 +50,25 @@ def test_health(api_client):
     assert api_client.get("/health").json() == {"status": "ok"}
 
 
+def test_api_docs_are_served_by_default(api_client):
+    assert api_client.get("/openapi.json").json()["info"]["title"] == "chesssnake api-endpoint"
+    assert api_client.get("/docs").status_code == 200
+    assert api_client.get("/redoc").status_code == 200
+
+
+def test_api_docs_can_be_turned_off(settings):
+    from fastapi.testclient import TestClient
+
+    from chesssnake.api.server import create_app
+    from chesssnake.config import Settings
+
+    app = create_app(Settings(api={"docs": False}, database={"url": settings.database.url}))
+    with TestClient(app) as client:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert client.get(path).status_code == 404, path
+        assert client.get("/health").json() == {"status": "ok"}  # the API itself is unaffected
+
+
 # --- users (as admin) --------------------------------------------------------
 
 

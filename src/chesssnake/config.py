@@ -118,6 +118,10 @@ class ApiSettings(_Section):
     session_lifetime_days: int = Field(
         default=30, ge=1, le=3650, description="Days a login stays valid before the user must log in again."
     )
+    docs: bool = Field(
+        default=True,
+        description="Serve the interactive API docs (/docs, /redoc) and the OpenAPI schema (/openapi.json).",
+    )
 
 
 class DatabaseSettings(_Section):

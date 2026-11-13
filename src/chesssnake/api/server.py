@@ -865,7 +865,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if owns_engine:
                 db_engine.dispose_engine()
 
-    app = FastAPI(title="chesssnake api-endpoint", lifespan=lifespan)
+    # api.docs (on by default): the interactive docs and the schema they read. Off
+    # removes all three, since /docs and /redoc are useless without /openapi.json.
+    docs = settings.api.docs
+    app = FastAPI(
+        title="chesssnake api-endpoint",
+        lifespan=lifespan,
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
+    )
     app.state.settings = settings
     # One broker per app (see realtime.py); a do-nothing one when websockets are off.
     app.state.broker = InProcessBroker(settings.websocket) if settings.websocket.enabled else Broker()

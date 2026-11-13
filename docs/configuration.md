@@ -54,6 +54,7 @@ reported as a warning rather than silently ignored.
 | `api` | `port` | integer | `8000` | Port the api-endpoint binds to. |
 | `api` | `registration` | `closed` or `open` | `closed` | Who can create an account: only administrators, or anyone through `POST /v1/auth/register`. |
 | `api` | `session_lifetime_days` | integer (days) | `30` | How long a login lasts, 1 to 3650. |
+| `api` | `docs` | boolean | `true` | Serve the interactive API docs at `/docs` and `/redoc` and the OpenAPI schema at `/openapi.json`. They need no login and contain no data, but describe every route. |
 | `database` | `url` | string | unset | Connection **URL**; the scheme selects the backend. |
 | `database` | `pool_min_size` | integer | `1` | Minimum pooled connections. |
 | `database` | `pool_max_size` | integer | `10` | Maximum pooled connections. |
