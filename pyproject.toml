@@ -76,6 +76,7 @@ dev = [
     "pre-commit>=3.5",
     "argon2-cffi>=23.1",
     "websockets>=12",
+    "chess>=1.11.2",
 ]
 # The PostgreSQL test stack. Split out of `dev` because pgserver publishes only
 # cp311/cp312 wheels, which would otherwise pin the whole test suite to those
@@ -97,7 +98,10 @@ default-groups = ["dev", "pg"]
 testpaths = ["tests"]
 markers = [
     "integration: tests that need the DB/API stack (deselect with -m 'not integration')",
+    "slow: deep perft and long differential runs (run with -m slow)",
 ]
+# The deep engine verification takes minutes; CI runs it in its own job with -m slow.
+addopts = "-m 'not slow'"
 # The live-update client uses websockets' sync client, which deprecates APIs
 # ahead of removing them. 0.13.0 shipped using one that websockets 17 deprecated,
 # unseen because the lock still had 16; as an error, the next one fails here.

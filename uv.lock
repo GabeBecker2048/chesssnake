@@ -299,6 +299,12 @@ wheels = [
 ]
 
 [[package]]
+name = "chess"
+version = "1.11.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/09/7d04d7581ae3bb8b598017941781bceb7959dd1b13e3ebf7b6a2cd843bc9/chess-1.11.2.tar.gz", hash = "sha256:a8b43e5678fdb3000695bdaa573117ad683761e5ca38e591c4826eba6d25bb39", size = 6131385, upload-time = "2025-02-25T19:10:27.328Z" }
+
+[[package]]
 name = "chesssnake"
 version = "0.14.4"
 source = { editable = "." }
@@ -325,6 +331,7 @@ postgres = [
 [package.dev-dependencies]
 dev = [
     { name = "argon2-cffi" },
+    { name = "chess" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "mypy" },
@@ -359,6 +366,7 @@ provides-extras = ["client", "api", "postgres"]
 [package.metadata.requires-dev]
 dev = [
     { name = "argon2-cffi", specifier = ">=23.1" },
+    { name = "chess", specifier = ">=1.11.2" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mypy", specifier = ">=1.8" },
