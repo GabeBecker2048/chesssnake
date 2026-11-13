@@ -21,15 +21,18 @@
 
 <sub>The web UI that comes with the server: a game in progress with board marks, and the Watch page, where every game in progress updates live (dark theme).</sub>
 
-**A chess engine, a board renderer and a game server in one package.** Play in
-Python, draw the position as a PNG, and keep games in SQLite or PostgreSQL
-through a REST api-endpoint that many clients can share.
+**A self-hosted chess server for bots and small communities.** Rules, board
+images, accounts, a REST API, live updates and a web UI come in one
+`pip install` or one container, with no third-party chess accounts needed. It
+works as a plain Python library too: play in your own process, draw the
+position as a PNG, and keep games in SQLite or PostgreSQL through an
+api-endpoint that many clients can share.
 
 - Full rules: castling, en passant, promotion, checkmate, stalemate, and draws
   by threefold repetition, the fifty-move rule and insufficient material.
 - Board images from any position, one side or both, last move highlighted.
   Returns a PIL image, so you can keep editing it.
-- Standard formats in and out: FEN, PGN, SAN, legal-move listing.
+- Standard formats in and out: FEN, PGN, SAN, UCI move input, legal-move listing.
 - **The server owns the rules**, so a client cannot cheat and a frontend in any
   language needs no chess logic of its own.
 - **Live updates** (opt-in): clients can follow games over a websocket and see

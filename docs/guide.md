@@ -83,6 +83,47 @@ game.fullmove_number  # the move number            (FEN field 6)
 The board is stored and exchanged as standard **FEN**, so any chess library or tool
 can read a chesssnake position.
 
+## Writing moves
+
+`move()` takes standard algebraic notation (SAN) or UCI, the form engines and bots use:
+
+| Move | SAN | UCI |
+|---|---|---|
+| pawn push | `e4` | `e2e4` |
+| capture | `exd5`, `Nxe5` | `e4d5`, `f3e5` |
+| disambiguation | `Nbd2`, `R1a3`, `Nexg4` | `b1d2` |
+| promotion | `e8=Q` or `e8Q` | `e7e8q` |
+| castling | `O-O`, `O-O-O` (or `0-0`) | `e1g1`, `e1c1` |
+
+A `+` or `#` suffix is allowed and ignored. Whatever form a move is given in, the
+history and `MoveResult.san` record it in chesssnake notation (`e8Q`, `0-0`), and
+`pgn()` writes standard PGN (`e8=Q`, `O-O`), which reads back in.
+
+An illegal move raises a specific error saying why, e.g. `NothingToCaptureError`
+for `Nxf3` onto an empty square, or `MoveIntoCheckError` for a pinned piece; see
+`chesssnake.engine.errors`.
+
+## Working with positions: the `Board`
+
+`game.board` (or a standalone `chesssnake.engine.Board`) is the position by itself,
+with no players attached. It speaks in square names and small immutable values:
+
+```Python3
+from chesssnake.engine import Board, Color, PieceType
+
+board = Board()                            # the starting position, or Board.from_fen(...)
+board.piece_at("e1")                       # Piece(type=PieceType.KING, color=Color.WHITE)
+board.pieces(PieceType.KNIGHT, Color.WHITE)  # ["b1", "g1"]
+board.is_attacked("f7", by=Color.WHITE)    # False at the start
+board.is_check()                           # is the side to move in check?
+move = board.move("e4")                    # a Move: from_square, to_square, piece, san, ...
+board.undo()                               # take it back
+board.fen                                  # the position as FEN
+```
+
+`Board`, `Piece`, `Move`, `Game` and the enums are the public engine API (the names
+in `chesssnake.engine.__all__`). Everything else in the engine package is internal.
+
 ## Persisting games through the api-endpoint
 
 To store and retrieve games, run the api-endpoint server and point your `Game` clients at it.

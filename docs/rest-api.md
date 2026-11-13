@@ -264,15 +264,21 @@ detected **automatically** by the server and end the game.
 
 ### Move notation
 
-Moves are standard algebraic notation strings, exactly as the engine parses them:
+Moves are standard algebraic notation (SAN) or UCI strings:
 
-- Pawn moves: `e4`, `d5`. Captures: `exd5`. Promotion: `e8Q`, `exd8Q` (piece letter
-  appended, no `=`).
+- Pawn moves: `e4`, `d5`. Captures: `exd5`. Promotion: `e8=Q` or `e8Q`, `exd8=Q` or
+  `exd8Q`.
 - Piece moves: `Nf3`, `Bb5`, `Qh4`, `Ke2`, `Ra1`. Captures: `Nxe5`.
-- Disambiguation: `Rad1` (file), `R1a3` (rank), `Nbd2`.
-- Castling: `0-0` (king-side) and `0-0-0` (queen-side). The letter-O forms `O-O` / `O-O-O`
-  are accepted as equivalents; the engine emits the zero forms in `san`.
+- Disambiguation: `Rad1` (file), `R1a3` (rank), `Nbd2`, also with a capture: `Nexg4`.
+- Castling: `O-O` / `O-O-O`, or `0-0` / `0-0-0`.
+- UCI, as engines and bots send moves: `e2e4`, `e7e8q`, castling as the king's move
+  (`e1g1`).
 - A trailing `+` (check) or `#` (checkmate) is accepted but never required.
+
+Whatever form a move is sent in, `san` in the response, the move history and
+`legal-moves` use chesssnake notation: SAN with the promotion letter appended
+without `=` (`e8Q`) and castling in zeros (`0-0`). Every listed `san` can be posted
+back as is. PGN export uses standard `e8=Q` and `O-O`.
 
 ### FEN
 
@@ -311,7 +317,7 @@ human-readable detail:
 
 | Status | When | `error_type` values |
 |---|---|---|
-| `400 Bad Request` | The move or draw action breaks the rules | any engine error: `InvalidNotationError`, `GameOverError`, `MoveIntoCheckError`, `PromotionError`, `InvalidCastleError`, `PieceNotFoundError`, `MultiplePiecesFoundError`, `NothingToCaptureError`, `CaptureOwnPieceError`, `PieceOnSquareError`, `DrawWrongTurnError`, `DrawAlreadyOfferedError`, `DrawNotOfferedError` |
+| `400 Bad Request` | The move or draw action breaks the rules | any engine error: `InvalidNotationError`, `GameOverError`, `MoveIntoCheckError`, `PromotionError`, `InvalidCastleError`, `PieceNotFoundError`, `MultiplePiecesFoundError`, `NothingToCaptureError`, `CaptureOwnPieceError`, `PieceOnSquareError`, `IllegalMoveError`, `DrawWrongTurnError`, `DrawAlreadyOfferedError`, `DrawNotOfferedError` |
 | `401 Unauthorized` | No token, or an invalid, expired or revoked one; a failed login; a wrong current password | `AuthError` |
 | `403 Forbidden` | Logged in but not allowed: not an admin, acting as someone else, not your turn or not your game, a disabled account, registration closed | `ForbiddenError`, `NotYourTurnError` |
 | `404 Not Found` | No such game, user, challenge or token (or not one you may see) | `GameNotFoundError`, `UserNotFoundError`, `ChallengeNotFoundError`, `TokenNotFoundError` |
@@ -552,7 +558,7 @@ Delete a game, in progress or finished, and its moves: `204`, or `404`.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `move` | string | yes | algebraic notation ([move notation](#move-notation)) |
+| `move` | string | yes | SAN or UCI ([move notation](#move-notation)) |
 | `expected_version` | integer | no | `409` if stale |
 | `player_id` | integer | no | admins only: act as this player |
 

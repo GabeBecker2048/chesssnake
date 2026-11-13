@@ -6,6 +6,28 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.15.0 - 2026-11-12
+
+### Added
+- Moves can be written in UCI (`e2e4`, `e7e8q`), as engines and bots send them,
+  and promotions with `=` (`e8=Q`), so a PGN exported by chesssnake reads back in.
+- A standalone `Board` for working with positions: square-name queries
+  (`piece_at`, `pieces`, `is_attacked`, `is_check`), `move` and `undo`, with
+  `Piece` and `Move` as small immutable values.
+
+### Changed
+- The engine is rewritten: listing legal moves is about 170 times faster (0.2 ms
+  instead of 39 ms for a busy middlegame position) and playing a move about 10
+  times faster.
+- The public engine API is now exactly what `chesssnake.engine` exports, which is
+  what 1.0.0 will keep. `Square`, the piece classes and the FEN and notation
+  helpers are internal, and the engine's `Move` is a value with square names.
+
+### Fixed
+- Castling out of check, or queenside through an attacked square, is refused.
+- Moves with a file hint and a capture (`Nexg4`) are accepted, and a pinned
+  piece no longer forces disambiguation (`Nd2`, not `Nbd2`).
+
 ## 0.14.4 - 2026-11-05
 
 ### Changed
