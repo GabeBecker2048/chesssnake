@@ -119,7 +119,8 @@ A finished game can be followed too; it just never changes.
 {
   "type": "game",
   "state": GameState,
-  "move": {"san": "Nf6", "from": "g8", "to": "f6", "check": false}
+  "move": {"san": "Nf6", "from": "g8", "to": "f6", "check": false},
+  "legal_moves": [{"from": "e2", "to": "e4", "san": "e4", "promotion": null}, ...]
 }
 ```
 
@@ -127,6 +128,12 @@ A followed game changed. `state` is the **whole** new state, so no follow-up rea
 is needed. `move` is the move that caused it, or `null` for a draw offer, accept
 or decline, or a resignation. The game is over when `state.status` is not `0`,
 with `state.termination` saying why.
+
+`legal_moves` (since 0.15.1) comes with a move: the legal moves of the side now to
+move, in the shape of `GET /v1/games/{id}/legal-moves`, or `[]` once the game has
+ended. A player whose turn it now is can offer them straight away instead of asking.
+It is absent when `move` is `null` (the position did not change) and from older
+servers, so treat it as optional and fall back to the `legal-moves` route.
 
 ### `game_removed`
 

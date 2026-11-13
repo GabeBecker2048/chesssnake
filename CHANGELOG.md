@@ -6,6 +6,26 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.15.1 - 2026-11-13
+
+### Added
+- A move's response and its websocket event include the next player's legal
+  moves, so the web UI no longer asks for them every turn: one request per turn
+  instead of two.
+
+### Changed
+- The engine is 2 to 3 times faster again: listing legal moves in a busy
+  middlegame position takes 0.08 ms instead of 0.22 ms, and move generation is
+  now about twice as fast as python-chess.
+- Board images render twice as fast, and the server keeps recent ones, so a
+  repeat view of a position takes 2 ms instead of 67 ms. PNGs use faster
+  compression and are about 10% larger.
+
+### Fixed
+- An illegal move whose reason cannot be established is refused with
+  `IllegalMoveError` instead of a possibly wrong reason; a capture onto a stale
+  en-passant square was blamed on check.
+
 ## 0.15.0 - 2026-11-12
 
 ### Added

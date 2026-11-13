@@ -6,7 +6,17 @@ was written. Only when nothing matches does the parser look for *why*, so the
 error can say something useful ("there is not a piece to capture on e5") rather
 than just "illegal". Those explanations, and their error classes, are part of the
 wire protocol: the client rebuilds errors by class name.
+
+An explanation is only given when it has been established, never guessed. Each
+diagnosis must raise its specific error; if it finds no reason, or fails with an
+unexpected exception, the move is refused with the plain :class:`IllegalMoveError`
+(see :func:`_explain`). In particular "that would put you in check" is only said
+once the move is confirmed to be a possible piece movement that fails solely the
+check test. A wrong reason is worse than none.
 """
+
+import logging
+from typing import NoReturn
 
 from . import errors
 from ._notation import FILES, NAMES, SAN_RE, UCI_RE, index
@@ -14,6 +24,8 @@ from .enums import Color, PieceType
 
 # imported lazily from board.py at call time would be circular; these mirror it
 _NORMAL, _DOUBLE_STEP, _EN_PASSANT, _CASTLE_K, _CASTLE_Q = range(5)
+
+_log = logging.getLogger(__name__)
 
 
 def resolve(board, text: str, legal: list) -> tuple:
@@ -23,78 +35,115 @@ def resolve(board, text: str, legal: list) -> tuple:
     :param board: The position (a :class:`Board`).
     :param text: The move, already known to be syntactically valid SAN or UCI.
     :param legal: The position's legal plies.
-    :raises errors.ChessError: the specific reason when ``text`` names no legal move.
+    :raises errors.ChessError: the specific reason when ``text`` names no legal move,
+        or :class:`errors.IllegalMoveError` when no reason can be established.
     """
     m = UCI_RE.match(text)
     if m:
-        return _resolve_uci(board, text, m, legal)
+        ply = _match_uci(m, legal)
+        if ply is None:
+            _explain(text, _diagnose_uci, board, text, m)
+        return ply
     m = SAN_RE.match(text)
     if m is None:  # pragma: no cover - the caller validated the syntax
         raise errors.InvalidNotationError(text)
     if m["castle"]:
-        return _resolve_castle(board, m["castle"].count("-") == 2, legal)
-    return _resolve_san(board, m, legal)
+        queenside = m["castle"].count("-") == 2
+        ply = _match_castle(queenside, legal)
+        if ply is None:
+            _explain(text, _diagnose_castle, board, queenside)
+        return ply
+    spec = _san_spec(m)
+    ply = _match_san(board, spec, legal)
+    if ply is None:
+        _explain(text, _diagnose_san, board, spec)
+    return ply
 
 
-def _resolve_castle(board, queenside: bool, legal) -> tuple:
+def _explain(text: str, diagnose, *args) -> NoReturn:
+    """
+    Run ``diagnose(*args)``, which raises the specific :class:`errors.ChessError`
+    explaining why ``text`` is illegal. If it returns instead (no reason found) or
+    raises anything else (a bug in the diagnosis), refuse the move with the plain
+    :class:`errors.IllegalMoveError` rather than risk a misleading reason. A crash is
+    logged with its traceback, so the bug is still visible.
+
+    :raises errors.ChessError: always.
+    """
+    try:
+        diagnose(*args)
+    except errors.ChessError:
+        raise
+    except Exception:
+        _log.exception("could not explain why %r is illegal; reporting IllegalMoveError", text)
+    raise errors.IllegalMoveError(text)
+
+
+def _match_castle(queenside: bool, legal) -> "tuple | None":
     flag = _CASTLE_Q if queenside else _CASTLE_K
     for ply in legal:
         if ply[3] == flag:
             return ply
+    return None
+
+
+def _diagnose_castle(board, queenside: bool) -> None:
     side = "Q" if queenside else "K"
     if not board._castle_ok(board.turn, side):
         raise errors.InvalidCastleError(side)
-    raise errors.MoveIntoCheckError()  # the king would land on an attacked square
+    # castling is possible as a movement, so only its destination can be the problem
+    flag = _CASTLE_Q if queenside else _CASTLE_K
+    if any(ply[3] == flag for ply in board._pseudo(board.turn)):
+        raise errors.MoveIntoCheckError()
 
 
 def _last_row(color) -> int:
     return 0 if color is Color.WHITE else 7
 
 
-def _resolve_san(board, m, legal) -> tuple:
-    color = board.turn
+def _san_spec(m) -> tuple:
+    """``(kind, file_hint, rank_hint, capture, to, promotion)`` from a SAN match."""
     if m["piece"]:
-        kind = PieceType(m["piece"])
-        file_hint, rank_hint = m["from_file"], m["from_rank"]
-        capture = bool(m["capture"])
-        to = index(m["to"])
-        promo = None
-    else:
-        kind = PieceType.PAWN
-        file_hint, rank_hint = m["pawn_file"], None
-        capture = bool(m["pawn_capture"])
-        to = index(m["pawn_to"])
-        promo = PieceType(m["promotion"]) if m["promotion"] else None
+        return PieceType(m["piece"]), m["from_file"], m["from_rank"], bool(m["capture"]), index(m["to"]), None
+    promo = PieceType(m["promotion"]) if m["promotion"] else None
+    return PieceType.PAWN, m["pawn_file"], None, bool(m["pawn_capture"]), index(m["pawn_to"]), promo
 
-    if promo is not None and to // 8 != _last_row(color):
-        raise errors.PromotionError(invalid_promotion=True)
 
+def _fits(grid, ply, spec) -> bool:
+    """Whether ``ply`` is a move the SAN ``spec`` could describe."""
+    kind, file_hint, rank_hint, capture, to, promo = spec
+    frm, dest, ply_promo, flag = ply
+    if dest != to or flag >= _CASTLE_K or grid[frm].type is not kind or ply_promo is not promo:
+        return False
+    if file_hint and FILES[frm % 8] != file_hint:
+        return False
+    if rank_hint and str(8 - frm // 8) != rank_hint:
+        return False
+    # "exd5" must be a capture and "d5" a push
+    return not (kind is PieceType.PAWN and (frm % 8 != to % 8) != capture)
+
+
+def _match_san(board, spec, legal) -> "tuple | None":
+    """The one legal ply ``spec`` describes, or ``None`` when there is none.
+
+    :raises errors.MultiplePiecesFoundError: if several legal plies fit.
+    :raises errors.NothingToCaptureError: for a capture mark onto an empty square.
+    :raises errors.PieceOnSquareError: for a missing capture mark onto a piece.
+    """
+    kind, _file, _rank, capture, to, _promo = spec
     grid = board._grid
-    matches = []
-    for ply in legal:
-        frm, dest, ply_promo, flag = ply
-        if dest != to or flag >= _CASTLE_K or grid[frm].type is not kind or ply_promo is not promo:
-            continue
-        if file_hint and FILES[frm % 8] != file_hint:
-            continue
-        if rank_hint and str(8 - frm // 8) != rank_hint:
-            continue
-        if kind is PieceType.PAWN and (frm % 8 != to % 8) != capture:
-            continue  # "exd5" must be a capture and "d5" a push
-        matches.append(ply)
-
-    if len(matches) == 1:
-        if kind is not PieceType.PAWN:
-            target = grid[to]
-            if capture and target is None:
-                raise errors.NothingToCaptureError(NAMES[to])
-            if not capture and target is not None:
-                raise errors.PieceOnSquareError(NAMES[to], False)
-        return matches[0]
+    matches = [ply for ply in legal if _fits(grid, ply, spec)]
     if len(matches) > 1:
         raise errors.MultiplePiecesFoundError(NAMES[to], [NAMES[ply[0]] for ply in matches], kind)
-    _diagnose(board, kind, file_hint, rank_hint, capture, to, promo)
-    raise errors.MoveIntoCheckError()
+    if not matches:
+        return None
+    if kind is not PieceType.PAWN:
+        target = grid[to]
+        if capture and target is None:
+            raise errors.NothingToCaptureError(NAMES[to])
+        if not capture and target is not None:
+            raise errors.PieceOnSquareError(NAMES[to], False)
+    return matches[0]
 
 
 def _reachers(board, kind, color, to, capture) -> list[int]:
@@ -133,10 +182,13 @@ def _reachers(board, kind, color, to, capture) -> list[int]:
     return found
 
 
-def _diagnose(board, kind, file_hint, rank_hint, capture, to, promo) -> None:
-    """Raise the specific reason a SAN move matched nothing; return if none applies
-    (the caller then reports the move as leaving the king in check)."""
+def _diagnose_san(board, spec) -> None:
+    """Raise the specific reason a SAN move matched no legal move. Returns only
+    when no reason is established; :func:`_explain` then reports IllegalMoveError."""
+    kind, file_hint, rank_hint, capture, to, promo = spec
     color = board.turn
+    if promo is not None and to // 8 != _last_row(color):
+        raise errors.PromotionError(invalid_promotion=True)
     grid = board._grid
     square = NAMES[to]
     found = [
@@ -163,14 +215,26 @@ def _diagnose(board, kind, file_hint, rank_hint, capture, to, promo) -> None:
     if kind is PieceType.PAWN and to // 8 == _last_row(color) and promo is None:
         raise errors.PromotionError(need_promotion=True)
 
+    # Only now is check the explanation, and only if confirmed: the move must be a
+    # possible piece movement that the legality test (king left in check) removed.
+    if any(_fits(grid, ply, spec) for ply in board._pseudo(color)):
+        raise errors.MoveIntoCheckError()
 
-def _resolve_uci(board, text, m, legal) -> tuple:
+
+def _match_uci(m, legal) -> "tuple | None":
     frm, to = index(m["from"]), index(m["to"])
     promo = PieceType(m["promotion"].upper()) if m["promotion"] else None
     for ply in legal:
         if ply[0] == frm and ply[1] == to and ply[2] is promo:
             return ply
+    return None
 
+
+def _diagnose_uci(board, text, m) -> None:
+    """Raise the specific reason a UCI move matched no legal move. Returns only
+    when no reason is established; :func:`_explain` then reports IllegalMoveError."""
+    frm, to = index(m["from"]), index(m["to"])
+    promo = PieceType(m["promotion"].upper()) if m["promotion"] else None
     color = board.turn
     piece = board._grid[frm]
     if piece is None or piece.color is not color:
@@ -182,10 +246,10 @@ def _resolve_uci(board, text, m, legal) -> tuple:
         side = "K" if to > frm else "Q"
         if not board._castle_ok(color, side):
             raise errors.InvalidCastleError(side)
-        raise errors.MoveIntoCheckError()
     pseudo = [ply for ply in board._pseudo(color) if ply[0] == frm and ply[1] == to]
-    if pseudo:
-        if piece.type is PieceType.PAWN and last_row and promo is None:
-            raise errors.PromotionError(need_promotion=True)
+    if not pseudo:
+        raise errors.IllegalMoveError(text, f"the {piece.type.full_name} on {m['from']} cannot move to {m['to']}")
+    if piece.type is PieceType.PAWN and last_row and promo is None:
+        raise errors.PromotionError(need_promotion=True)
+    if any(ply[2] is promo for ply in pseudo):
         raise errors.MoveIntoCheckError()
-    raise errors.IllegalMoveError(text, f"the {piece.type.full_name} on {m['from']} cannot move to {m['to']}")

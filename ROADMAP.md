@@ -7,6 +7,9 @@ contents of a version may change before it ships. Shipped versions are in
 ## 2.0.0 - planned
 
 - Engine opponents: Stockfish and built-in AI play.
+- A bitboard engine behind the frozen public API, for the move-generation speed
+  engine search needs. Released only once it passes the full perft suite and the
+  differential tests.
 
 ## 1.x - planned
 
@@ -25,13 +28,6 @@ contents of a version may change before it ships. Shipped versions are in
 - First stable, recommended, non-alpha release.
 - Minimal code changes, bug fixes at most.
 - The real work is documentation, a wiki, and an official release.
-
-## 0.16.0 - planned
-
-- A bitboard engine behind the public API frozen in 0.15.0, for speed close to
-  python-chess.
-- Released only once it passes the full perft suite and the differential tests.
-- Soaks as 0.16.x before 1.0.0; nothing above the engine changes.
 
 ## 0.15.0 - planned
 

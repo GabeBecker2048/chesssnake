@@ -201,6 +201,7 @@ What playing a move returns: the move plus the resulting `GameState`.
 | `castle` | string \| null | `"K"` or `"Q"` for a castle, else `null`. |
 | `promotion` | string \| null | The promoted-to piece letter, else `null`. |
 | `en` | boolean | Whether the move was an en-passant capture. |
+| `legal_moves` | array | The legal moves of the side now to move, in the [`legal-moves`](#game-reads) shape (`{from, to, san, promotion}`); `[]` once the game has ended. Added in 0.15.1, so a client talking to an older server should treat it as optional. |
 
 ### `User`
 

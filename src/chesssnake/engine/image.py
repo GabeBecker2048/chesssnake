@@ -31,6 +31,22 @@ def _piece_image(piecetype_value, color):
 
 
 @cache
+def _decoded(name):
+    """
+    Decode (once) a background image, e.g. ``"img/blankboard.png"``.
+
+    Callers must draw on a :meth:`~PIL.Image.Image.copy`, never on this shared
+    image. Decoding the board and template PNGs on every render was about 12 ms of
+    a 27 ms wide render; a copy of the decoded image costs 0.2 ms. (Fonts are not
+    cached: loading one takes 0.1 ms, and a FreeType face is not documented as safe
+    to share between the server's worker threads.)
+    """
+    image = Image.open(asset_path(name))
+    image.load()
+    return image
+
+
+@cache
 def _orange_square():
     """Load (and cache) the RGBA last-move highlight tile."""
     return Image.open(asset_path("img/orange.png")).convert("RGBA")
@@ -44,7 +60,7 @@ def _render_side(grid, small_font, flip, highlights):
     :param flip: ``True`` for the black-oriented board (mirrored rank/file labels).
     :param highlights: ``(row, col)`` grid positions to shade for the last move.
     """
-    board_img = Image.open(asset_path("img/blankboard.png"))
+    board_img = _decoded("img/blankboard.png").copy()
 
     for row, col in highlights:
         board_img.alpha_composite(_orange_square(), (TILE * col, TILE * row))
@@ -105,7 +121,7 @@ def render_board(board: Board, white_name: str = "", black_name: str = "", move=
         return _render_side(black_grid, small_font, True, black_highlights)
 
     # wide view: both perspectives + names
-    template = Image.open(asset_path("img/template.png"))
+    template = _decoded("img/template.png").copy()
     template.alpha_composite(_render_side(white_grid, small_font, False, white_highlights), (0, 0))
     template.alpha_composite(_render_side(black_grid, small_font, True, black_highlights), (646, 0))
 

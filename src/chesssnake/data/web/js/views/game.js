@@ -17,6 +17,9 @@ export async function render(main, params, ctx, scope) {
   const myColor = state.white_id === me.id ? "white" : state.black_id === me.id ? "black" : null;
   const opponentId = myColor === "white" ? state.black_id : state.white_id;
   let lastMove = null;
+  // {version, moves}: legal moves that arrived with a move event, so the player to
+  // move need not ask for them. Used only for the version they came with.
+  let pushedLegal = null;
   let sending = false;
   let newerGame = null; // a rematch that has started
   let rematch = null; // {kind: "incoming"|"outgoing", challenge}
@@ -141,13 +144,18 @@ export async function render(main, params, ctx, scope) {
     board.setEnabled(Boolean(myColor) && state.status === 0);
     let legal = null;
     if (myColor && state.status === 0 && sideToMove(state.fen) === myColor) {
-      const asked = state.version;
-      try {
-        legal = (await get(`/games/${gameId}/legal-moves`)).moves;
-      } catch {
-        legal = null;
+      if (pushedLegal && pushedLegal.version === state.version) {
+        legal = pushedLegal.moves; // sent with the opponent's move: no request needed
+      } else {
+        // page load, polling, a snapshot, a draw offer: ask, as before 0.15.1
+        const asked = state.version;
+        try {
+          legal = (await get(`/games/${gameId}/legal-moves`)).moves;
+        } catch {
+          legal = null;
+        }
+        if (asked !== state.version || !scope.alive) return; // the position moved on meanwhile
       }
-      if (asked !== state.version || !scope.alive) return; // the position moved on meanwhile
     }
     board.setLegal(legal);
   }
@@ -316,8 +324,10 @@ export async function render(main, params, ctx, scope) {
   // --- Live --------------------------------------------------------------------------
 
   scope.follow(gameId);
-  scope.onLive("game", ({ state: next, move }) => {
-    if (next.id === gameId) apply(next, move);
+  scope.onLive("game", ({ state: next, move, legalMoves }) => {
+    if (next.id !== gameId) return;
+    if (legalMoves) pushedLegal = { version: next.version, moves: legalMoves };
+    apply(next, move);
   });
   scope.onLive("game_removed", ({ game }) => {
     if (game === gameId) gone();

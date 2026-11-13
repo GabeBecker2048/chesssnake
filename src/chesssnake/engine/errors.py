@@ -168,8 +168,10 @@ class MoveIntoCheckError(ChessError):
 
 class IllegalMoveError(ChessError):
     """
-    Raised when a move in UCI form (``e2e4``) is not legal and none of the more
-    specific errors explains why, e.g. a knight asked to move like a bishop.
+    Raised for an illegal move when no more specific error can be established:
+    a UCI move (``e2e4``) that none of the other errors explains, or any move whose
+    reason could not be determined. The engine raises this rather than guess at a
+    reason, so a more specific error is always a true one.
     """
 
     def __init__(self, move: str, reason: "str | None" = None):

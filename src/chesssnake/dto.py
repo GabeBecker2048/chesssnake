@@ -95,6 +95,10 @@ class MoveResult:
     ``from_square``/``to_square`` are algebraic squares (e.g. ``"e2"``/``"e4"``);
     ``san`` is the move string (postable). On the wire they serialize to ``from``/
     ``to`` via :meth:`to_dict`.
+
+    ``legal_moves`` lists the moves of the side now to move, in the shape of the
+    ``legal-moves`` route (``{from, to, san, promotion}``): ``[]`` once the game has
+    ended, ``None`` from a server older than 0.15.1.
     """
 
     state: GameState
@@ -105,6 +109,7 @@ class MoveResult:
     castle: str | None = None
     promotion: str | None = None
     en: bool = False
+    legal_moves: list[dict] | None = None
 
     def to_dict(self) -> dict:
         """Return a JSON-serializable dict (uses ``from``/``to`` wire keys)."""
@@ -117,6 +122,7 @@ class MoveResult:
             "castle": self.castle,
             "promotion": self.promotion,
             "en": self.en,
+            "legal_moves": self.legal_moves,
         }
 
     @classmethod
@@ -131,6 +137,7 @@ class MoveResult:
             castle=data.get("castle"),
             promotion=data.get("promotion"),
             en=data.get("en", False),
+            legal_moves=data.get("legal_moves"),
         )
 
 

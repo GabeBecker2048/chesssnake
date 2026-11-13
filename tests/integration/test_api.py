@@ -252,6 +252,19 @@ def test_legal_moves_history_pgn_fen(api_client, game):
     assert api_client.get(f"{game}/fen").text.startswith("rnbqkbnr/pppp1ppp")
 
 
+def test_a_move_response_lists_the_next_players_legal_moves(api_client, game):
+    for san in ["e4", "e5", "Nf3", "Nc6", "Bb5"]:
+        result = api_client.post(f"{game}/moves", json={"move": san}).json()
+        assert result["legal_moves"] == api_client.get(f"{game}/legal-moves").json()["moves"]
+
+
+def test_a_move_that_ends_the_game_lists_no_moves(api_client, game):
+    for san in ["f3", "e5", "g4"]:
+        api_client.post(f"{game}/moves", json={"move": san})
+    mate = api_client.post(f"{game}/moves", json={"move": "Qh4"}).json()
+    assert mate["state"]["termination"] == "checkmate" and mate["legal_moves"] == []
+
+
 def test_threefold_repetition_still_counts_the_starting_position(api_client, game):
     for mv in ["Nf3", "Nf6", "Ng1", "Ng8", "Nf3", "Nf6", "Ng1"]:
         assert api_client.post(f"{game}/moves", json={"move": mv}).json()["state"]["status"] == 0
@@ -271,6 +284,16 @@ def test_image_perspective(api_client, game):
     black = api_client.get(f"{game}/image", params={"perspective": "black"})
     assert white.status_code == 200 and white.content != black.content
     assert api_client.get(f"{game}/image", params={"perspective": "sideways"}).status_code == 422
+
+
+def test_image_is_cached_by_what_it_shows(api_client, game, pair):
+    first = api_client.get(f"{game}/image").content
+    assert api_client.get(f"{game}/image").content == first  # same position: same bytes
+    api_client.post(f"{game}/moves", json={"move": "e4"})
+    moved = api_client.get(f"{game}/image").content
+    assert moved != first  # a move is a new key
+    api_client.patch(f"/v1/users/{pair[0]}", json={"username": "renamed"})
+    assert api_client.get(f"{game}/image").content != moved  # so is a rename (the names are drawn)
 
 
 # --- the archive -------------------------------------------------------------
