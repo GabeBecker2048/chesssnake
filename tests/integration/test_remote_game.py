@@ -97,7 +97,7 @@ def test_challenge_accept_play(players):
     assert isinstance(state, GameState) and (state.white_id, state.black_id) == (bob_id, alice_id)
     as_bob = Game.remote(state, client=bob)
     as_alice = Game.remote(state.id, client=alice)
-    assert (as_bob.wname, as_bob.bname, as_bob.id) == ("bob", "alice", state.id)
+    assert (as_bob.white_name, as_bob.black_name, as_bob.id) == ("bob", "alice", state.id)
 
     result = as_bob.move("e4")
     assert isinstance(result, MoveResult) and result.state.version == 2
@@ -153,10 +153,10 @@ def test_resign_and_winner(match):
 
 def test_draw_by_agreement(match):
     white, black = match
-    white.draw_offer()
+    white.offer_draw()
     black.refresh()
     assert black.draw_offered_by == Color.WHITE
-    black.draw_accept()
+    black.accept_draw()
     assert black.result == GameStatus.DRAW
 
 
@@ -225,3 +225,12 @@ def test_a_bot_maps_its_own_ids_onto_users(remote_client):
     challenge = remote_client.challenge(other.id, player_id=first.id)
     state = remote_client.accept_challenge(challenge.id)
     assert {state.white_id, state.black_id} == {first.id, other.id}
+
+
+def test_get_user_takes_an_id_or_a_username(players):
+    alice_id, bob_id, alice, _ = players
+    assert alice.get_user("BOB").id == bob_id  # a username, case not mattering
+    assert alice.get_user(bob_id).username == "bob"
+    assert alice.resolve("bob") == bob_id
+    # update_user is how a user renames themselves (there is no separate rename)
+    assert alice.update_user(alice_id, username="alicia").username == "alicia"

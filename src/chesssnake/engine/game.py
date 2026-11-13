@@ -33,16 +33,16 @@ class Game:
     handling moves, offering/accepting/declining draws, and saving board states as images. It acts as
     the central controller of the chess game, interacting with other components like `Board` and `Move`.
 
-    :ivar gid: The group ID.
-    :type gid: int
-    :ivar wid: The ID of the player playing as white.
-    :type wid: int
-    :ivar bid: The ID of the player playing as black.
-    :type bid: int
-    :ivar wname: The name of the player playing as white.
-    :type wname: str
-    :ivar bname: The name of the player playing as black.
-    :type bname: str
+    :ivar group_id: The group ID.
+    :type group_id: int
+    :ivar white_id: The ID of the player playing as white.
+    :type white_id: int
+    :ivar black_id: The ID of the player playing as black.
+    :type black_id: int
+    :ivar white_name: The name of the player playing as white.
+    :type white_name: str
+    :ivar black_name: The name of the player playing as black.
+    :type black_name: str
     :ivar board: The chess board used in the game, represented as a `Board` object.
     :type board: Board
     :ivar turn: Whose turn it is, as a :class:`~chesssnake.engine.enums.Color` (the
@@ -95,11 +95,11 @@ class Game:
         :param board: The position to start from (default: the starting position).
         :param turn: Overrides the board's side to move; ``None`` keeps it.
         """
-        self.gid = group_id
-        self.wid = white_id
-        self.bid = black_id
-        self.wname = white_name
-        self.bname = black_name
+        self.group_id = group_id
+        self.white_id = white_id
+        self.black_id = black_id
+        self.white_name = white_name
+        self.black_name = black_name
         self.board = Board() if board is None else board
         if turn is not None:
             self.board.turn = Color(turn)
@@ -108,7 +108,9 @@ class Game:
         self.last_move: object = None
         # SAN of every move played (for PGN); position keys for threefold detection.
         self.move_history: list[str] = list(move_history) if move_history is not None else []
-        self.position_history: list[str] = (
+        # Repetition keys of every position so far (internal: their format is the
+        # engine's business, and changed in 0.15.0). Loaded and read by the server.
+        self._position_history: list[str] = (
             list(position_history) if position_history is not None else [self.board._position_key()]
         )
 
@@ -209,7 +211,9 @@ class Game:
         :return: `True` if it is the player's turn, otherwise `False`.
         :rtype: bool
         """
-        if (self.turn == Color.WHITE and player_id == self.wid) or (self.turn == Color.BLACK and player_id == self.bid):
+        if (self.turn == Color.WHITE and player_id == self.white_id) or (
+            self.turn == Color.BLACK and player_id == self.black_id
+        ):
             return True
         else:
             return False
@@ -244,8 +248,8 @@ class Game:
 
         # threefold repetition needs the position history, which lives here on Game
         key = self.board._position_key()
-        self.position_history.append(key)
-        if self.board.status == GameStatus.IN_PLAY and self.position_history.count(key) >= 3:
+        self._position_history.append(key)
+        if self.board.status == GameStatus.IN_PLAY and self._position_history.count(key) >= 3:
             self.board.status = GameStatus.DRAW
             self.board.termination = Termination.THREEFOLD
 
@@ -261,9 +265,9 @@ class Game:
         """
         if self.board.status != GameStatus.IN_PLAY:
             raise ChessError.GameOverError()
-        if player_id not in (self.wid, self.bid):
+        if player_id not in (self.white_id, self.black_id):
             raise ValueError(f"{player_id} is not a player in this game")
-        resigner = Color.WHITE if player_id == self.wid else Color.BLACK
+        resigner = Color.WHITE if player_id == self.white_id else Color.BLACK
         self.board.status = GameStatus.won_by(resigner.opponent)
         self.board.termination = Termination.RESIGNATION
 
@@ -275,8 +279,8 @@ class Game:
         """Export the game as PGN (headers + movetext + result token)."""
         result = _RESULT_TOKENS[self.board.status]
         headers = [
-            f'[White "{self.wname}"]',
-            f'[Black "{self.bname}"]',
+            f'[White "{self.white_name}"]',
+            f'[Black "{self.black_name}"]',
             f'[Result "{result}"]',
         ]
         if self.board.termination is not None:
@@ -301,9 +305,9 @@ class Game:
         :return: A `PIL.Image` of the board.
         :rtype: PIL.Image
         """
-        return render_board(self.board, self.wname, self.bname, self.last_move, perspective=perspective)
+        return render_board(self.board, self.white_name, self.black_name, self.last_move, perspective=perspective)
 
-    def draw_offer(self, player_id: int):
+    def offer_draw(self, player_id: int):
         """
         Offers a draw in the game.
 
@@ -319,18 +323,20 @@ class Game:
         if self.board.status != GameStatus.IN_PLAY:
             raise ChessError.GameOverError()
 
-        if (self.draw == Color.WHITE and player_id == self.wid) or (self.draw == Color.BLACK and player_id == self.bid):
-            raise ChessError.DrawAlreadyOfferedError()
-        elif (self.draw == Color.BLACK and player_id == self.wid) or (
-            self.draw == Color.WHITE and player_id == self.bid
+        if (self.draw == Color.WHITE and player_id == self.white_id) or (
+            self.draw == Color.BLACK and player_id == self.black_id
         ):
-            self.draw_accept(player_id)
+            raise ChessError.DrawAlreadyOfferedError()
+        elif (self.draw == Color.BLACK and player_id == self.white_id) or (
+            self.draw == Color.WHITE and player_id == self.black_id
+        ):
+            self.accept_draw(player_id)
         elif not self.is_players_turn(player_id):
             raise ChessError.DrawWrongTurnError()
 
-        self.draw = Color.WHITE if player_id == self.wid else Color.BLACK
+        self.draw = Color.WHITE if player_id == self.white_id else Color.BLACK
 
-    def draw_accept(self, player_id: int):
+    def accept_draw(self, player_id: int):
         """
         Accepts an existing draw offer and ends the game.
 
@@ -345,8 +351,8 @@ class Game:
             raise ChessError.GameOverError()
 
         if (
-            (self.draw == Color.WHITE and player_id == self.wid)
-            or (self.draw == Color.BLACK and player_id == self.bid)
+            (self.draw == Color.WHITE and player_id == self.white_id)
+            or (self.draw == Color.BLACK and player_id == self.black_id)
             or self.draw is None
         ):
             raise ChessError.DrawNotOfferedError()
@@ -354,7 +360,7 @@ class Game:
         self.board.status = GameStatus.DRAW  # Set game status to draw
         self.board.termination = Termination.AGREEMENT
 
-    def draw_decline(self, player_id: int):
+    def decline_draw(self, player_id: int):
         """
         Declines an active draw offer.
 
@@ -369,8 +375,8 @@ class Game:
             raise ChessError.GameOverError()
 
         if (
-            (self.draw == Color.WHITE and player_id == self.wid)
-            or (self.draw == Color.BLACK and player_id == self.bid)
+            (self.draw == Color.WHITE and player_id == self.white_id)
+            or (self.draw == Color.BLACK and player_id == self.black_id)
             or self.draw is None
         ):
             raise ChessError.DrawNotOfferedError()

@@ -36,16 +36,16 @@ class GameError(Exception):
         super().__init__(msg)
 
 
-class SQLError(GameError):
+class DatabaseError(GameError):
     def __init__(self, msg):
         super().__init__(msg)
 
 
-class SQLBusyError(SQLError):
+class DatabaseBusyError(DatabaseError):
     """
     Every pooled database connection is in use and none came free in time.
 
-    Distinct from :class:`SQLError` because nothing is wrong: the server is
+    Distinct from :class:`DatabaseError` because nothing is wrong: the server is
     simply saturated, the request was never attempted, and retrying shortly is
     the right response. The api-endpoint maps it to ``503`` rather than ``500``
     so a client can tell "come back in a moment" from "something is broken".
@@ -55,7 +55,7 @@ class SQLBusyError(SQLError):
         super().__init__(msg)
 
 
-class SQLIdError(SQLError):
+class InvalidIdError(DatabaseError):
     def __init__(self, id_, reason=None):
         msg = "\n".join(
             [
@@ -67,7 +67,7 @@ class SQLIdError(SQLError):
         super().__init__(msg)
 
 
-class SQLAuthError(SQLError):
+class DatabaseNotConfiguredError(DatabaseError):
     """No database connection string is configured.
 
     The env var and config-file names below are derived from the configuration

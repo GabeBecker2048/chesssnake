@@ -183,7 +183,7 @@ def test_an_in_memory_database_is_refused(api_client, monkeypatch):
 
     monkeypatch.setattr(db_engine, "_engine", None)
 
-    with pytest.raises(errors.SQLError, match="in-memory"):
+    with pytest.raises(errors.DatabaseError, match="in-memory"):
         with TestClient(create_app(Settings(database={"url": "sqlite://"}))):
             pass  # pragma: no cover - the lifespan raises before the body runs
 
@@ -224,7 +224,7 @@ def test_a_saturated_pool_answers_503_not_500(api_client, pair, monkeypatch):
 
     assert resp.status_code == 503, f"expected 503 Service Unavailable, got {resp.status_code}: {resp.text[:200]}"
     body = resp.json()
-    assert body["error_type"] == "SQLBusyError"
+    assert body["error_type"] == "DatabaseBusyError"
     assert "busy" in body["detail"].lower()
 
 

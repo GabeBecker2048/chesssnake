@@ -107,7 +107,7 @@ class Session:
         self.newer_game = None
         if perspective is not None:
             self.perspective = Color(perspective)
-        elif player_id is not None and player_id == getattr(game, "bid", None):
+        elif player_id is not None and player_id == getattr(game, "black_id", None):
             self.perspective = Color.BLACK
         else:
             self.perspective = Color.WHITE
@@ -134,7 +134,7 @@ class Session:
 
     def _id_of(self, color):
         """The player id for ``color`` in this game."""
-        return self.game.wid if Color(color) == Color.WHITE else self.game.bid
+        return self.game.white_id if Color(color) == Color.WHITE else self.game.black_id
 
     def actor(self, *, responding: bool = False):
         """
@@ -154,8 +154,8 @@ class Session:
     def header(self) -> str:
         """The one-line status under the board."""
         game = self.game
-        white = game.wname or "white"
-        black = game.bname or "black"
+        white = game.white_name or "white"
+        black = game.black_name or "black"
         bits = [f"{white} (white) vs {black} (black)"]
         if game.is_remote:
             bits.append(f"game {game.id}")
@@ -221,7 +221,7 @@ class Session:
         self.game.refresh()
         if self.game.is_over and self.newer_game is None:
             client = self.game._client  # play.py and remote/game.py ship together
-            active = client.games_between(self.game.wid, self.game.bid, self.game.gid, status="active")
+            active = client.games_between(self.game.white_id, self.game.black_id, self.game.group_id, status="active")
             newer = [state.id for state in active if state.id > self.game.id]
             self.newer_game = max(newer) if newer else None
         return self.game.version != before
@@ -308,21 +308,21 @@ class Session:
         """Offer a draw."""
         if not self.allow_action():
             return
-        self.game.draw_offer(self.actor())
+        self.game.offer_draw(self.actor())
         self.show()
 
     def do_accept(self, _arg):
         """Accept the outstanding draw offer."""
         if not self.allow_action():
             return
-        self.game.draw_accept(self.actor(responding=True))
+        self.game.accept_draw(self.actor(responding=True))
         self.show()
 
     def do_decline(self, _arg):
         """Decline the outstanding draw offer."""
         if not self.allow_action():
             return
-        self.game.draw_decline(self.actor(responding=True))
+        self.game.decline_draw(self.actor(responding=True))
         self.show()
 
     def do_resign(self, _arg):
@@ -374,13 +374,13 @@ class Session:
             self._switch_to(self.newer_game)
             return
         me = self.player_id
-        if me not in (self.game.wid, self.game.bid):
+        if me not in (self.game.white_id, self.game.black_id):
             self.error("only one of the players can start a rematch")
             return
-        opponent = self.game.bid if me == self.game.wid else self.game.wid
+        opponent = self.game.black_id if me == self.game.white_id else self.game.white_id
         client = self.game._client
         for challenge in client.challenges("all"):
-            if challenge.group_id != self.game.gid or opponent not in (
+            if challenge.group_id != self.game.group_id or opponent not in (
                 challenge.challenger_id,
                 challenge.challenged_id,
             ):
@@ -391,8 +391,8 @@ class Session:
                 self.note(f"rematch challenge {challenge.id} already sent - waiting for them to accept")
             return
         # Swap colours: whoever had white asks for black this time.
-        color = "black" if me == self.game.wid else "white"
-        challenge = client.challenge(opponent, self.game.gid, color)
+        color = "black" if me == self.game.white_id else "white"
+        challenge = client.challenge(opponent, self.game.group_id, color)
         self.note(
             f"rematch challenge {challenge.id} sent to {challenge.challenged_name} (you play {color}); "
             "when they accept, `new` joins the game"
@@ -409,7 +409,7 @@ class Session:
             self.events.unsubscribe(old)
             self.events.subscribe(self.game.id)
         if self.player_id is not None:
-            self.perspective = Color.BLACK if self.player_id == self.game.bid else Color.WHITE
+            self.perspective = Color.BLACK if self.player_id == self.game.black_id else Color.WHITE
         self.note(f"rematch - game {self.game.id}")
         self.show()
 
@@ -470,7 +470,7 @@ class Session:
     # --- live updates ---------------------------------------------------------
 
     def _name_of(self, color) -> str:
-        return (self.game.wname if Color(color) == Color.WHITE else self.game.bname) or (
+        return (self.game.white_name if Color(color) == Color.WHITE else self.game.black_name) or (
             "white" if Color(color) == Color.WHITE else "black"
         )
 
@@ -510,11 +510,11 @@ class Session:
                 printed = True
             elif kind == "game_started":
                 state = event["state"]
-                players = {self.game.wid, self.game.bid}
+                players = {self.game.white_id, self.game.black_id}
                 if (
                     state["id"] > (self.game.id or 0)
                     and {state["white_id"], state["black_id"]} == players
-                    and state["group_id"] == self.game.gid
+                    and state["group_id"] == self.game.group_id
                     and self.newer_game != state["id"]
                 ):
                     self.newer_game = state["id"]
@@ -523,12 +523,12 @@ class Session:
                     printed = True
             elif kind == "challenge" and event.get("event") == "created":
                 challenge = event["challenge"]
-                opponent = self.game.bid if self.player_id == self.game.wid else self.game.wid
+                opponent = self.game.black_id if self.player_id == self.game.white_id else self.game.white_id
                 if (
                     self.player_id is not None
                     and challenge["challenger_id"] == opponent
                     and challenge["challenged_id"] == self.player_id
-                    and challenge["group_id"] == self.game.gid
+                    and challenge["group_id"] == self.game.group_id
                 ):
                     self.write()
                     self.note(f"{challenge['challenger_name']} challenged you to a rematch - `new` accepts")

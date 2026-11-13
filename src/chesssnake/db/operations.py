@@ -76,13 +76,13 @@ def validate_ids(*ids: int) -> None:
     Validate that all provided ids are integers within the 64-bit signed range.
 
     :param ids: The ids to check (user ids, group ids, game ids).
-    :raises errors.SQLIdError: If any id is not an int or is out of range.
+    :raises errors.InvalidIdError: If any id is not an int or is out of range.
     """
     for id_ in ids:
         if not isinstance(id_, int) or isinstance(id_, bool):
-            raise errors.SQLIdError(id_)
+            raise errors.InvalidIdError(id_)
         if not (_BIGINT_MIN <= id_ <= _BIGINT_MAX):
-            raise errors.SQLIdError(id_)
+            raise errors.InvalidIdError(id_)
 
 
 def validate_username(username) -> str:
@@ -181,7 +181,7 @@ def db_init(url, create_database=False, **engine_kwargs):
         schema.create_all(eng)
         print("Database initialized successfully.")
     except errors.GameError:
-        # Already a well-formed persistence error (e.g. SQLAuthError, whose message
+        # Already a well-formed persistence error (e.g. DatabaseNotConfiguredError, whose message
         # explains exactly how to configure the URL); don't flatten its type.
         raise
     except Exception as e:
@@ -975,12 +975,12 @@ def game_get_or_create(group_id, white_id, black_id, initial_fen):
     ``initial_fen`` is passed in so this layer stays engine-free.
 
     :return: The game dict.
-    :raises errors.SQLIdError: On an invalid id, or when both sides are the same user.
+    :raises errors.InvalidIdError: On an invalid id, or when both sides are the same user.
     :raises errors.UserNotFoundError: If either player does not exist.
     """
     validate_ids(white_id, black_id, group_id)
     if white_id == black_id:
-        raise errors.SQLIdError(white_id, "White and black must be different users.")
+        raise errors.InvalidIdError(white_id, "White and black must be different users.")
 
     # locked_transaction, not transaction: this reads and then writes based on
     # what it read. Under a plain (deferred) BEGIN, SQLite starts as a reader and

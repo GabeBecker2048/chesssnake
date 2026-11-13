@@ -54,11 +54,12 @@ reported as a warning rather than silently ignored.
 | `api` | `port` | integer | `8000` | Port the api-endpoint binds to. |
 | `api` | `registration` | `closed` or `open` | `closed` | Who can create an account: only administrators, or anyone through `POST /v1/auth/register`. |
 | `api` | `session_lifetime_days` | integer (days) | `30` | How long a login lasts, 1 to 3650. |
+| `api` | `docs` | boolean | `true` | Serve the interactive API docs at `/docs` and `/redoc` and the OpenAPI schema at `/openapi.json`. They need no login and contain no data, but describe every route. |
 | `database` | `url` | string | unset | Connection **URL**; the scheme selects the backend. |
 | `database` | `pool_min_size` | integer | `1` | Minimum pooled connections. |
 | `database` | `pool_max_size` | integer | `10` | Maximum pooled connections. |
 | `database` | `init_schema` | boolean | `false` | Create any missing tables when the server starts. Existing tables are never altered; recreate them with `chesssnake init-db --drop` after a release that changes the schema. |
-| `database` | `sqlite_busy_timeout` | integer (ms) | `5000` | How long a blocked SQLite writer waits. Ignored on PostgreSQL. |
+| `database` | `sqlite_busy_timeout_ms` | integer (ms) | `5000` | How long a blocked SQLite writer waits. Ignored on PostgreSQL. Named `sqlite_busy_timeout` before 0.15.2. |
 | `websocket` | `enabled` | boolean | `false` | Serve real-time updates at `/v1/ws`. See [Websockets](#websocket). |
 | `websocket` | `max_connections` | integer | `1000` | Open websockets in total, counted from accept. |
 | `websocket` | `max_pending_auth` | integer | `100` | Websockets connected but not yet logged in. At most `max_connections`. |

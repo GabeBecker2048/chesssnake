@@ -20,12 +20,12 @@ pytestmark = pytest.mark.integration
 
 
 def test_missing_url_is_an_auth_error():
-    with pytest.raises(errors.SQLAuthError):
+    with pytest.raises(errors.DatabaseNotConfiguredError):
         db_engine.parse_url(None)
 
 
 def test_empty_url_is_an_auth_error():
-    with pytest.raises(errors.SQLAuthError):
+    with pytest.raises(errors.DatabaseNotConfiguredError):
         db_engine.parse_url("")
 
 
@@ -44,7 +44,7 @@ def test_supported_backends_are_recognized(url, expected):
 
 
 def test_unsupported_backend_is_rejected():
-    with pytest.raises(errors.SQLError, match="Unsupported database backend"):
+    with pytest.raises(errors.DatabaseError, match="Unsupported database backend"):
         db_engine.parse_url("mysql://u@h/chess")
 
 
@@ -64,7 +64,7 @@ def test_an_explicit_psycopg_driver_is_kept():
 
 def test_psycopg2_is_refused_with_the_fix():
     """psycopg2 is no longer installed or tested, so asking for it fails clearly rather than half-working."""
-    with pytest.raises(errors.SQLError, match="psycopg2 is no longer supported") as raised:
+    with pytest.raises(errors.DatabaseError, match="psycopg2 is no longer supported") as raised:
         db_engine.parse_url("postgresql+psycopg2://u@h/chess")
     assert "postgresql://" in str(raised.value)
 
@@ -88,7 +88,7 @@ def test_sqlite_urls_are_not_given_a_driver():
 
 def test_keyword_dsn_is_rejected_with_the_url_equivalent():
     """Keyword connection strings worked before 0.9.0; the error has to explain that."""
-    with pytest.raises(errors.SQLError) as exc:
+    with pytest.raises(errors.DatabaseError) as exc:
         db_engine.parse_url("dbname='chess' user='u' host='h'")
     message = str(exc.value)
     assert "keyword connection string" in message
@@ -124,7 +124,7 @@ def test_admin_url_preserves_other_parameters():
 def test_admin_url_rejects_a_url_without_a_database():
     from chesssnake.db import postgres
 
-    with pytest.raises(errors.SQLError, match="does not name a database"):
+    with pytest.raises(errors.DatabaseError, match="does not name a database"):
         postgres.admin_url(db_engine.parse_url("postgresql://u:pw@h:5432/"))
 
 
@@ -192,7 +192,7 @@ def test_postgres_create_database_without_the_privilege_says_so(backend, databas
             conn.execute(text("DROP ROLE IF EXISTS no_createdb"))
             conn.execute(text("CREATE ROLE no_createdb LOGIN NOCREATEDB"))
         limited = db_engine.parse_url(database_url).set(username="no_createdb", password=None, database="never_made")
-        with pytest.raises(errors.SQLError, match="Insufficient privileges") as raised:
+        with pytest.raises(errors.DatabaseError, match="Insufficient privileges") as raised:
             postgres.create_database(limited)
         # The code itself, not only the English "permission denied" fallback.
         assert raised.value.__cause__.orig.sqlstate == "42501"

@@ -403,7 +403,7 @@ def test_a_database_error_while_rechecking_keeps_the_socket(other_app, players, 
 
     def busy(_token):
         calls.release()
-        raise errors.SQLBusyError("database is locked")
+        raise errors.DatabaseBusyError("database is locked")
 
     with client.websocket_connect(WS) as ws:
         ready(ws, players.alice.token)

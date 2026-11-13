@@ -108,7 +108,7 @@ class MoveResult:
     check: bool = False
     castle: str | None = None
     promotion: str | None = None
-    en: bool = False
+    en_passant: bool = False
     legal_moves: list[dict] | None = None
 
     def to_dict(self) -> dict:
@@ -121,7 +121,7 @@ class MoveResult:
             "check": self.check,
             "castle": self.castle,
             "promotion": self.promotion,
-            "en": self.en,
+            "en_passant": self.en_passant,
             "legal_moves": self.legal_moves,
         }
 
@@ -136,7 +136,7 @@ class MoveResult:
             check=data["check"],
             castle=data.get("castle"),
             promotion=data.get("promotion"),
-            en=data.get("en", False),
+            en_passant=data.get("en_passant", False),
             legal_moves=data.get("legal_moves"),
         )
 

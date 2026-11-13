@@ -164,7 +164,7 @@ async function usersTab(panel, ctx) {
     }
 
     // Linking says "this external account (a Discord id) is this user": a bot that
-    // maps members with POST /v1/users/{provider}/{external_id} then acts as them.
+    // maps members with POST /v1/identities/{provider}/{external_id} then acts as them.
     async function link() {
       const values = await dialog({
         title: `Link an account to ${user.username}`,

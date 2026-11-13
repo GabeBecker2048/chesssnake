@@ -128,7 +128,7 @@ def test_upgrading_a_013_database(api_client, monkeypatch, tmp_path):
 
     # As in test_threadpool's in-memory test: let the app under test own its engine.
     monkeypatch.setattr(db_engine, "_engine", None)
-    with pytest.raises(errors.SQLError, match="chesssnake init-db"):
+    with pytest.raises(errors.DatabaseError, match="chesssnake init-db"):
         with TestClient(create_app(Settings(database={"url": url}))):
             pass  # pragma: no cover - the lifespan raises first
 

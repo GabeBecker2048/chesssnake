@@ -409,7 +409,7 @@ class Connection:
             row = await self._in_thread(ops.game_get_by_id, game)
         except errors.GameError as e:
             self._drop(game)
-            code = "busy" if isinstance(e, errors.SQLBusyError) else "bad_game"
+            code = "busy" if isinstance(e, errors.DatabaseBusyError) else "bad_game"
             self.send({"type": "error", "code": code, "detail": str(e).splitlines()[0]})
             return
         if game not in self.pending:

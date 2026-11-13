@@ -97,7 +97,7 @@ def test_wrong_player_is_rejected_when_player_id_is_set():
     nothing offline while meaning something online.
     """
     game = Game.local()
-    _, out, _ = play(["e4", "e5", "quit"], game=game, player_id=game.wid)
+    _, out, _ = play(["e4", "e5", "quit"], game=game, player_id=game.white_id)
     assert game.move_history == ["e4"]
     assert "NotYourTurnError" in out
 
@@ -164,7 +164,7 @@ def test_resign_defaults_to_the_side_to_move():
 
 def test_resign_uses_the_explicit_player_when_given():
     game = Game.local()
-    _, _, _ = play(["e4", "resign", "quit"], game=game, player_id=game.wid)
+    _, _, _ = play(["e4", "resign", "quit"], game=game, player_id=game.white_id)
     assert game.result == 2, "white resigned, so black wins"
 
 
@@ -213,7 +213,7 @@ def test_flip_changes_the_view():
 
 def test_board_faces_the_players_own_side():
     game = Game.local()
-    session = Session(game, player_id=game.bid, stdin=io.StringIO(), stdout=io.StringIO())
+    session = Session(game, player_id=game.black_id, stdin=io.StringIO(), stdout=io.StringIO())
     assert session.perspective == Color.BLACK
 
 
@@ -225,7 +225,7 @@ def test_board_faces_white_by_default():
 
 def test_explicit_perspective_overrides_the_player():
     game = Game.local()
-    session = Session(game, player_id=game.bid, perspective=Color.WHITE, stdin=io.StringIO(), stdout=io.StringIO())
+    session = Session(game, player_id=game.black_id, perspective=Color.WHITE, stdin=io.StringIO(), stdout=io.StringIO())
     assert session.perspective == Color.WHITE
 
 
@@ -299,8 +299,8 @@ class _FakeRemote:
         self.generation = 1
         self.version = 1
         self.id = 7
-        self.wid, self.bid = 0, 1
-        self.wname, self.bname = "W", "B"
+        self.white_id, self.black_id = 0, 1
+        self.white_name, self.black_name = "W", "B"
         self.draw_offered_by = None
         self.board = Game.local().board
         self.to_move = Color.WHITE

@@ -221,7 +221,7 @@ chesssnake user token discord-bot --name bot     # prints the token, once
 
 It then maps each member onto a chesssnake user with one idempotent call
 (`client.get_or_create_user_by_identity("discord", member_id, member_name)`,
-or `POST /v1/users/discord/{member_id}`), and plays for them by passing
+or `POST /v1/identities/discord/{member_id}`), and plays for them by passing
 `player_id`.
 
 ### Upgrading the database
@@ -312,7 +312,7 @@ Notes:
   old game, the session says so and `new` accepts or joins it.
 - **An expired login ends the session** with a note to run `chesssnake login`, rather
   than failing on every line.
-- `--white-name`, `--black-name` and `--me` are for `--local` games only.
+- `--white-name`, `--black-name` and `--me white|black` (play only that side) are for `--local` games only.
 - `--ascii` draws pieces as letters, and `--no-color` emits no escape codes at all, both
   useful over a flaky terminal or when piping to a file.
 - **`quit`, Ctrl+D or Ctrl+C** all leave; Ctrl+C exits with status 130 and prints nothing.
@@ -339,7 +339,7 @@ game = Game.remote(state, client=alice)              # or Game.remote(game_id, c
 print(game.id)                                       # GET /v1/games/{id}
 
 # The server validates and applies each move, then persists it. move() returns a
-# MoveResult (from/to, check, castle/promotion/en) and raises the matching chess
+# MoveResult (from/to, check, castle/promotion/en_passant) and raises the matching chess
 # error if the move is illegal.
 game.move("e4")
 

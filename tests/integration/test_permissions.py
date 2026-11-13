@@ -95,8 +95,8 @@ ROUTES = [
     ("GET", "/v1/users/search?q=al", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/users/{alice}", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("PATCH", "/v1/users/{alice}", {"username": "alice2"}, {"outsider": 403, "player": OK, "admin": OK}),
-    ("GET", "/v1/users/discord/1", None, {"outsider": 403, "player": 403, "admin": OK}),
-    ("POST", "/v1/users/discord/2", {"username": "dee"}, {"outsider": 403, "player": 403, "admin": OK}),
+    ("GET", "/v1/identities/discord/1", None, {"outsider": 403, "player": 403, "admin": OK}),
+    ("POST", "/v1/identities/discord/2", {"username": "dee"}, {"outsider": 403, "player": 403, "admin": OK}),
     ("PUT", "/v1/users/{alice}/identities/discord/3", None, {"outsider": 403, "player": 403, "admin": OK}),
     # Unlinking: your own (alice is the player), or anyone's as an admin. Linking stays admin-only.
     ("DELETE", "/v1/users/{alice}/identities/discord/1", None, {"outsider": 403, "player": OK, "admin": OK}),

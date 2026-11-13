@@ -84,10 +84,10 @@ def admin_url(url, admin_db: str = MAINTENANCE_DB):
     :param url: The parsed SQLAlchemy URL.
     :param admin_db: Database to connect to instead of the target one.
     :return: ``(admin_url, target_database_name)``.
-    :raises errors.SQLError: If the URL names no database.
+    :raises errors.DatabaseError: If the URL names no database.
     """
     if not url.database:
-        raise errors.SQLError("The database URL does not name a database, so there is nothing to create.")
+        raise errors.DatabaseError("The database URL does not name a database, so there is nothing to create.")
     return url.set(database=admin_db), url.database
 
 
@@ -97,7 +97,7 @@ def create_database(url) -> str:
 
     :param url: The parsed SQLAlchemy URL of the database to create.
     :return: A human-readable description of what happened.
-    :raises errors.SQLError: On insufficient privileges or any other failure.
+    :raises errors.DatabaseError: On insufficient privileges or any other failure.
     """
     from sqlalchemy import create_engine
 
@@ -121,10 +121,10 @@ def create_database(url) -> str:
         # locales that translate the message.
         sqlstate = getattr(getattr(e, "orig", None), "sqlstate", None)
         if sqlstate == "42501" or "permission denied" in str(e).lower():
-            raise errors.SQLError(
+            raise errors.DatabaseError(
                 f"Insufficient privileges to create the database '{db_name}'. "
                 f"Ensure the user has appropriate permissions:\n{e}"
             ) from e
-        raise errors.SQLError(f"Database creation error: {e}") from e
+        raise errors.DatabaseError(f"Database creation error: {e}") from e
     finally:
         engine.dispose()

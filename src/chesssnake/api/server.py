@@ -58,7 +58,7 @@ from .web import add_web_routes
 logger = logging.getLogger(__name__)
 
 # Precompute the starting position's repetition key (engine-derived) for new games.
-_INITIAL_KEY = EngineGame().position_history[0]  # the starting position's repetition key
+_INITIAL_KEY = EngineGame()._position_history[0]  # the starting position's repetition key
 
 #: Longest name an api token may be given.
 TOKEN_NAME_MAX = 64
@@ -153,11 +153,11 @@ def _error(status_code, exc, headers=None):
 
 # Exception class -> HTTP status. Starlette resolves a raised exception by walking
 # its MRO and taking the first registered class, so subclasses must be listed
-# before the bases they refine (SQLIdError before SQLError before GameError).
+# before the bases they refine (InvalidIdError before DatabaseError before GameError).
 _ERROR_STATUS = (
     (errors.AuthError, 401),
     (errors.ForbiddenError, 403),
-    (errors.SQLIdError, 422),
+    (errors.InvalidIdError, 422),
     (errors.UserValidationError, 422),
     (errors.ChallengeError, 409),
     (errors.VersionConflictError, 409),
@@ -167,8 +167,8 @@ _ERROR_STATUS = (
     (errors.UserNotFoundError, 404),
     (errors.ChallengeNotFoundError, 404),
     (errors.TokenNotFoundError, 404),
-    (errors.SQLBusyError, 503),
-    (errors.SQLError, 500),
+    (errors.DatabaseBusyError, 503),
+    (errors.DatabaseError, 500),
     (errors.GameError, 400),
     (chess_errors.ChessError, 400),
 )
@@ -500,7 +500,7 @@ def update_user(request: Request, user_id: int, body: UserPatch, me: Principal =
     return _user_out(ops.user_get(user_id), me)
 
 
-@v1.get("/users/{provider}/{external_id}")
+@v1.get("/identities/{provider}/{external_id}")
 def get_user_by_identity(provider: str, external_id: str, me: Principal = Depends(current_principal)):
     require_admin(me)
     row = ops.identity_get(provider, external_id)
@@ -508,7 +508,7 @@ def get_user_by_identity(provider: str, external_id: str, me: Principal = Depend
 
 
 # 200, not 201, like POST /v1/games: this is get-or-create, and most calls get.
-@v1.post("/users/{provider}/{external_id}")
+@v1.post("/identities/{provider}/{external_id}")
 def get_or_create_user_by_identity(
     provider: str, external_id: str, body: UsernameBody, me: Principal = Depends(current_principal)
 ):
@@ -682,7 +682,7 @@ def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = De
             raise errors.NotYourTurnError(f"It is not player {actor}'s turn to move")
         m = game.move(body.move)  # runs the engine; raises ChessError on illegal input
         san = game.move_history[-1]
-        state, change = _change(game, row, now, new_moves=[(history["max_ply"] + 1, san, game.position_history[-1])])
+        state, change = _change(game, row, now, new_moves=[(history["max_ply"] + 1, san, game._position_history[-1])])
         change.result = MoveResult(
             state=state,
             from_square=m.from_square,
@@ -691,7 +691,7 @@ def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = De
             check=game.board.is_check(),
             castle=m.castle,
             promotion=m.promotion.value if m.promotion is not None else None,
-            en=m.en_passant,
+            en_passant=m.en_passant,
             # the next player's options, so they need not ask (sent on the websocket too)
             legal_moves=[] if game.is_over else game.legal_moves(),
         )
@@ -708,7 +708,7 @@ def _draw_or_resign(request, game_id, body, me, method):
 
     def mutate(row, history, now):
         game = _load_game(row, history)
-        getattr(game, method)(actor)  # draw_offer / draw_accept / draw_decline / resign
+        getattr(game, method)(actor)  # offer_draw / accept_draw / decline_draw / resign
         return _change(game, row, now)[1]
 
     state = ops.apply_game_change(game_id, mutate, body.expected_version).to_dict()
@@ -722,24 +722,24 @@ def resign(request: Request, game_id: int, body: ActionBody | None = None, me: P
 
 
 @v1.post("/games/{game_id}/draw/offer")
-def draw_offer(
+def offer_draw(
     request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
 ):
-    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_offer")
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "offer_draw")
 
 
 @v1.post("/games/{game_id}/draw/accept")
-def draw_accept(
+def accept_draw(
     request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
 ):
-    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_accept")
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "accept_draw")
 
 
 @v1.post("/games/{game_id}/draw/decline")
-def draw_decline(
+def decline_draw(
     request: Request, game_id: int, body: ActionBody | None = None, me: Principal = Depends(current_principal)
 ):
-    return _draw_or_resign(request, game_id, body or ActionBody(), me, "draw_decline")
+    return _draw_or_resign(request, game_id, body or ActionBody(), me, "decline_draw")
 
 
 @v1.get("/games/{game_id}/legal-moves")
@@ -819,7 +819,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # would issue BEGIN on one connection, and the database is lost when
             # the process exits anyway, so it is refused outright.
             if db_engine.is_memory_url(db_engine.parse_url(settings.database.url)):
-                raise errors.SQLError(
+                raise errors.DatabaseError(
                     "An in-memory SQLite database cannot be served: it is discarded when the "
                     "process exits, and it cannot handle concurrent requests.\n"
                     "  got:      "
@@ -831,7 +831,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 settings.database.url,
                 pool_min_size=settings.database.pool_min_size,
                 pool_max_size=settings.database.pool_max_size,
-                sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
+                sqlite_busy_timeout=settings.database.sqlite_busy_timeout_ms,
             )
             # Refuse to serve a database from an older chesssnake rather than
             # failing on the first request that touches a changed table: there are
@@ -839,7 +839,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             stale = schema.stale_tables(engine)
             if stale:
                 db_engine.dispose_engine()
-                raise errors.SQLError(
+                raise errors.DatabaseError(
                     "This database was created by an older chesssnake and its schema has changed "
                     f"(tables: {', '.join(stale)}). There are no migrations before 1.0.0: recreate it with "
                     "`chesssnake init-db --drop`, which deletes everything in it."
@@ -852,7 +852,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 missing = schema.missing_tables(engine)
                 if missing:
                     db_engine.dispose_engine()
-                    raise errors.SQLError(
+                    raise errors.DatabaseError(
                         f"This database is missing tables added by a newer chesssnake ({', '.join(missing)}). "
                         "Create them with `chesssnake init-db` (existing tables and data are kept), "
                         "or set database.init_schema = true."
@@ -865,7 +865,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if owns_engine:
                 db_engine.dispose_engine()
 
-    app = FastAPI(title="chesssnake api-endpoint", lifespan=lifespan)
+    # api.docs (on by default): the interactive docs and the schema they read. Off
+    # removes all three, since /docs and /redoc are useless without /openapi.json.
+    docs = settings.api.docs
+    app = FastAPI(
+        title="chesssnake api-endpoint",
+        lifespan=lifespan,
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
+    )
     app.state.settings = settings
     # One broker per app (see realtime.py); a do-nothing one when websockets are off.
     app.state.broker = InProcessBroker(settings.websocket) if settings.websocket.enabled else Broker()

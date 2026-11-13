@@ -53,7 +53,7 @@ def test_locking_outside_a_write_transaction_is_rejected(file_engine, monkeypatc
     monkeypatch.setattr(db_engine, "_engine", file_engine)
     stmt = schema.games.select().limit(1)
     with db_engine.transaction() as conn:
-        with pytest.raises(errors.SQLError, match="locked_transaction"):
+        with pytest.raises(errors.DatabaseError, match="locked_transaction"):
             sqlite.lock_current_game(conn, stmt)
 
 
@@ -238,5 +238,5 @@ def test_missing_driver_reports_the_extra_to_install(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(errors.SQLError, match=r"chesssnake\[api,postgres\]"):
+    with pytest.raises(errors.DatabaseError, match=r"chesssnake\[api,postgres\]"):
         db_engine.create_engine("postgresql://u:pw@localhost/chess")

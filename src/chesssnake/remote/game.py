@@ -166,8 +166,8 @@ class Game(BaseGame):
         self.version = state.version
         self.generation = state.generation
         self.id = state.id
-        self.wname = state.white_name
-        self.bname = state.black_name
+        self.white_name = state.white_name
+        self.black_name = state.black_name
 
     def _move_result(self, engine_move) -> MoveResult:
         """Wrap an engine ``Move`` (from a local move) into a public ``MoveResult``."""
@@ -181,7 +181,7 @@ class Game(BaseGame):
             check=self.board.is_check(),
             castle=engine_move.castle,
             promotion=engine_move.promotion.value if engine_move.promotion is not None else None,
-            en=engine_move.en_passant,
+            en_passant=engine_move.en_passant,
             legal_moves=[] if self.is_over else self.legal_moves(),
         )
 
@@ -205,19 +205,19 @@ class Game(BaseGame):
             return super().resign(player_id if player_id is not None else self.player_id)
         self._remote_action("resign", player_id)
 
-    def draw_offer(self, player_id=None):
+    def offer_draw(self, player_id=None):
         if not self.is_remote:
-            return super().draw_offer(player_id if player_id is not None else self.player_id)
+            return super().offer_draw(player_id if player_id is not None else self.player_id)
         self._remote_action("offer_draw", player_id)
 
-    def draw_accept(self, player_id=None):
+    def accept_draw(self, player_id=None):
         if not self.is_remote:
-            return super().draw_accept(player_id if player_id is not None else self.player_id)
+            return super().accept_draw(player_id if player_id is not None else self.player_id)
         self._remote_action("accept_draw", player_id)
 
-    def draw_decline(self, player_id=None):
+    def decline_draw(self, player_id=None):
         if not self.is_remote:
-            return super().draw_decline(player_id if player_id is not None else self.player_id)
+            return super().decline_draw(player_id if player_id is not None else self.player_id)
         self._remote_action("decline_draw", player_id)
 
     # --- reads -------------------------------------------------------------

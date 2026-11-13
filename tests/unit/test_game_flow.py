@@ -81,10 +81,10 @@ def test_is_players_turn():
 
 def test_draw_offer_and_accept_ends_in_draw():
     g = Game(white_id=10, black_id=20)
-    g.draw_offer(10)  # white (to move) offers
+    g.offer_draw(10)  # white (to move) offers
     assert g.draw == 0
     assert g.draw_offered_by == Color.WHITE
-    g.draw_offer(20)  # black offering back accepts the draw
+    g.offer_draw(20)  # black offering back accepts the draw
     assert g.board.status == 3  # draw / stalemate status
     assert g.result == GameStatus.DRAW
     assert g.winner is None
@@ -92,26 +92,26 @@ def test_draw_offer_and_accept_ends_in_draw():
 
 def test_double_draw_offer_raises():
     g = Game(white_id=10, black_id=20)
-    g.draw_offer(10)
+    g.offer_draw(10)
     with pytest.raises(ChessError.DrawAlreadyOfferedError):
-        g.draw_offer(10)
+        g.offer_draw(10)
 
 
 def test_draw_offer_out_of_turn_raises():
     g = Game(white_id=10, black_id=20)  # white to move
     with pytest.raises(ChessError.DrawWrongTurnError):
-        g.draw_offer(20)  # black offers out of turn
+        g.offer_draw(20)  # black offers out of turn
 
 
 def test_decline_with_no_offer_raises():
     g = Game(white_id=10, black_id=20)
     with pytest.raises(ChessError.DrawNotOfferedError):
-        g.draw_decline(10)
+        g.decline_draw(10)
 
 
 def test_draw_decline_clears_offer():
     g = Game(white_id=10, black_id=20)
-    g.draw_offer(10)
-    g.draw_decline(20)
+    g.offer_draw(10)
+    g.decline_draw(20)
     assert g.draw is None
     assert g.board.status == 0

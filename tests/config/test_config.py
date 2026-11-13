@@ -19,12 +19,13 @@ EXPECTED_ENV_NAMES = {
     ("api", "port"): "CHESSSNAKE__API__PORT",
     ("api", "registration"): "CHESSSNAKE__API__REGISTRATION",
     ("api", "session_lifetime_days"): "CHESSSNAKE__API__SESSION_LIFETIME_DAYS",
+    ("api", "docs"): "CHESSSNAKE__API__DOCS",
     ("database", "url"): "CHESSSNAKE__DATABASE__URL",
     ("web", "enabled"): "CHESSSNAKE__WEB__ENABLED",
     ("database", "pool_min_size"): "CHESSSNAKE__DATABASE__POOL_MIN_SIZE",
     ("database", "pool_max_size"): "CHESSSNAKE__DATABASE__POOL_MAX_SIZE",
     ("database", "init_schema"): "CHESSSNAKE__DATABASE__INIT_SCHEMA",
-    ("database", "sqlite_busy_timeout"): "CHESSSNAKE__DATABASE__SQLITE_BUSY_TIMEOUT",
+    ("database", "sqlite_busy_timeout_ms"): "CHESSSNAKE__DATABASE__SQLITE_BUSY_TIMEOUT_MS",
     **{
         ("websocket", key): f"CHESSSNAKE__WEBSOCKET__{key.upper()}"
         for key in (
@@ -401,7 +402,7 @@ def test_sql_auth_error_names_the_current_env_var():
     """db/ deliberately does not import config, so CI enforces the message stays in sync."""
     from chesssnake.db import errors
 
-    assert env_name("database", "url") in str(errors.SQLAuthError())
+    assert env_name("database", "url") in str(errors.DatabaseNotConfiguredError())
 
 
 def test_settings_is_constructible_without_any_layers():

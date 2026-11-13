@@ -141,7 +141,7 @@ def _database(settings):
         settings.database.url,
         pool_min_size=settings.database.pool_min_size,
         pool_max_size=settings.database.pool_max_size,
-        sqlite_busy_timeout=settings.database.sqlite_busy_timeout,
+        sqlite_busy_timeout=settings.database.sqlite_busy_timeout_ms,
     )
     try:
         yield engine
@@ -449,10 +449,8 @@ def _run_play(args):
     if args.local:
         if args.game is not None or args.vs is not None:
             sys.exit("--game and --vs are for games on an api-endpoint, not --local ones")
-        if args.me is not None and args.me not in (0, 1):
-            sys.exit("With --local, --me is 0 (white) or 1 (black)")
         game = Game.local(white_name=args.white_name, black_name=args.black_name)
-        player_id = args.me
+        player_id = {None: None, "white": game.white_id, "black": game.black_id}[args.me]
         events = None
     else:
         if args.white_name or args.black_name or args.me is not None:
@@ -478,7 +476,7 @@ def _run_play(args):
             game = Game.remote(game_id, client=client)
         # You act as yourself. An administrator watching someone else's game acts
         # as whichever side is to move instead, sending that player's id.
-        playing = me.id in (game.wid, game.bid)
+        playing = me.id in (game.white_id, game.black_id)
         player_id = None if (me.is_admin and not playing) else me.id
         events = None if args.no_live else _live_updates(client, game.id, args.refresh)
 
@@ -560,7 +558,14 @@ def _add_setting_flags(parser):
     parser.add_argument("--database-url", dest="database_url", help="database connection string")
 
 
-def main(argv=None):
+def build_parser() -> argparse.ArgumentParser:
+    """
+    The whole command line: every subcommand, argument and option.
+
+    Separate from :func:`main` so the command-line surface can be inspected
+    without running anything: ``tests/config/test_public_api.py`` pins it, since
+    commands and flags end up in scripts and compose files.
+    """
     parser = argparse.ArgumentParser(prog="chesssnake", description="chesssnake command-line interface")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -628,7 +633,9 @@ def main(argv=None):
     play.add_argument("--game", type=int, help="the id of the game to play (see `chesssnake games`)")
     play.add_argument("--vs", type=_player, help="play your game in progress against this user")
     play.add_argument("--group", type=int, default=0, help="the group, with --vs (default 0)")
-    play.add_argument("--me", type=int, help="with --local: 0 to play white only, 1 for black")
+    play.add_argument(
+        "--me", choices=("white", "black"), help="with --local: play only this side (default: both, at one keyboard)"
+    )
     play.add_argument("--white-name", dest="white_name", default="", help="display name for white (--local only)")
     play.add_argument("--black-name", dest="black_name", default="", help="display name for black (--local only)")
     play.add_argument(
@@ -746,8 +753,11 @@ def main(argv=None):
     )
     init.add_argument("--force", action="store_true", help="overwrite an existing config file")
     init.set_defaults(func=_run_config_init)
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     try:
         args.func(args)
     except KeyboardInterrupt:

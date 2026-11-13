@@ -200,7 +200,7 @@ What playing a move returns: the move plus the resulting `GameState`.
 | `check` | boolean | Whether the move gives check (non-terminal; a mate is `status` 1/2). |
 | `castle` | string \| null | `"K"` or `"Q"` for a castle, else `null`. |
 | `promotion` | string \| null | The promoted-to piece letter, else `null`. |
-| `en` | boolean | Whether the move was an en-passant capture. |
+| `en_passant` | boolean | Whether the move was an en-passant capture. Named `en` before 0.15.2. |
 | `legal_moves` | array | The legal moves of the side now to move, in the [`legal-moves`](#game-reads) shape (`{from, to, san, promotion}`); `[]` once the game has ended. Added in 0.15.1, so a client talking to an older server should treat it as optional. |
 
 ### `User`
@@ -323,9 +323,11 @@ human-readable detail:
 | `403 Forbidden` | Logged in but not allowed: not an admin, acting as someone else, not your turn or not your game, a disabled account, registration closed | `ForbiddenError`, `NotYourTurnError` |
 | `404 Not Found` | No such game, user, challenge or token (or not one you may see) | `GameNotFoundError`, `UserNotFoundError`, `ChallengeNotFoundError`, `TokenNotFoundError` |
 | `409 Conflict` | Stale `expected_version`; a username or external id taken; a challenge that cannot be made or accepted | `VersionConflictError`, `UserExistsError`, `ChallengeError` |
-| `422 Unprocessable Entity` | A malformed value: an id out of range, a bad username, password, provider or token name; an admin not saying which player acts | `SQLIdError`, `UserValidationError` |
-| `503 Service Unavailable` | The server is busy (no free database connection, or too many logins being checked at once). Retry shortly. | `SQLBusyError` |
-| `500 Internal Server Error` | A database failure | `SQLError` |
+| `422 Unprocessable Entity` | A malformed value: an id out of range, a bad username, password, provider or token name; an admin not saying which player acts | `InvalidIdError`, `UserValidationError` |
+| `503 Service Unavailable` | The server is busy (no free database connection, or too many logins being checked at once). Retry shortly. | `DatabaseBusyError` |
+| `500 Internal Server Error` | A database failure | `DatabaseError` |
+
+Before 0.15.2, `InvalidIdError`, `DatabaseBusyError` and `DatabaseError` were named `SQLIdError`, `SQLBusyError` and `SQLError`.
 
 FastAPI's own request-validation failures (malformed JSON, a missing body field, a
 string where an integer belongs) are `422` with a list-shaped `detail` and no
@@ -441,10 +443,12 @@ returned lowercase. Anything else is a `422`.
 | `GET /v1/users/search?q=&limit=20&offset=0` | any | | `200 {"users": [User]}`: names starting with `q`, ignoring case, ordered by name. An empty `q` lists everyone. `limit` is 1 to 200. |
 | `GET /v1/users/{id}` | any | | `200 User` |
 | `PATCH /v1/users/{id}` | self: `username`; admin: also `role`, `disabled`, `password` | any subset | `200 User`. A non-admin changing anything else, or another account, gets `403`. |
-| `GET /v1/users/{provider}/{external_id}` | admin | | `200 User` linked to that external id, `404` if none |
-| `POST /v1/users/{provider}/{external_id}` | admin | `{username}` | `200 User`: the linked user, **created** (with that username, no password) on first use. Idempotent: the one call a bot needs per interaction. |
+| `GET /v1/identities/{provider}/{external_id}` | admin | | `200 User` linked to that external id, `404` if none |
+| `POST /v1/identities/{provider}/{external_id}` | admin | `{username}` | `200 User`: the linked user, **created** (with that username, no password) on first use. Idempotent: the one call a bot needs per interaction. |
 | `PUT /v1/users/{id}/identities/{provider}/{external_id}` | admin | | `200 User`. `409` if that external id belongs to someone else. Linking again is a no-op. |
 | `DELETE /v1/users/{id}/identities/{provider}/{external_id}` | admin, or the user themselves | | `200 User`. A user may unlink their own ids but never link one: linking asserts the external account is theirs, which only a trusted bot or an admin can vouch for. |
+
+The two identity lookups lived at `/v1/users/{provider}/{external_id}` before 0.15.2.
 
 `provider` is a short lowercase name of your choosing (`[a-z0-9_-]`, up to 32
 characters); `external_id` is any token up to 128 characters, stored as text, so
@@ -454,7 +458,7 @@ of providers.
 A bot's usual setup: a dedicated admin account with no password
 (`chesssnake user create discord-bot --admin --no-password` on the server) and an
 api token for it (`chesssnake user token discord-bot --name bot`). It maps each
-Discord member with `POST /v1/users/discord/{member_id}` and acts for them with
+Discord member with `POST /v1/identities/discord/{member_id}` and acts for them with
 `player_id`.
 
 ---
