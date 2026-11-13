@@ -58,7 +58,7 @@ from .web import add_web_routes
 logger = logging.getLogger(__name__)
 
 # Precompute the starting position's repetition key (engine-derived) for new games.
-_INITIAL_KEY = EngineGame().position_history[0]  # the starting position's repetition key
+_INITIAL_KEY = EngineGame()._position_history[0]  # the starting position's repetition key
 
 #: Longest name an api token may be given.
 TOKEN_NAME_MAX = 64
@@ -682,7 +682,7 @@ def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = De
             raise errors.NotYourTurnError(f"It is not player {actor}'s turn to move")
         m = game.move(body.move)  # runs the engine; raises ChessError on illegal input
         san = game.move_history[-1]
-        state, change = _change(game, row, now, new_moves=[(history["max_ply"] + 1, san, game.position_history[-1])])
+        state, change = _change(game, row, now, new_moves=[(history["max_ply"] + 1, san, game._position_history[-1])])
         change.result = MoveResult(
             state=state,
             from_square=m.from_square,

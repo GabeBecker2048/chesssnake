@@ -108,7 +108,9 @@ class Game:
         self.last_move: object = None
         # SAN of every move played (for PGN); position keys for threefold detection.
         self.move_history: list[str] = list(move_history) if move_history is not None else []
-        self.position_history: list[str] = (
+        # Repetition keys of every position so far (internal: their format is the
+        # engine's business, and changed in 0.15.0). Loaded and read by the server.
+        self._position_history: list[str] = (
             list(position_history) if position_history is not None else [self.board._position_key()]
         )
 
@@ -246,8 +248,8 @@ class Game:
 
         # threefold repetition needs the position history, which lives here on Game
         key = self.board._position_key()
-        self.position_history.append(key)
-        if self.board.status == GameStatus.IN_PLAY and self.position_history.count(key) >= 3:
+        self._position_history.append(key)
+        if self.board.status == GameStatus.IN_PLAY and self._position_history.count(key) >= 3:
             self.board.status = GameStatus.DRAW
             self.board.termination = Termination.THREEFOLD
 

@@ -57,7 +57,6 @@
       "last_move",
       "move_history",
       "player_id",
-      "position_history",
       "version",
       "white_id",
       "white_name"
