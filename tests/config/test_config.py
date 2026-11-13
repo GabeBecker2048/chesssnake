@@ -401,7 +401,7 @@ def test_sql_auth_error_names_the_current_env_var():
     """db/ deliberately does not import config, so CI enforces the message stays in sync."""
     from chesssnake.db import errors
 
-    assert env_name("database", "url") in str(errors.SQLAuthError())
+    assert env_name("database", "url") in str(errors.DatabaseNotConfiguredError())
 
 
 def test_settings_is_constructible_without_any_layers():

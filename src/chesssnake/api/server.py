@@ -153,11 +153,11 @@ def _error(status_code, exc, headers=None):
 
 # Exception class -> HTTP status. Starlette resolves a raised exception by walking
 # its MRO and taking the first registered class, so subclasses must be listed
-# before the bases they refine (SQLIdError before SQLError before GameError).
+# before the bases they refine (InvalidIdError before DatabaseError before GameError).
 _ERROR_STATUS = (
     (errors.AuthError, 401),
     (errors.ForbiddenError, 403),
-    (errors.SQLIdError, 422),
+    (errors.InvalidIdError, 422),
     (errors.UserValidationError, 422),
     (errors.ChallengeError, 409),
     (errors.VersionConflictError, 409),
@@ -167,8 +167,8 @@ _ERROR_STATUS = (
     (errors.UserNotFoundError, 404),
     (errors.ChallengeNotFoundError, 404),
     (errors.TokenNotFoundError, 404),
-    (errors.SQLBusyError, 503),
-    (errors.SQLError, 500),
+    (errors.DatabaseBusyError, 503),
+    (errors.DatabaseError, 500),
     (errors.GameError, 400),
     (chess_errors.ChessError, 400),
 )
@@ -819,7 +819,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # would issue BEGIN on one connection, and the database is lost when
             # the process exits anyway, so it is refused outright.
             if db_engine.is_memory_url(db_engine.parse_url(settings.database.url)):
-                raise errors.SQLError(
+                raise errors.DatabaseError(
                     "An in-memory SQLite database cannot be served: it is discarded when the "
                     "process exits, and it cannot handle concurrent requests.\n"
                     "  got:      "
@@ -839,7 +839,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             stale = schema.stale_tables(engine)
             if stale:
                 db_engine.dispose_engine()
-                raise errors.SQLError(
+                raise errors.DatabaseError(
                     "This database was created by an older chesssnake and its schema has changed "
                     f"(tables: {', '.join(stale)}). There are no migrations before 1.0.0: recreate it with "
                     "`chesssnake init-db --drop`, which deletes everything in it."
@@ -852,7 +852,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 missing = schema.missing_tables(engine)
                 if missing:
                     db_engine.dispose_engine()
-                    raise errors.SQLError(
+                    raise errors.DatabaseError(
                         f"This database is missing tables added by a newer chesssnake ({', '.join(missing)}). "
                         "Create them with `chesssnake init-db` (existing tables and data are kept), "
                         "or set database.init_schema = true."

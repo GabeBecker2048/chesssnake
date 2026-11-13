@@ -323,9 +323,11 @@ human-readable detail:
 | `403 Forbidden` | Logged in but not allowed: not an admin, acting as someone else, not your turn or not your game, a disabled account, registration closed | `ForbiddenError`, `NotYourTurnError` |
 | `404 Not Found` | No such game, user, challenge or token (or not one you may see) | `GameNotFoundError`, `UserNotFoundError`, `ChallengeNotFoundError`, `TokenNotFoundError` |
 | `409 Conflict` | Stale `expected_version`; a username or external id taken; a challenge that cannot be made or accepted | `VersionConflictError`, `UserExistsError`, `ChallengeError` |
-| `422 Unprocessable Entity` | A malformed value: an id out of range, a bad username, password, provider or token name; an admin not saying which player acts | `SQLIdError`, `UserValidationError` |
-| `503 Service Unavailable` | The server is busy (no free database connection, or too many logins being checked at once). Retry shortly. | `SQLBusyError` |
-| `500 Internal Server Error` | A database failure | `SQLError` |
+| `422 Unprocessable Entity` | A malformed value: an id out of range, a bad username, password, provider or token name; an admin not saying which player acts | `InvalidIdError`, `UserValidationError` |
+| `503 Service Unavailable` | The server is busy (no free database connection, or too many logins being checked at once). Retry shortly. | `DatabaseBusyError` |
+| `500 Internal Server Error` | A database failure | `DatabaseError` |
+
+Before 0.15.2, `InvalidIdError`, `DatabaseBusyError` and `DatabaseError` were named `SQLIdError`, `SQLBusyError` and `SQLError`.
 
 FastAPI's own request-validation failures (malformed JSON, a missing body field, a
 string where an integer belongs) are `422` with a list-shaped `detail` and no

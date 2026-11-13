@@ -110,7 +110,7 @@ def create_database(url) -> str:
 
     :param url: The parsed SQLAlchemy URL.
     :return: A human-readable description of what happened.
-    :raises errors.SQLError: If the directory cannot be created.
+    :raises errors.DatabaseError: If the directory cannot be created.
     """
     if url.database in (None, "", ":memory:"):
         return "In-memory SQLite database; nothing to create."
@@ -119,7 +119,7 @@ def create_database(url) -> str:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        raise errors.SQLError(f"Could not create the directory for {path}: {e}") from e
+        raise errors.DatabaseError(f"Could not create the directory for {path}: {e}") from e
 
     if path.exists():
         return f"SQLite database '{path}' already exists."

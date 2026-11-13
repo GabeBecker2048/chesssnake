@@ -389,7 +389,7 @@ def test_record(api_client, pair):
 
 def test_invalid_id_returns_422(api_client, pair):
     resp = api_client.post("/v1/games", json={"group_id": 0, "white_id": 10**19, "black_id": pair[1]})
-    assert resp.status_code == 422 and resp.json()["error_type"] == "SQLIdError"
+    assert resp.status_code == 422 and resp.json()["error_type"] == "InvalidIdError"
 
 
 def test_a_move_with_its_check_suffix_is_accepted(api_client, game):

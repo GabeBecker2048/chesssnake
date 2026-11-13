@@ -334,7 +334,7 @@ def test_password_hashing_is_capped_and_answers_503(api_client, users, monkeypat
     monkeypatch.setattr(auth, "_hash_slots", slots)
     monkeypatch.setattr(auth, "HASH_SLOT_TIMEOUT_SECONDS", 0.05)
     resp = _login(api_client, "alice")
-    assert resp.status_code == 503 and resp.json()["error_type"] == "SQLBusyError"
+    assert resp.status_code == 503 and resp.json()["error_type"] == "DatabaseBusyError"
 
 
 def test_a_saturated_pool_while_authenticating_is_503_not_401(api_client, monkeypatch):
@@ -348,7 +348,7 @@ def test_a_saturated_pool_while_authenticating_is_503_not_401(api_client, monkey
 
     monkeypatch.setattr(db_engine, "get_engine", exhausted)
     resp = api_client.get("/v1/auth/me")
-    assert resp.status_code == 503 and resp.json()["error_type"] == "SQLBusyError"
+    assert resp.status_code == 503 and resp.json()["error_type"] == "DatabaseBusyError"
 
 
 def test_a_user_can_unlink_their_own_ids_but_not_link_any(api_client, users, as_user):

@@ -62,29 +62,29 @@ def parse_url(url: str | None):
 
     :param url: The configured ``database.url``.
     :return: The parsed SQLAlchemy URL.
-    :raises errors.SQLAuthError: If no URL is configured.
-    :raises errors.SQLError: If the URL is malformed or names an unknown backend.
+    :raises errors.DatabaseNotConfiguredError: If no URL is configured.
+    :raises errors.DatabaseError: If the URL is malformed or names an unknown backend.
     """
     if not url:
-        raise errors.SQLAuthError()
+        raise errors.DatabaseNotConfiguredError()
     try:
         parsed = make_url(url)
     except ArgumentError as e:
         # The most likely cause is a libpq keyword connection string, which was
         # accepted before 0.9.0 but cannot be expressed as a URL.
         if "=" in url and "://" not in url:
-            raise errors.SQLError(
+            raise errors.DatabaseError(
                 "The database URL must be a URL, not a libpq keyword connection string.\n"
                 f"  got:      {url}\n"
                 "  expected: postgresql://user:password@host:5432/dbname\n"
                 "Keyword connection strings (dbname='…' user='…') are no longer accepted."
             ) from e
-        raise errors.SQLError(f"Could not parse the database URL: {e}") from e
+        raise errors.DatabaseError(f"Could not parse the database URL: {e}") from e
 
     backend = parsed.get_backend_name()
     if backend not in SUPPORTED_BACKENDS:
         supported = ", ".join(sorted(SUPPORTED_BACKENDS))
-        raise errors.SQLError(f"Unsupported database backend {backend!r}. Supported backends: {supported}.")
+        raise errors.DatabaseError(f"Unsupported database backend {backend!r}. Supported backends: {supported}.")
     return _pin_postgres_driver(parsed)
 
 
@@ -105,10 +105,10 @@ def _pin_postgres_driver(parsed):
 
     :param parsed: the parsed SQLAlchemy URL.
     :return: the URL, with ``+psycopg`` named if it is a bare PostgreSQL URL.
-    :raises errors.SQLError: If the URL names the psycopg2 driver.
+    :raises errors.DatabaseError: If the URL names the psycopg2 driver.
     """
     if parsed.drivername == "postgresql+psycopg2":
-        raise errors.SQLError(
+        raise errors.DatabaseError(
             "psycopg2 is no longer supported; chesssnake uses psycopg 3 (`pip install 'chesssnake[api,postgres]'`).\n"
             "  got:      postgresql+psycopg2://...\n"
             "  expected: postgresql://...   (or postgresql+psycopg://...)"
@@ -157,7 +157,7 @@ def _engine_kwargs(parsed, pool_min_size: int, pool_max_size: int) -> dict[str, 
         # That is far too long to hold a request, and a worker thread running a
         # sync route cannot be cancelled when the client gives up, so the thread
         # stays parked for the whole wait. Fail fast instead; transaction()
-        # turns the timeout into SQLBusyError and the api-endpoint into a 503.
+        # turns the timeout into DatabaseBusyError and the api-endpoint into a 503.
         "pool_timeout": POOL_TIMEOUT_SECONDS,
     }
     if parsed.get_backend_name() == "sqlite":
@@ -185,8 +185,8 @@ def create_engine(
     :param pool_max_size: Ceiling on simultaneous connections.
     :param sqlite_busy_timeout: Milliseconds a blocked SQLite writer waits.
     :return: A configured engine.
-    :raises errors.SQLAuthError: If no URL is configured.
-    :raises errors.SQLError: If the URL is invalid or the driver is missing.
+    :raises errors.DatabaseNotConfiguredError: If no URL is configured.
+    :raises errors.DatabaseError: If the URL is invalid or the driver is missing.
     """
     parsed = parse_url(url)
     backend = parsed.get_backend_name()
@@ -196,9 +196,9 @@ def create_engine(
     except ModuleNotFoundError as e:
         extra = SUPPORTED_BACKENDS[backend]
         hint = f" Install it with: pip install 'chesssnake[api,{extra}]'" if extra else ""
-        raise errors.SQLError(f"The {backend} driver is not installed ({e}).{hint}") from e
+        raise errors.DatabaseError(f"The {backend} driver is not installed ({e}).{hint}") from e
     except SQLAlchemyError as e:
-        raise errors.SQLError(f"Could not create the database engine: {e}") from e
+        raise errors.DatabaseError(f"Could not create the database engine: {e}") from e
 
     # Import the dialect shim for BOTH backends, not just SQLite. backend() is
     # called on every query and would otherwise import postgres.py (and psycopg)
@@ -231,10 +231,12 @@ def get_engine() -> Engine:
     """
     Return the process-wide engine.
 
-    :raises errors.SQLError: If no engine has been initialized.
+    :raises errors.DatabaseError: If no engine has been initialized.
     """
     if _engine is None:
-        raise errors.SQLError("The database engine is not initialized.\n    Use chesssnake.db.engine.initialize_engine")
+        raise errors.DatabaseError(
+            "The database engine is not initialized.\n    Use chesssnake.db.engine.initialize_engine"
+        )
     return _engine
 
 
@@ -283,12 +285,12 @@ def transaction() -> Iterator[Any]:
     Run several statements in one transaction on a single pooled connection.
 
     Commits when the block exits cleanly and rolls back on any exception. A
-    database error is wrapped in :class:`~chesssnake.db.errors.SQLError`; anything
+    database error is wrapped in :class:`~chesssnake.db.errors.DatabaseError`; anything
     else propagates unchanged, which is what lets an engine ``ChessError`` raised
     inside :func:`~chesssnake.db.operations.apply_game_change`'s ``mutate``
     callback reach the caller with its own type intact.
 
-    :raises errors.SQLError: On any database error, after rolling back.
+    :raises errors.DatabaseError: On any database error, after rolling back.
     """
     try:
         with get_engine().begin() as conn:
@@ -303,9 +305,9 @@ def transaction() -> Iterator[Any]:
         # SQLAlchemyError below, which it subclasses. Reachable only since the
         # routes started running concurrently; before that one request held at
         # most one connection.
-        raise errors.SQLBusyError() from e
+        raise errors.DatabaseBusyError() from e
     except SQLAlchemyError as e:
-        raise errors.SQLError(f"SQL execution error: {e}") from e
+        raise errors.DatabaseError(f"SQL execution error: {e}") from e
 
 
 @contextmanager
@@ -337,10 +339,10 @@ def require_write_transaction() -> None:
     lock and drop it at the end of the implicit transaction, and SQLite would take
     no lock at all.
 
-    :raises errors.SQLError: If called outside a write transaction.
+    :raises errors.DatabaseError: If called outside a write transaction.
     """
     if not WRITE_TRANSACTION.get():
-        raise errors.SQLError(
+        raise errors.DatabaseError(
             "A locking read was attempted outside locked_transaction(), so it would not be "
             "atomic. Wrap the read-modify-write in chesssnake.db.engine.locked_transaction()."
         )
@@ -354,11 +356,11 @@ def check_capabilities(engine: Engine) -> None:
     3.30. Python bundles its own SQLite, so this is a fixed floor rather than
     something that drifts.
 
-    :raises errors.SQLError: If the backend is too old.
+    :raises errors.DatabaseError: If the backend is too old.
     """
     if engine.dialect.name == "sqlite" and sqlite3.sqlite_version_info < MIN_SQLITE_VERSION:
         required = ".".join(str(part) for part in MIN_SQLITE_VERSION)
-        raise errors.SQLError(
+        raise errors.DatabaseError(
             f"SQLite {required} or newer is required (this Python is linked against "
             f"{sqlite3.sqlite_version}). Upgrade Python or its SQLite library, or use PostgreSQL."
         )

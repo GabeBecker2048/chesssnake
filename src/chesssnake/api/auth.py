@@ -84,7 +84,7 @@ class _HashSlot:
 
     def __enter__(self):
         if not _hash_slots.acquire(timeout=HASH_SLOT_TIMEOUT_SECONDS):
-            raise errors.SQLBusyError("The server is busy checking passwords. Retry shortly.")
+            raise errors.DatabaseBusyError("The server is busy checking passwords. Retry shortly.")
 
     def __exit__(self, *_exc):
         _hash_slots.release()
