@@ -9,7 +9,6 @@ from . import engine_adapter as eng
 CASTLE_OUT_OF_CHECK = "rnbqk2r/pp3p1p/3Np2n/2pp2p1/1P3b2/6P1/PBPPPP1P/1R1QKBNR b Kkq - 6 8"
 
 
-@pytest.mark.xfail(reason="engine bug, fixed later in 0.15.0", strict=False)
 @pytest.mark.parametrize(
     "fen,castle",
     [
@@ -28,7 +27,6 @@ def test_illegal_castling_is_refused(fen, castle):
         eng.play(game, castle)
 
 
-@pytest.mark.xfail(reason="engine bug, fixed later in 0.15.0", strict=False)
 @pytest.mark.parametrize(
     "fen,move,uci",
     [
@@ -54,7 +52,6 @@ def test_notation_is_accepted(fen, move, uci):
     assert eng.fen(game) == eng.fen(expected)
 
 
-@pytest.mark.xfail(reason="engine bug, fixed later in 0.15.0", strict=False)
 def test_disambiguation_ignores_a_pinned_piece():
     # Knights on b1 and f3 both reach d2, but f3 is pinned against the king on f1
     # by the rook on f8, so SAN needs no disambiguation: the move is "Nd2".

@@ -45,7 +45,6 @@ def _random_game(seed, plies=120):
     return game
 
 
-@pytest.mark.xfail(reason="engine bug, fixed later in 0.15.0", strict=False)
 @pytest.mark.parametrize("seed", range(5))
 def test_pgn_round_trip(seed):
     game = _random_game(seed)

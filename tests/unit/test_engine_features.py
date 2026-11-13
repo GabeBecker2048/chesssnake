@@ -4,11 +4,12 @@ These run on the local engine (no DB/server), which is the same engine the serve
 drives — so passing here means local and remote games share identical rules.
 """
 
-from chesssnake.engine import Color, Game, GameStatus, Termination, from_fen
+from chesssnake.engine import Board, Color, Game, GameStatus, Termination
 
 
 def _game(fen):
-    board, turn = from_fen(fen)
+    board = Board.from_fen(fen)
+    turn = board.turn
     return Game(board=board, turn=turn)
 
 

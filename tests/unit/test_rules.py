@@ -2,14 +2,12 @@
 
 import pytest
 
-from chesssnake import engine as Chess
 from chesssnake.engine import Game
 from chesssnake.engine import errors as ChessError
 
 
-def piece_at(board, c_notation):
-    i, j = Chess.Board.get_coords(c_notation)
-    return board[i, j].piece
+def piece_at(board, square):
+    return board.piece_at(square)
 
 
 def test_pawn_push_moves_piece():
@@ -17,7 +15,7 @@ def test_pawn_push_moves_piece():
     g.move("e4")
     assert piece_at(g.board, "e2") is None
     p = piece_at(g.board, "e4")
-    assert p is not None and p.piecetype.value == "P" and p.color == 0
+    assert p is not None and p.type.value == "P" and p.color == 0
 
 
 @pytest.mark.parametrize(
@@ -50,7 +48,7 @@ def test_a_move_may_carry_a_check_suffix(suffix):
     for m in ["e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "c3", "Nf6", "d4", "exd4", "cxd4"]:
         g.move(m)
     g.move("Bb4" + suffix)  # it is check; the suffix is recorded as the engine sees it
-    assert piece_at(g.board, "b4").piecetype.value == "B"
+    assert piece_at(g.board, "b4").type.value == "B"
     assert g.move_history[-1] == "Bb4+"
 
 
@@ -75,7 +73,7 @@ def test_knight_move():
     g = Game()
     g.move("Nf3")
     p = piece_at(g.board, "f3")
-    assert p is not None and p.piecetype.value == "N" and p.color == 0
+    assert p is not None and p.type.value == "N" and p.color == 0
     assert piece_at(g.board, "g1") is None
 
 
@@ -85,7 +83,7 @@ def test_pawn_capture():
     g.move("d5")
     g.move("exd5")
     p = piece_at(g.board, "d5")
-    assert p is not None and p.piecetype.value == "P" and p.color == 0
+    assert p is not None and p.type.value == "P" and p.color == 0
 
 
 def test_en_passant_capture():
@@ -96,7 +94,7 @@ def test_en_passant_capture():
     g.move("d5")  # black double-steps next to the white e5 pawn
     g.move("exd6")  # white captures en passant
     assert piece_at(g.board, "d6") is not None  # capturing pawn advanced
-    assert piece_at(g.board, "d6").piecetype.value == "P"
+    assert piece_at(g.board, "d6").type.value == "P"
     assert piece_at(g.board, "d5") is None  # captured pawn removed
 
 
@@ -107,8 +105,8 @@ def test_kingside_castle():
     g.move("0-0")
     king = piece_at(g.board, "g1")
     rook = piece_at(g.board, "f1")
-    assert king is not None and king.piecetype.value == "K"
-    assert rook is not None and rook.piecetype.value == "R"
+    assert king is not None and king.type.value == "K"
+    assert rook is not None and rook.type.value == "R"
     assert piece_at(g.board, "e1") is None
     assert piece_at(g.board, "h1") is None
 
@@ -119,8 +117,8 @@ def test_kingside_castle_letter_o_notation():
     for m in ["e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5"]:
         g.move(m)
     g.move("O-O")
-    assert piece_at(g.board, "g1").piecetype.value == "K"
-    assert piece_at(g.board, "f1").piecetype.value == "R"
+    assert piece_at(g.board, "g1").type.value == "K"
+    assert piece_at(g.board, "f1").type.value == "R"
 
 
 def test_queenside_castle():
@@ -129,8 +127,8 @@ def test_queenside_castle():
     for m in ["d4", "d5", "Nc3", "Nc6", "Bf4", "Bf5", "Qd2", "Qd7"]:
         g.move(m)
     g.move("O-O-O")
-    assert piece_at(g.board, "c1").piecetype.value == "K"
-    assert piece_at(g.board, "d1").piecetype.value == "R"
+    assert piece_at(g.board, "c1").type.value == "K"
+    assert piece_at(g.board, "d1").type.value == "R"
     assert piece_at(g.board, "e1") is None
     assert piece_at(g.board, "a1") is None
 
@@ -141,7 +139,7 @@ def test_promotion_to_queen(make_board):
     g = Game(board=board, turn=0)
     g.move("b8Q")
     promoted = piece_at(g.board, "b8")
-    assert promoted is not None and promoted.piecetype.value == "Q" and promoted.color == 0
+    assert promoted is not None and promoted.type.value == "Q" and promoted.color == 0
     assert piece_at(g.board, "b7") is None
 
 

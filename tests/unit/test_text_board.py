@@ -87,7 +87,7 @@ def test_move_highlight_is_ignored_without_colour():
 def test_renders_a_position_after_a_move():
     """The pawn leaves e2 and appears on e4 — exactly, not just somewhere."""
     board = Board()
-    board.move("e4", Color.WHITE)
+    board.move("e4")
     lines = ranks(render_text(board, figurines=False))
     rank4 = lines[4].split()[1:]
     rank2 = lines[6].split()[1:]
@@ -97,9 +97,9 @@ def test_renders_a_position_after_a_move():
 
 
 def test_highlight_accepts_an_engine_move_object():
-    """`Game.last_move` holds Square objects, which is the shape used in practice."""
+    """`Game.last_move` holds the engine Move, which is the shape used in practice."""
     board = Board()
-    move = board.move("e4", Color.WHITE)
+    move = board.move("e4")
     highlighted = render_text(board, color=True, move=move)
     assert "\033[48;5;179m" in highlighted
     assert highlighted != render_text(board, color=True)

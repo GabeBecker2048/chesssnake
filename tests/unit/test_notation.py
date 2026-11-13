@@ -1,10 +1,8 @@
-"""Unit tests for algebraic-notation syntax validation (Move.is_valid_c_notation)."""
+"""Unit tests for move-string syntax validation (SAN and UCI)."""
 
 import pytest
 
-from chesssnake.engine import Move
-
-valid = Move.is_valid_c_notation
+from chesssnake.engine._notation import is_valid_notation as valid
 
 
 @pytest.mark.parametrize(
@@ -36,6 +34,14 @@ valid = Move.is_valid_c_notation
         "O-O-O",  # castling (letter O — equivalent to zeros)
         "Nf3+",
         "Qh4#",  # check / checkmate annotations
+        "e8=Q",
+        "exd8=N+",  # promotions written with "=" (as PGN does)
+        "Nexg4",
+        "Qh4xe1",  # disambiguation together with a capture
+        "e2e4",
+        "e7e8q",
+        "e1g1",  # UCI
+        " e4 ",  # surrounding whitespace
     ],
 )
 def test_valid_notation_accepted(move):
@@ -51,7 +57,11 @@ def test_valid_notation_accepted(move):
         "i4",  # file out of range
         "Xf3",  # bogus piece letter
         "Zz9",  # nonsense
-        "e4e5",  # two squares glued together
+        "e2e4e5",  # three squares glued together
+        "e8=",  # "=" with no piece
+        "e8=K",  # cannot promote to a king
+        "e7e8k",  # nor in UCI
+        "Nf3++",  # one suffix at most
         "Nf9",  # invalid rank on a piece move
     ],
 )

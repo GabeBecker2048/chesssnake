@@ -1,6 +1,12 @@
 """Unit tests for terminal game states: checkmate and stalemate detection."""
 
-from chesssnake.engine import Game
+from chesssnake.engine import Color, Game
+
+
+def _side(board, color):
+    """``board`` with ``color`` to move (these tests ask about one side directly)."""
+    board.turn = Color(color)
+    return board
 
 
 def test_fools_mate_is_checkmate():
@@ -63,8 +69,8 @@ def test_pawn_can_block_check_is_not_mate(make_board):
             (7, 4): "K0",  # white king e1
         }
     )
-    assert board.check_for_check(1) is True
-    assert board.check_for_mate(1) is False  # d6-d5 blocks the check
+    assert _side(board, 1).is_check() is True
+    assert _side(board, 1).is_checkmate() is False  # d6-d5 blocks the check
 
 
 def test_diagonal_check_can_be_blocked_is_not_mate(make_board):
@@ -86,8 +92,8 @@ def test_diagonal_check_can_be_blocked_is_not_mate(make_board):
             (7, 4): "K0",  # white king e1
         }
     )
-    assert board.check_for_check(1) is True
-    assert board.check_for_mate(1) is False  # Rb2 blocks the diagonal
+    assert _side(board, 1).is_check() is True
+    assert _side(board, 1).is_checkmate() is False  # Rb2 blocks the diagonal
 
 
 def test_diagonal_checkmate_is_mate(make_board):
@@ -105,8 +111,8 @@ def test_diagonal_checkmate_is_mate(make_board):
             (7, 4): "K0",  # white king e1
         }
     )
-    assert board.check_for_check(1) is True
-    assert board.check_for_mate(1) is True
+    assert _side(board, 1).is_check() is True
+    assert _side(board, 1).is_checkmate() is True
 
 
 def test_diagonal_check_can_be_captured_is_not_mate(make_board):
@@ -121,8 +127,8 @@ def test_diagonal_check_can_be_captured_is_not_mate(make_board):
             (7, 4): "K0",  # white king e1
         }
     )
-    assert board.check_for_check(1) is True
-    assert board.check_for_mate(1) is False  # Rxc3 removes the checker
+    assert _side(board, 1).is_check() is True
+    assert _side(board, 1).is_checkmate() is False  # Rxc3 removes the checker
 
 
 def test_ongoing_game_has_no_terminal_status():
@@ -145,7 +151,7 @@ def test_scholars_mate_is_checkmate():
     for m in ["e4", "e5", "Qh5", "Nc6", "Bc4", "Nf6", "Qxf7"]:
         g.move(m)
     assert g.board.status == 1  # white wins
-    assert g.board.check_for_mate(1) is True
+    assert _side(g.board, 1).is_checkmate() is True
 
 
 def test_king_cannot_capture_a_defended_checker(make_board):
@@ -159,8 +165,8 @@ def test_king_cannot_capture_a_defended_checker(make_board):
             (7, 0): "K0",  # white king a1
         }
     )
-    assert board.check_for_check(1) is True
-    assert board.check_for_mate(1) is True
+    assert _side(board, 1).is_check() is True
+    assert _side(board, 1).is_checkmate() is True
 
 
 def test_king_can_capture_an_undefended_checker(make_board):
@@ -172,8 +178,8 @@ def test_king_can_capture_an_undefended_checker(make_board):
             (7, 0): "K0",  # white king a1
         }
     )
-    assert board.check_for_check(1) is True
-    assert board.check_for_mate(1) is False  # Kxe7
+    assert _side(board, 1).is_check() is True
+    assert _side(board, 1).is_checkmate() is False  # Kxe7
 
 
 def test_pinned_piece_cannot_capture_the_checker(make_board):
@@ -189,8 +195,8 @@ def test_pinned_piece_cannot_capture_the_checker(make_board):
             (7, 0): "K0",  # white king a1
         }
     )
-    assert board.check_for_check(1) is True
-    assert board.check_for_mate(1) is True
+    assert _side(board, 1).is_check() is True
+    assert _side(board, 1).is_checkmate() is True
 
 
 def test_stalemate_ignores_pinned_pieces(make_board):
@@ -206,5 +212,5 @@ def test_stalemate_ignores_pinned_pieces(make_board):
             (1, 5): "K0",  # white king f7 covers g7 and g8
         }
     )
-    assert board.check_for_check(1) is False
-    assert board.check_for_stalemate(1) is True
+    assert _side(board, 1).is_check() is False
+    assert _side(board, 1).is_stalemate() is True

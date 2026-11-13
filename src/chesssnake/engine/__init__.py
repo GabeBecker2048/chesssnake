@@ -1,48 +1,39 @@
-"""The chesssnake chess engine: board model, move parsing, rules, and rendering.
+"""The chesssnake chess engine: positions, moves, rules, and rendering.
 
-Pure Python with no dependencies beyond Pillow (used only by the renderer). The
-public names are re-exported here so consumers can do
-``from chesssnake.engine import Board, Move, Game``.
+Pure Python with no dependencies beyond Pillow (used only by the image renderer).
+This is the public engine API, and the names in ``__all__`` are the whole of it:
+
+- :class:`Board`: a position. Query it with square names (``piece_at("e4")``,
+  ``is_attacked("f7", by=Color.BLACK)``, ``legal_moves()``), change it with
+  ``move()`` and ``undo()``.
+- :class:`Piece` and :class:`Move`: small immutable values.
+- :class:`Game`: a board plus players, draw offers, history, PGN and rendering.
+
+Everything else in this package (modules starting with ``_``, and anything else
+not listed here) is internal and may change in any release.
 """
 
-from . import errors, notation
+from . import errors
+from ._fen import INITIAL_FEN
 from .board import Board
 from .enums import Color, GameStatus, PieceType, Termination
-from .fen import INITIAL_FEN, from_fen, position_key, to_fen
 from .game import Game
 from .image import render_board
 from .move import Move
-from .notation import FILES, get_c_notation, get_coords, is_valid_c_notation
-from .pieces import Bishop, King, Knight, Pawn, Piece, Queen, Rook
-from .square import Square
+from .piece import Piece
 from .text import render_text
 
 __all__ = [
-    "errors",
-    "notation",
     "Board",
-    "Square",
-    "Move",
+    "Color",
     "Game",
+    "GameStatus",
+    "INITIAL_FEN",
+    "Move",
+    "Piece",
+    "PieceType",
+    "Termination",
+    "errors",
     "render_board",
     "render_text",
-    "Color",
-    "PieceType",
-    "GameStatus",
-    "Termination",
-    "INITIAL_FEN",
-    "to_fen",
-    "from_fen",
-    "position_key",
-    "Piece",
-    "Rook",
-    "Knight",
-    "Bishop",
-    "Queen",
-    "King",
-    "Pawn",
-    "FILES",
-    "get_coords",
-    "get_c_notation",
-    "is_valid_c_notation",
 ]

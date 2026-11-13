@@ -1,6 +1,6 @@
 """Unit tests for FEN serialization (the board's storage format)."""
 
-from chesssnake.engine import INITIAL_FEN, Game, from_fen, to_fen
+from chesssnake.engine import INITIAL_FEN, Board, Game
 
 
 def test_initial_position_fen():
@@ -20,8 +20,8 @@ def test_fen_round_trip_midgame():
     g = Game()
     for m in ["e4", "e5", "Nf3", "Nc6", "Bb5", "a6"]:
         g.move(m)
-    board, turn = from_fen(g.fen)
-    assert to_fen(board, turn) == g.fen
+    board = Board.from_fen(g.fen)
+    assert board.fen == g.fen
     assert str(board) == str(g.board)
 
 
@@ -52,7 +52,8 @@ def test_game_exposes_all_fen_fields():
 
 def test_castling_rights_drop_when_rook_is_captured():
     # Black bishop on g2 can capture the white h1 rook, dropping White's "K" right.
-    board, turn = from_fen("4k3/8/8/8/8/8/6b1/R3K2R b KQkq - 0 1")
+    board = Board.from_fen("4k3/8/8/8/8/8/6b1/R3K2R b KQkq - 0 1")
+    turn = board.turn
     g = Game(board=board, turn=turn)
     assert g.castling_rights == "KQkq"
     g.move("Bxh1")
@@ -61,7 +62,8 @@ def test_castling_rights_drop_when_rook_is_captured():
 
 def test_castling_rights_is_none_when_none_available():
     # A position with no castling rights ("-") reads back as None (like en_passant).
-    board, turn = from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")
+    board = Board.from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")
+    turn = board.turn
     g = Game(board=board, turn=turn)
     assert g.castling_rights is None
     assert g.fen.split()[2] == "-"  # the raw FEN token is still "-"
@@ -69,7 +71,8 @@ def test_castling_rights_is_none_when_none_available():
 
 def test_from_fen_reconstructs_playable_position():
     # A position with only kings and a white pawn about to promote.
-    board, turn = from_fen("4k3/1P6/8/8/8/8/8/4K3 w - - 0 1")
+    board = Board.from_fen("4k3/1P6/8/8/8/8/8/4K3 w - - 0 1")
+    turn = board.turn
     g = Game(board=board, turn=turn)
     g.move("b8Q")
     assert g.fen.startswith("1Q2k3/")

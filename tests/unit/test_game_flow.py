@@ -38,7 +38,7 @@ def test_move_returns_the_move_played():
     g = Game()
     m = g.move("e4")
     assert m is g.last_move
-    assert m.to.c_notation == "e4"
+    assert m.to_square == "e4" and m.from_square == "e2" and m.san == "e4"
 
 
 def test_render_returns_an_image():

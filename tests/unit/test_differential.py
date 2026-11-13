@@ -29,7 +29,7 @@ def _compare(game, ref, where):
         f"  only chesssnake: {sorted(ours - theirs)}\n  only python-chess: {sorted(theirs - ours)}"
     )
     assert eng.fen(game) == ref.fen(en_passant="fen"), f"{where}: FEN differs"
-    assert game.board.insufficient_material() == ref.is_insufficient_material(), f"{where}: {ref.fen()}"
+    assert game.board.is_insufficient_material() == ref.is_insufficient_material(), f"{where}: {ref.fen()}"
 
 
 def _check_ending(game, ref, where):
@@ -62,18 +62,19 @@ def play_random_game(seed):
             _check_ending(game, ref, where)
             return
         assert not ref.is_checkmate() and not ref.is_stalemate(), f"{where}: python-chess says the game is over"
+        # chesssnake ends these draws by itself, so it must not have missed one
+        assert not ref.is_repetition(3), f"{where}: threefold repetition missed"
+        assert ref.halfmove_clock < 100, f"{where}: fifty-move rule missed"
         move = rng.choice(list(ref.legal_moves))
         eng.play(game, ref.san(move))
         ref.push(move)
 
 
-@pytest.mark.xfail(reason="engine bug, fixed later in 0.15.0", strict=False)
 @pytest.mark.parametrize("seed", range(20))
 def test_random_games_agree(seed):
     play_random_game(seed)
 
 
-@pytest.mark.xfail(reason="engine bug, fixed later in 0.15.0", strict=False)
 @pytest.mark.slow
 @pytest.mark.parametrize("seed", range(20, 220))
 def test_random_games_agree_many(seed):

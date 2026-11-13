@@ -32,11 +32,8 @@ def match(players):
     return Game.remote(state, client=alice), Game.remote(state.id, client=bob)
 
 
-def piece_at(board, c_notation):
-    from chesssnake import engine as Chess
-
-    i, j = Chess.Board.get_coords(c_notation)
-    return board[i, j].piece
+def piece_at(board, square):
+    return board.piece_at(square)
 
 
 def _mate(white, black):

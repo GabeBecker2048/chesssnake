@@ -1,8 +1,6 @@
 from . import errors as ChessError
 from .board import Board
 from .enums import Color, GameStatus, Termination
-from .fen import from_fen as parse_fen
-from .fen import position_key, to_fen
 from .image import render_board
 from .move import Move
 
@@ -47,16 +45,16 @@ class Game:
     :type bname: str
     :ivar board: The chess board used in the game, represented as a `Board` object.
     :type board: Board
-    :ivar turn: Whose turn it is, as a :class:`~chesssnake.engine.enums.Color`.
-        Prefer the :attr:`to_move` accessor in user code.
+    :ivar turn: Whose turn it is, as a :class:`~chesssnake.engine.enums.Color` (the
+        board's :attr:`Board.turn`). Prefer the :attr:`to_move` accessor in user code.
     :type turn: Color
     :ivar draw: Which color has an open draw offer (a
         :class:`~chesssnake.engine.enums.Color`), or ``None`` if none is active.
         Prefer the :attr:`draw_offered_by` accessor in user code.
     :type draw: Color or None
-    :ivar last_move: The most recent :class:`~chesssnake.engine.move.Move`, or
-        ``None`` before any move. Used to highlight the board on :meth:`render`.
-    :type last_move: Move or None
+    :ivar last_move: The most recent :class:`~chesssnake.engine.move.Move` (or, on a
+        remote game, the :class:`~chesssnake.dto.MoveResult`), or ``None`` before any
+        move. Used to highlight the board on :meth:`render`.
 
     Intention-revealing accessors (prefer these over the raw ints/enums above):
     :attr:`is_over`, :attr:`result`, :attr:`winner`, :attr:`to_move`,
@@ -73,7 +71,7 @@ class Game:
         white_name: str = "",
         black_name: str = "",
         board: "Board | None" = None,
-        turn: int = 0,
+        turn: "int | None" = None,
         draw: "int | None" = None,
         move_history: "list[str] | None" = None,
         position_history: "list[str] | None" = None,
@@ -94,6 +92,8 @@ class Game:
         :type white_name: str
         :param black_name: Name of the player playing as black. Default is an empty string.
         :type black_name: str
+        :param board: The position to start from (default: the starting position).
+        :param turn: Overrides the board's side to move; ``None`` keeps it.
         """
         self.gid = group_id
         self.wid = white_id
@@ -101,13 +101,15 @@ class Game:
         self.wname = white_name
         self.bname = black_name
         self.board = Board() if board is None else board
-        self.turn = Color(turn)
+        if turn is not None:
+            self.board.turn = Color(turn)
         self.draw: Color | None = Color(draw) if draw is not None else None
-        self.last_move: Move | None = None
+        # the engine Move, a remote MoveResult, or a {'from', 'to'} dict: all render
+        self.last_move: object = None
         # SAN of every move played (for PGN); position keys for threefold detection.
         self.move_history: list[str] = list(move_history) if move_history is not None else []
         self.position_history: list[str] = (
-            list(position_history) if position_history is not None else [position_key(self.board, self.turn)]
+            list(position_history) if position_history is not None else [self.board._position_key()]
         )
 
     def __str__(self):
@@ -120,6 +122,15 @@ class Game:
         return str(self.board)
 
     # --- state accessors ---------------------------------------------------
+
+    @property
+    def turn(self) -> Color:
+        """Whose turn it is (the board's :attr:`Board.turn`). Prefer :attr:`to_move`."""
+        return self.board.turn
+
+    @turn.setter
+    def turn(self, value) -> None:
+        self.board.turn = Color(value)
 
     @property
     def to_move(self) -> Color:
@@ -158,7 +169,7 @@ class Game:
     @property
     def fen(self) -> str:
         """The current position as a FEN string."""
-        return to_fen(self.board, self.turn)
+        return self.board.fen
 
     @property
     def fullmove_number(self) -> int:
@@ -187,8 +198,7 @@ class Game:
     @classmethod
     def from_fen(cls, fen: str, white_name: str = "", black_name: str = "", **ids) -> "Game":
         """Build a game from a FEN position (engine/local use; sets board + turn)."""
-        board, turn = parse_fen(fen)
-        return cls(board=board, turn=turn, white_name=white_name, black_name=black_name, **ids)
+        return cls(board=Board.from_fen(fen), white_name=white_name, black_name=black_name, **ids)
 
     def is_players_turn(self, player_id: int) -> bool:
         """
@@ -206,12 +216,14 @@ class Game:
 
     def move(self, move: str) -> Move:
         """
-        Executes a chess move if it is the active player's turn.
+        Play a move for the side to move and pass the turn.
 
-        Validates the move, applies it to the board, and passes the turn to the
-        other player. Rendering is separate — use :meth:`render` or :meth:`save`.
+        Accepts SAN or UCI (see :meth:`Board.move`). The move is recorded in
+        :attr:`move_history` in chesssnake notation, whatever form it was given in.
+        Threefold repetition ends the game here, since it needs the history. Rendering
+        is separate: use :meth:`render` or :meth:`save`.
 
-        :param move: The move to execute, in standard chess notation (e.g., "e4").
+        :param move: The move to execute (e.g. ``"e4"``, ``"e8=Q"``, ``"e2e4"``).
         :type move: str
         :return: The :class:`~chesssnake.engine.move.Move` that was played.
         :rtype: Move
@@ -224,36 +236,21 @@ class Game:
         :raises ChessError.MultiplePiecesFoundError: If more than one matching piece is found.
         :raises ChessError.NothingToCaptureError: If no opposing piece exists on the target square.
         :raises ChessError.CaptureOwnPieceError: If a piece of the same color exists on the target square.
-        :raises ChessError.PieceOnSquareError: If an allied or opponent’s piece occupies the target square improperly.
+        :raises ChessError.PieceOnSquareError: If an allied or opponent's piece occupies the target square improperly.
+        :raises ChessError.IllegalMoveError: If a UCI move is illegal for any other reason.
         """
-        if not Move.is_valid_c_notation(move):
-            raise ChessError.InvalidNotationError(move)
-
-        if self.board.status != GameStatus.IN_PLAY:
-            raise ChessError.GameOverError()
-
-        m = self.board.move(move, self.turn)
+        m = self.board.move(move)
         self.last_move = m
-        self.turn = self.turn.opponent  # Changes whose turn it is
 
         # threefold repetition needs the position history, which lives here on Game
-        key = position_key(self.board, self.turn)
+        key = self.board._position_key()
         self.position_history.append(key)
         if self.board.status == GameStatus.IN_PLAY and self.position_history.count(key) >= 3:
             self.board.status = GameStatus.DRAW
             self.board.termination = Termination.THREEFOLD
 
-        self.move_history.append(self._record_san(move))
+        self.move_history.append(m.san)
         return m
-
-    def _record_san(self, move: str) -> str:
-        """Canonicalize the played move for the history, appending a +/# suffix."""
-        san = move.rstrip("+#")
-        if self.board.status in (GameStatus.WHITE_WON, GameStatus.BLACK_WON):
-            san += "#"
-        elif self.board.check_for_check(self.turn):  # self.turn is the side now to move
-            san += "+"
-        return san
 
     def resign(self, player_id: int):
         """
@@ -272,7 +269,7 @@ class Game:
 
     def legal_moves(self) -> list[dict]:
         """The legal moves for the side to move (see :meth:`Board.legal_moves`)."""
-        return self.board.legal_moves(self.turn)
+        return self.board.legal_moves()
 
     def pgn(self) -> str:
         """Export the game as PGN (headers + movetext + result token)."""
