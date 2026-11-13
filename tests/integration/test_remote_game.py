@@ -225,3 +225,12 @@ def test_a_bot_maps_its_own_ids_onto_users(remote_client):
     challenge = remote_client.challenge(other.id, player_id=first.id)
     state = remote_client.accept_challenge(challenge.id)
     assert {state.white_id, state.black_id} == {first.id, other.id}
+
+
+def test_get_user_takes_an_id_or_a_username(players):
+    alice_id, bob_id, alice, _ = players
+    assert alice.get_user("BOB").id == bob_id  # a username, case not mattering
+    assert alice.get_user(bob_id).username == "bob"
+    assert alice.resolve("bob") == bob_id
+    # update_user is how a user renames themselves (there is no separate rename)
+    assert alice.update_user(alice_id, username="alicia").username == "alicia"

@@ -170,41 +170,39 @@ class ApiClient:
 
     # --- users -------------------------------------------------------------
 
-    def get_user(self, user_id) -> User:
-        return User.from_dict(self._request("GET", f"/users/{_id(user_id)}"))
-
-    def get_user_by_name(self, username) -> User:
-        """Look a user up by username (case does not matter)."""
-        return User.from_dict(self._request("GET", "/users", params={"username": username}))
-
-    def user(self, who) -> User:
-        """A user by id (an int) or username (a str)."""
-        return self.get_user_by_name(who) if isinstance(who, str) else self.get_user(who)
+    def get_user(self, who) -> User:
+        """A user by id (an int, or anything with an ``id``) or by username (a str; case
+        does not matter)."""
+        if isinstance(who, str):
+            return User.from_dict(self._request("GET", "/users", params={"username": who}))
+        return User.from_dict(self._request("GET", f"/users/{_id(who)}"))
 
     def resolve(self, who) -> int:
         """A user id from an id, a username, or a ``User``."""
         if isinstance(who, bool):
             raise TypeError(f"A player is a user id or a username, not {who!r}")
         if isinstance(who, str):
-            return self.get_user_by_name(who).id
+            return self.get_user(who).id
         return int(_id(who))
 
-    def rename(self, user_id, username) -> User:
-        return User.from_dict(self._request("PATCH", f"/users/{_id(user_id)}", json={"username": username}))
-
-    # Administrator only:
-
-    def create_user(self, username, password=None, role="user") -> User:
-        body = {"username": username, "password": password, "role": role}
-        return User.from_dict(self._request("POST", "/users", json=body))
-
     def update_user(self, user_id, *, username=None, role=None, disabled=None, password=None) -> User:
+        """
+        Change an account. Anyone may change their own ``username``; ``role``,
+        ``disabled``, ``password`` and other people's accounts need an administrator.
+        (Change your own password with :meth:`change_password`.)
+        """
         body = {
             key: value
             for key, value in (("username", username), ("role", role), ("disabled", disabled), ("password", password))
             if value is not None
         }
         return User.from_dict(self._request("PATCH", f"/users/{_id(user_id)}", json=body))
+
+    # Administrator only:
+
+    def create_user(self, username, password=None, role="user") -> User:
+        body = {"username": username, "password": password, "role": role}
+        return User.from_dict(self._request("POST", "/users", json=body))
 
     def get_user_by_identity(self, provider, external_id) -> User:
         """The user linked to an external id, e.g. ``("discord", "1234")``."""
