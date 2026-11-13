@@ -101,7 +101,8 @@ history and `MoveResult.san` record it in chesssnake notation (`e8Q`, `0-0`), an
 
 An illegal move raises a specific error saying why, e.g. `NothingToCaptureError`
 for `Nxf3` onto an empty square, or `MoveIntoCheckError` for a pinned piece; see
-`chesssnake.engine.errors`.
+`chesssnake.engine.errors`. When no reason can be established, the error is the
+plain `IllegalMoveError`: a specific error is only raised when it is true.
 
 ## Working with positions: the `Board`
 
