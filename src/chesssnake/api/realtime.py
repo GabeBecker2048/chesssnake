@@ -62,8 +62,9 @@ class Broker:
 
     enabled = False
 
-    def game_changed(self, state: dict, move: dict | None = None) -> None:
-        """A game's state changed (a move, a draw offer, the end)."""
+    def game_changed(self, state: dict, move: dict | None = None, legal_moves: list | None = None) -> None:
+        """A game's state changed (a move, a draw offer, the end). ``legal_moves``,
+        given for a move, are the next player's options and ride on the event."""
 
     def game_started(self, state: dict) -> None:
         """A game began; both players hear of it."""
@@ -96,8 +97,11 @@ class InProcessBroker(Broker):
 
     # --- called from the REST routes' worker threads ---------------------------
 
-    def game_changed(self, state, move=None):
-        self._publish(("game", state["id"]), "game", {"type": "game", "state": state, "move": move}, state=state)
+    def game_changed(self, state, move=None, legal_moves=None):
+        message = {"type": "game", "state": state, "move": move}
+        if legal_moves is not None:
+            message["legal_moves"] = legal_moves
+        self._publish(("game", state["id"]), "game", message, state=state)
 
     def game_started(self, state):
         message = {"type": "game_started", "state": state}

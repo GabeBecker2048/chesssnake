@@ -252,6 +252,19 @@ def test_legal_moves_history_pgn_fen(api_client, game):
     assert api_client.get(f"{game}/fen").text.startswith("rnbqkbnr/pppp1ppp")
 
 
+def test_a_move_response_lists_the_next_players_legal_moves(api_client, game):
+    for san in ["e4", "e5", "Nf3", "Nc6", "Bb5"]:
+        result = api_client.post(f"{game}/moves", json={"move": san}).json()
+        assert result["legal_moves"] == api_client.get(f"{game}/legal-moves").json()["moves"]
+
+
+def test_a_move_that_ends_the_game_lists_no_moves(api_client, game):
+    for san in ["f3", "e5", "g4"]:
+        api_client.post(f"{game}/moves", json={"move": san})
+    mate = api_client.post(f"{game}/moves", json={"move": "Qh4"}).json()
+    assert mate["state"]["termination"] == "checkmate" and mate["legal_moves"] == []
+
+
 def test_threefold_repetition_still_counts_the_starting_position(api_client, game):
     for mv in ["Nf3", "Nf6", "Ng1", "Ng8", "Nf3", "Nf6", "Ng1"]:
         assert api_client.post(f"{game}/moves", json={"move": mv}).json()["state"]["status"] == 0

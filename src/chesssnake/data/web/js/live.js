@@ -142,7 +142,7 @@ class Live extends EventTarget {
         this.deliver(msg.state, null, true);
         break;
       case "game":
-        this.deliver(msg.state, msg.move, false);
+        this.deliver(msg.state, msg.move, false, msg.legal_moves);
         break;
       case "game_removed":
         this.seen.delete(msg.game);
@@ -159,12 +159,13 @@ class Live extends EventTarget {
     }
   }
 
-  deliver(state, move, snapshot) {
+  // legalMoves: the next player's options, sent with a move since 0.15.1 (else undefined)
+  deliver(state, move, snapshot, legalMoves) {
     if (!state || !this.wanted.has(state.id)) return;
     const last = this.seen.get(state.id) || 0;
     if (state.version <= last) return; // never backwards (the server promises it; this is cheap)
     this.seen.set(state.id, state.version);
-    this.emit("game", { state, move, snapshot });
+    this.emit("game", { state, move, snapshot, legalMoves });
   }
 
   setLive(value) {

@@ -233,6 +233,25 @@ def test_a_checkmate_arrives_as_the_last_game_event(api_client, remote_client, u
     assert [e["state"]["version"] for e in events] == sorted({e["state"]["version"] for e in events})
 
 
+def test_a_move_event_carries_the_next_players_legal_moves(api_client, remote_client, user_client, players):
+    game = remote_client.create_game("alice", "bob")
+    alice, bob = user_client(players.alice.id), user_client(players.bob.id)
+    with api_client.websocket_connect(WS) as ws:
+        ready(ws, players.carol.token)
+        subscribe(ws, game.id)
+        alice.move(game.id, "e4")
+        after_e4 = ws.receive_json()
+        listed = api_client.get(f"/v1/games/{game.id}/legal-moves").json()["moves"]
+        bob.offer_draw(game.id)  # the position does not change: no list
+        offered = ws.receive_json()
+        for mover, san in ((bob, "e5"), (alice, "Qh5"), (bob, "Nc6"), (alice, "Bc4"), (bob, "Nf6"), (alice, "Qxf7")):
+            mover.move(game.id, san)
+        mate = [ws.receive_json() for _ in range(6)][-1]
+    assert after_e4["legal_moves"] == listed and len(listed) == 20
+    assert "legal_moves" not in offered
+    assert mate["state"]["termination"] == "checkmate" and mate["legal_moves"] == []
+
+
 def test_unsubscribe_stops_updates(api_client, remote_client, user_client, players):
     game = remote_client.create_game("alice", "bob")
     with api_client.websocket_connect(WS) as ws:

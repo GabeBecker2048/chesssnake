@@ -692,12 +692,14 @@ def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = De
             castle=m.castle,
             promotion=m.promotion.value if m.promotion is not None else None,
             en=m.en_passant,
+            # the next player's options, so they need not ask (sent on the websocket too)
+            legal_moves=[] if game.is_over else game.legal_moves(),
         )
         return change
 
     result = ops.apply_game_change(game_id, mutate, body.expected_version)
     # After the commit: a socket must never hear of a move the database refused.
-    _broker(request).game_changed(result.state.to_dict(), _move_summary(result))
+    _broker(request).game_changed(result.state.to_dict(), _move_summary(result), legal_moves=result.legal_moves)
     return result.to_dict()
 
 
