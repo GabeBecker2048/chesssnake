@@ -181,7 +181,7 @@ class Game(BaseGame):
             check=self.board.is_check(),
             castle=engine_move.castle,
             promotion=engine_move.promotion.value if engine_move.promotion is not None else None,
-            en=engine_move.en_passant,
+            en_passant=engine_move.en_passant,
             legal_moves=[] if self.is_over else self.legal_moves(),
         )
 

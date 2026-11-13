@@ -691,7 +691,7 @@ def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = De
             check=game.board.is_check(),
             castle=m.castle,
             promotion=m.promotion.value if m.promotion is not None else None,
-            en=m.en_passant,
+            en_passant=m.en_passant,
             # the next player's options, so they need not ask (sent on the websocket too)
             legal_moves=[] if game.is_over else game.legal_moves(),
         )

@@ -339,7 +339,7 @@ game = Game.remote(state, client=alice)              # or Game.remote(game_id, c
 print(game.id)                                       # GET /v1/games/{id}
 
 # The server validates and applies each move, then persists it. move() returns a
-# MoveResult (from/to, check, castle/promotion/en) and raises the matching chess
+# MoveResult (from/to, check, castle/promotion/en_passant) and raises the matching chess
 # error if the move is illegal.
 game.move("e4")
 

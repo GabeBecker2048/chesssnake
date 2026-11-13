@@ -200,7 +200,7 @@ What playing a move returns: the move plus the resulting `GameState`.
 | `check` | boolean | Whether the move gives check (non-terminal; a mate is `status` 1/2). |
 | `castle` | string \| null | `"K"` or `"Q"` for a castle, else `null`. |
 | `promotion` | string \| null | The promoted-to piece letter, else `null`. |
-| `en` | boolean | Whether the move was an en-passant capture. |
+| `en_passant` | boolean | Whether the move was an en-passant capture. Named `en` before 0.15.2. |
 | `legal_moves` | array | The legal moves of the side now to move, in the [`legal-moves`](#game-reads) shape (`{from, to, san, promotion}`); `[]` once the game has ended. Added in 0.15.1, so a client talking to an older server should treat it as optional. |
 
 ### `User`

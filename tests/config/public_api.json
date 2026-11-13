@@ -154,7 +154,7 @@
         "check",
         "castle",
         "promotion",
-        "en",
+        "en_passant",
         "legal_moves"
       ],
       "TokenInfo": [
