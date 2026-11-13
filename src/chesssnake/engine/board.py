@@ -66,6 +66,18 @@ PAWN_ATTACKS = (
 
 SLIDER_RAYS = {ROOK: ORTHOGONAL_RAYS, BISHOP: DIAGONAL_RAYS, QUEEN: QUEEN_RAYS}
 
+# The canonical pieces of each colour, indexed by Color (an int), and each colour's
+# opponent. The hot paths use these rather than ``PIECES[type, color]`` and
+# ``color.opponent``: hashing an Enum and reading a property both run Python code,
+# which was about a fifth of the time spent testing whether a square is attacked.
+PAWNS = (PIECES[PAWN, WHITE], PIECES[PAWN, BLACK])
+KNIGHTS = (PIECES[KNIGHT, WHITE], PIECES[KNIGHT, BLACK])
+BISHOPS = (PIECES[BISHOP, WHITE], PIECES[BISHOP, BLACK])
+ROOKS = (PIECES[ROOK, WHITE], PIECES[ROOK, BLACK])
+QUEENS = (PIECES[QUEEN, WHITE], PIECES[QUEEN, BLACK])
+KINGS = (PIECES[KING, WHITE], PIECES[KING, BLACK])
+OPPONENT = (BLACK, WHITE)
+
 # What a pawn may promote to, in the order moves are listed.
 PROMOTIONS = (QUEEN, ROOK, BISHOP, KNIGHT)
 
@@ -354,20 +366,21 @@ class Board:
     def _attacked(self, idx: int, by: Color) -> bool:
         """Whether a piece of color ``by`` attacks square ``idx``."""
         grid = self._grid
-        knight, king = PIECES[KNIGHT, by], PIECES[KING, by]
+        knight = KNIGHTS[by]
         for s in KNIGHT_TARGETS[idx]:
             if grid[s] is knight:
                 return True
-        pawn = PIECES[PAWN, by]
+        pawn = PAWNS[by]
         # a pawn of ``by`` attacks idx from where an opposing pawn on idx would attack
-        for s in PAWN_ATTACKS[by.opponent][idx]:
+        for s in PAWN_ATTACKS[OPPONENT[by]][idx]:
             if grid[s] is pawn:
                 return True
+        king = KINGS[by]
         for s in KING_TARGETS[idx]:
             if grid[s] is king:
                 return True
-        queen = PIECES[QUEEN, by]
-        rook = PIECES[ROOK, by]
+        queen = QUEENS[by]
+        rook = ROOKS[by]
         for ray in ORTHOGONAL_RAYS[idx]:
             for s in ray:
                 piece = grid[s]
@@ -375,7 +388,7 @@ class Board:
                     if piece is rook or piece is queen:
                         return True
                     break
-        bishop = PIECES[BISHOP, by]
+        bishop = BISHOPS[by]
         for ray in DIAGONAL_RAYS[idx]:
             for s in ray:
                 piece = grid[s]
@@ -400,18 +413,18 @@ class Board:
         row = 56 if color is WHITE else 0
         grid = self._grid
         king_sq = row + 4
-        if grid[king_sq] is not PIECES[KING, color]:
+        if grid[king_sq] is not KINGS[color]:
             return False
         between: tuple[int, ...]
         if side == "K":
             rook_sq, between, crossed = row + 7, (row + 5, row + 6), row + 5
         else:
             rook_sq, between, crossed = row, (row + 1, row + 2, row + 3), row + 3
-        if grid[rook_sq] is not PIECES[ROOK, color]:
+        if grid[rook_sq] is not ROOKS[color]:
             return False
         if any(grid[s] is not None for s in between):
             return False
-        opponent = color.opponent
+        opponent = OPPONENT[color]
         return not self._attacked(king_sq, opponent) and not self._attacked(crossed, opponent)
 
     def _pseudo(self, color: Color) -> list[tuple]:
@@ -422,13 +435,13 @@ class Board:
         grid = self._grid
         out: list[tuple] = []
         append = out.append
-        opponent = color.opponent
+        opponent = OPPONENT[color]
         if color is WHITE:
             forward, start_row, last_row = -8, 6, 0
         else:
             forward, start_row, last_row = 8, 1, 7
         ep = index(self.en_passant) if self.en_passant is not None else -1
-        enemy_pawn = PIECES[PAWN, opponent]
+        enemy_pawn = PAWNS[opponent]
 
         for frm, piece in enumerate(grid):
             if piece is None or piece.color is not color:
@@ -461,7 +474,9 @@ class Board:
                     if target is None or target.color is opponent:
                         append((frm, to, None, NORMAL))
             else:
-                for ray in SLIDER_RAYS[kind][frm]:
+                # identity tests, not a dict keyed by PieceType: no Enum hashing here
+                rays = ORTHOGONAL_RAYS if kind is ROOK else DIAGONAL_RAYS if kind is BISHOP else QUEEN_RAYS
+                for ray in rays[frm]:
                     for to in ray:
                         target = grid[to]
                         if target is None:
@@ -523,20 +538,20 @@ class Board:
             self.halfmove_clock += 1
         if color is BLACK:
             self.fullmove_number += 1
-        self.turn = color.opponent
+        self.turn = OPPONENT[color]
         return undo
 
     def _unmake(self, ply: tuple, undo: tuple) -> None:
         """Take back ``ply``, the last move made, using the record :meth:`_make` returned."""
         frm, to, promo, flag = ply
         captured, castling, en_passant, halfmove, fullmove, status, termination, king = undo
-        color = self.turn.opponent  # the side that made the move
+        color = OPPONENT[self.turn]  # the side that made the move
         grid = self._grid
 
-        grid[frm] = PIECES[PAWN, color] if promo is not None else grid[to]
+        grid[frm] = PAWNS[color] if promo is not None else grid[to]
         grid[to] = captured
         if flag == EN_PASSANT:
-            grid[to + 8 if color is WHITE else to - 8] = PIECES[PAWN, color.opponent]
+            grid[to + 8 if color is WHITE else to - 8] = PAWNS[OPPONENT[color]]
         elif flag == CASTLE_K:
             grid[frm + 3], grid[frm + 1] = grid[frm + 1], None
         elif flag == CASTLE_Q:
@@ -552,21 +567,94 @@ class Board:
         self.termination = termination
 
     def _is_legal(self, ply: tuple) -> bool:
-        """Whether pseudo-legal ``ply`` leaves the mover's king out of check."""
+        """
+        Whether pseudo-legal ``ply`` leaves the mover's king out of check, by trial:
+        play it in place, look, take it back. Always right, and the reference the
+        faster pin-based test in :meth:`_legal_iter` is checked against.
+        """
         color = self.turn
         undo = self._make(ply)
         king = self._kings[color]
-        legal = king is None or not self._attacked(king, color.opponent)
+        legal = king is None or not self._attacked(king, OPPONENT[color])
         self._unmake(ply, undo)
         return legal
 
+    def _pins(self, color: Color, king: int) -> dict:
+        """
+        ``color``'s pinned pieces: pinned square -> the squares it may still move to
+        (the line from the king out to the pinner, the pinner's square included).
+
+        A piece is pinned when it is the only piece between its king and an enemy
+        slider that moves along that line (a rook or queen on a rank or file, a bishop
+        or queen on a diagonal).
+        """
+        grid = self._grid
+        opponent = OPPONENT[color]
+        queen = QUEENS[opponent]
+        pins = {}
+        for rays, slider in ((ORTHOGONAL_RAYS[king], ROOKS[opponent]), (DIAGONAL_RAYS[king], BISHOPS[opponent])):
+            for ray in rays:
+                own = -1
+                for n, s in enumerate(ray):
+                    piece = grid[s]
+                    if piece is None:
+                        continue
+                    if piece.color is color:
+                        if own >= 0:
+                            break  # two of our own pieces on the line: nothing is pinned
+                        own = s
+                        continue
+                    if own >= 0 and (piece is slider or piece is queen):
+                        pins[own] = ray[: n + 1]
+                    break
+        return pins
+
+    def _legal_iter(self):
+        """
+        The legal plies for the side to move, in :meth:`_pseudo` order.
+
+        When the king is not in check (most positions), legality is decided from the
+        pins, computed once, instead of by trial for every ply: an unpinned piece
+        other than the king can always move; a pinned one only along its pin line;
+        the king only to a square not attacked (which is enough because it is not in
+        check now, so no attack runs through its own square). Castling and en passant
+        still use the trial test: they are rare, and en passant can uncover a check
+        along a rank by removing two pawns at once. In check, or in a test position
+        without a king, every ply is tested by trial.
+        """
+        color = self.turn
+        pseudo = self._pseudo(color)
+        king = self._kings[color]
+        opponent = OPPONENT[color]
+        if king is None or self._attacked(king, opponent):
+            for ply in pseudo:
+                if self._is_legal(ply):
+                    yield ply
+            return
+        pins = self._pins(color, king)
+        for ply in pseudo:
+            frm, to, _promo, flag = ply
+            if frm == king:
+                legal = self._is_legal(ply) if flag >= CASTLE_K else not self._attacked(to, opponent)
+            elif flag == EN_PASSANT:
+                legal = self._is_legal(ply)
+            else:
+                line = pins.get(frm)
+                legal = line is None or to in line
+            if legal:
+                yield ply
+
     def _legal(self) -> list[tuple]:
         """Every legal ply for the side to move."""
+        return list(self._legal_iter())
+
+    def _legal_by_trial(self) -> list[tuple]:
+        """Every legal ply, each tested by trial: the slow reference for tests."""
         return [ply for ply in self._pseudo(self.turn) if self._is_legal(ply)]
 
     def _has_legal_move(self) -> bool:
         """Whether the side to move has any legal move (stops at the first)."""
-        return any(self._is_legal(ply) for ply in self._pseudo(self.turn))
+        return next(self._legal_iter(), None) is not None
 
     def _position_key(self) -> str:
         """
