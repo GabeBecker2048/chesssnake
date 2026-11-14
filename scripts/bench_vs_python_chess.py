@@ -16,7 +16,7 @@ Four measurements, each run on both engines:
 - perft (counting every position a few moves deep), in positions per second;
 - playing a move, including working out whether the game ended.
 
-Results are recorded in docs/benchmarks.md.
+Results are recorded in scripts/benchmarks.md.
 """
 
 import platform

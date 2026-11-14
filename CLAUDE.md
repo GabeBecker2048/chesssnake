@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.15.2 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1, published container images in 0.9.2, the threadpool in 0.10.0, users and the redesigned schema in 0.11.0, logins and challenge-created games in 0.12.0, websocket live updates in 0.13.0, the web UI in 0.14.0, the rewritten engine and frozen engine API in 0.15.0, pin-based legality and legal moves pushed with each move in 0.15.1, the public API settled and pinned for 1.0 in 0.15.2 — see `CHANGELOG.md`, with what is next in `ROADMAP.md`).
+`chesssnake` is a PyPI library (`pip install chesssnake`) for playing, visualizing, and persisting chess games. It has a pure-Python chess engine, a PIL-based board renderer, and a **3-tier persistence architecture**: a `Game` client that runs the engine locally and syncs state over REST → a FastAPI **api-endpoint** (`chesssnake api-endpoint`) → SQLite or PostgreSQL. Many game clients can share one api-endpoint/database. Current version is 0.15.3 (pre-1.0; the REST api-endpoint shipped in 0.7.0, the configuration system in 0.8.0, SQLite/SQLAlchemy in 0.9.0, the `play` CLI in 0.9.1, published container images in 0.9.2, the threadpool in 0.10.0, users and the redesigned schema in 0.11.0, logins and challenge-created games in 0.12.0, websocket live updates in 0.13.0, the web UI in 0.14.0, the rewritten engine and frozen engine API in 0.15.0, pin-based legality and legal moves pushed with each move in 0.15.1, the public API settled and pinned for 1.0 in 0.15.2, the docs site and websockets on by default in 0.15.3 — see `CHANGELOG.md`, with what is next in `ROADMAP.md`).
 
 The package uses a **`src/` layout**: all importable code lives under `src/chesssnake/` (tests import the installed package, not a repo-root package).
 
@@ -27,7 +27,7 @@ uv run python examples/example.py        # core (no-DB) smoke example
 
 # Run the api-endpoint server (needs the `api` extra + a configured database.url / docker compose Postgres)
 uv run chesssnake api-endpoint --host 0.0.0.0 --port 8000 --init-db
-uv run chesssnake api-endpoint --init-db -o websocket.enabled=true   # with live updates at /v1/ws
+uv run chesssnake api-endpoint --init-db -o websocket.enabled=false  # without live updates at /v1/ws (on by default)
                                          # the web UI is at http://localhost:8000/ (web.enabled, on by default)
 uv run chesssnake init-db                # just create the schema, then exit
 uv run chesssnake init-db --drop         # drop every table first (pre-1.0 schema changes)
@@ -55,7 +55,7 @@ CHESSSNAKE_TEST_BACKENDS=sqlite uv run pytest tests/integration   # SQLite only 
 uv run pytest tests/config               # config + CLI; needs pydantic but no database
 uv run pytest tests/unit/test_rules.py::test_en_passant_capture  # a single test
 uv run pytest tests/unit -m slow         # deep perft + 200 more differential games (~40 s; CI's engine-deep job)
-uv run python scripts/bench_engine.py    # engine speed; see docs/benchmarks.md
+uv run python scripts/bench_engine.py    # engine speed; see scripts/benchmarks.md
 uv run python scripts/bench_vs_python_chess.py   # engine vs python-chess (dev-only reference)
 uv run python scripts/bench_server.py URL     # a running api-endpoint over HTTP (open registration, throwaway DB)
 
@@ -107,12 +107,32 @@ release before anything is published. Every version gets an entry, in one format
 - `ROADMAP.md` holds planned versions in the same shape and is **hand-edited by
   Gabe**: do not rewrite its entries.
 
+## The docs site (`docs/`)
+
+`docs/` is **only** the user docs site: Jekyll, built by GitHub Pages from `/docs` on `main`, served at
+`https://gabebecker.com/chesssnake/`, styled like the web UI (`docs/assets/wiki.css` mirrors the tokens of
+`data/web/style.css`, light and dark). One Markdown file per page; layout in `docs/_layouts/default.html`,
+sidebar in `docs/_data/nav.yml` (a new page needs a line there), screenshots beside the pages.
+
+- It is for **users** (players, people hosting a server, people writing a client or bot): how to use
+  chesssnake, never how the code works. Internals belong in this file; maintainer runbooks live outside
+  `docs/` (`RELEASING.md`, `scripts/benchmarks.md`).
+- Update it in the same PR when a setting, command, route, default or user-visible behaviour changes.
+- Short pages, no em-dashes, and no `{{`/`{%` in page text (Jekyll reads them as Liquid). Callouts are a
+  blockquote followed by `{: .tip }` or `{: .warn }`.
+- CI's `docs` job builds it with Pages' own builder and checks every internal link and anchor
+  (`scripts/check_docs.py`), uploading the built site as the `docs-site` artifact.
+- `README.md` links to `docs/web-ui.png`, `docs/web-ui-watch.png` and `docs/board.png` by raw GitHub URL,
+  and so does the README already published on PyPI: do not move or rename those three.
+- The screenshots and `docs/play.gif` are of a throwaway local server with made-up players
+  (alice, bob, ...), taken with headless Chromium. Retake them when the web UI's look changes.
+
 ## Releasing
 
 Pushing a tag `vX.Y.Z` releases that version: `.github/workflows/release.yml` builds
 it, publishes the package to PyPI and the container image to
 `ghcr.io/gabebecker2048/chesssnake`, then creates the GitHub release. Full runbook:
-`docs/releasing.md`; cut one with `./scripts/release.sh X.Y.Z`.
+`RELEASING.md`; cut one with `./scripts/release.sh X.Y.Z`.
 
 - The version in `pyproject.toml` is the source of truth, and `CHANGELOG.md` must have
   a `## X.Y.Z` section — that section *is* the release notes, so a missing one fails
@@ -183,9 +203,9 @@ Every setting is declared **once**, as a field on a section model in `config.py`
 - `api.docs` (on by default, 0.15.2) passes `docs_url`/`redoc_url`/`openapi_url` to `FastAPI(...)`, or `None` for all three: the docs pages need the schema, so it is all or nothing.
 - There is no auth on/off setting: every `/v1` route but login/register needs a token. `api.registration` (`closed`/`open`) and `api.session_lifetime_days` are the only auth settings. `Settings.advisories()` remains as a hook (currently empty). The 0.11 `api.require_auth`/`api.api_key` are gone, and `extra="forbid"` turns a stale one in a file into a startup error.
 
-- `[websocket]` (0.13) holds every live-update knob; `enabled` defaults to **false**. `allowed_origins` is the first list-valued setting: a TOML array in a file, **comma-separated** in `CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS`, normalized (lowercase, no trailing `/`), with `*` alone or not at all; `config show` prints it comma-joined. Cross-field limits are `model_validator`s. `cli.py` passes the transport keys (pings, `ws_max_size`, compression, `timeout_graceful_shutdown`) to `uvicorn.run`; `ws_max_queue` is not passed because uvicorn ignores it, and the app enforces `max_message_bytes` itself for `--factory` deployments that skip those flags.
+- `[websocket]` (0.13) holds every live-update knob; `enabled` defaults to **true** since 0.15.3 (Gabe, 2026-11-13; it was opt-in from 0.13). `allowed_origins` is the first list-valued setting: a TOML array in a file, **comma-separated** in `CHESSSNAKE__WEBSOCKET__ALLOWED_ORIGINS`, normalized (lowercase, no trailing `/`), with `*` alone or not at all; `config show` prints it comma-joined. Cross-field limits are `model_validator`s. `cli.py` passes the transport keys (pings, `ws_max_size`, compression, `timeout_graceful_shutdown`) to `uvicorn.run`; `ws_max_queue` is not passed because uvicorn ignores it, and the app enforces `max_message_bytes` itself for `--factory` deployments that skip those flags.
 
-Full reference: `docs/configuration.md`. The commented default file shipped by `chesssnake config init` is `src/chesssnake/data/chesssnake.toml` (registered under `[tool.setuptools.package-data]`); tests assert it stays valid and documents every schema field, so **add a documented block there whenever you add a setting**.
+User reference: `docs/configuration.md` (the docs site; add a row there for a new setting). The commented default file shipped by `chesssnake config init` is `src/chesssnake/data/chesssnake.toml` (registered under `[tool.setuptools.package-data]`); tests assert it stays valid and documents every schema field, so **add a documented block there whenever you add a setting**.
 
 ### `engine/` — the chess engine (no external deps beyond Pillow, for rendering)
 
@@ -214,7 +234,7 @@ Full reference: `docs/configuration.md`. The commented default file shipped by `
 - `errors.py` — gameplay exception hierarchy rooted at `ChessError`. Constructors take square **names**; their argument shapes are not wire (the client rebuilds by class name and message).
 - `game.py` — the base `Game` controller that `remote/game.py`'s `Game` subclasses. `turn` is a **property over `board.turn`** (the board owns the side to move, as FEN does); the constructor's `turn=None` keeps the board's. Holds `draw`, `move_history` (each `Move.san`, so UCI input is stored canonically) and `_position_history` (private since 0.15.2: `Board._position_key()`s, for threefold; the constructor's `position_history=` loads it, which is how the server restores a game). Methods: `move`, `resign`, `draw_*`, `legal_moves`, `pgn`, `fen`, `from_fen`.
 
-**Verification** (`tests/unit/`, all through the one adapter `engine_adapter.py`): `test_perft.py` (CPW perft positions; deep depths `-m slow`), `test_differential.py` (seeded random games against **python-chess, a dev-only GPL test oracle that `src/` must never import**: identical legal-move sets, FEN, endings, and no missed threefold/fifty-move), `test_roundtrip.py` (every listed SAN plays; `pgn()` reparses in both engines), `test_regressions_015.py`, `test_legal_fast_path.py` (pins vs trial), `test_diagnosis_fallback.py` (the `_explain` guard). `addopts = -m 'not slow'`; CI's `engine-deep` job runs `-m slow`. `scripts/bench_engine.py` measures speed using only the `Game` API, so it also runs against an old release (`docs/benchmarks.md`).
+**Verification** (`tests/unit/`, all through the one adapter `engine_adapter.py`): `test_perft.py` (CPW perft positions; deep depths `-m slow`), `test_differential.py` (seeded random games against **python-chess, a dev-only GPL test oracle that `src/` must never import**: identical legal-move sets, FEN, endings, and no missed threefold/fifty-move), `test_roundtrip.py` (every listed SAN plays; `pgn()` reparses in both engines), `test_regressions_015.py`, `test_legal_fast_path.py` (pins vs trial), `test_diagnosis_fallback.py` (the `_explain` guard). `addopts = -m 'not slow'`; CI's `engine-deep` job runs `-m slow`. `scripts/bench_engine.py` measures speed using only the `Game` API, so it also runs against an old release (`scripts/benchmarks.md`).
 
 ### `remote/` — the client (tier 1)
 
@@ -351,7 +371,7 @@ silently falls back to a deferred `BEGIN` with no error, which is the bug class 
 
 - `auth.py` — `authenticate(raw_token) -> Principal` (transport-agnostic: the HTTP dependency `current_principal` wraps it, and the websocket calls it with the token from its first message, through the broker's own thread limiter); `acting_as(principal, player_id, participants=, require_actor=)` decides who an action is performed as (non-admins: always themselves; admins: the named `player_id`, else themselves if playing, else "side to move" for a move only; never a disabled user); `login()`; Argon2 hashing behind the semaphore. Database errors inside `authenticate` are **not** turned into 401: a saturated pool stays a 503.
 - `server.py` — `create_app(settings)` builds the FastAPI app (settings on `app.state.settings`); a module-level PEP 562 `__getattr__` still resolves `chesssnake.api.server:app` lazily for ASGI import strings. **The public router (`login`, `register`, `info`) is built per app by `_public_router(settings)` and included on the app, not into `v1`**: a router included into `v1` inherits its auth dependency. **43 HTTP routes in all** (including `/` from `api/web.py`; plus `/v1/ws` when websockets are on, pinned separately), pinned by `test_threadpool.py`, which walks them with `fastapi.routing.iter_route_contexts` (FastAPI 0.139 keeps included routers as wrappers, so `app.routes` alone misses them). Every route also has a row in `tests/integration/test_permissions.py`'s table (expected status for anonymous / outsider / player / admin), and a route without a row fails the suite. Game routes are by id; literal routes (`/games/between`, `/games/live`, `/games/finished`, `/games/record`, `/users/search`) are registered before the `{id}` routes. The listing routes (`/games/live`, `/games/finished`, `/users/search`) exist for the web UI and cap `limit` at `ops.LIST_LIMIT_MAX` (200). The image route serves `_board_png(fen, white_name, black_name, perspective)`, an `lru_cache(maxsize=64)` of finished PNG bytes (~100 KB each): those four values are everything a server image shows (no last-move highlight), so a move or a rename is a new key and the cache can be module-level and shared by every app in a process. Mutating game routes resolve the actor **before** the transaction (it may read users), then `apply_game_change(game_id, mutate, expected_version)`; `mutate` checks the turn only for a game in progress, so a finished game answers `GameOverError`, not "not your turn". `_load_game` prepends the starting position's key; `_change` builds the `GameChange` and clears `draw` on a finished game. Handlers: `AuthError`→401 (with `WWW-Authenticate: Bearer`), `ForbiddenError`/`NotYourTurnError`→403, `*NotFoundError`→404, `ChallengeError`/`VersionConflictError`/`UserExistsError`→409, `InvalidIdError`/`UserValidationError`→422, `DatabaseBusyError`→503, `DatabaseError`→500, `ChessError`/`GameError`→400. `lifespan` inits the pool and **refuses to start on a database whose existing tables differ from the schema** (`schema.stale_tables`), since `create_all` never alters a table and there are no migrations; its `current_engine() is None` guard lets a second app share an existing pool, which is how the tests build an open-registration app alongside the default one.
-- `realtime.py` — live updates at `/v1/ws` (protocol: `docs/realtime-websockets.md`), registered by `create_app` **only when `websocket.enabled`**; off, the upgrade gets HTTP 403 and `app.state.broker` is the no-op base `Broker`, so publishing costs a REST request nothing. Load-bearing details:
+- `realtime.py` — live updates at `/v1/ws` (protocol: `docs/websocket-api.md`), registered by `create_app` **only when `websocket.enabled`** (the default since 0.15.3); off, the upgrade gets HTTP 403 and `app.state.broker` is the no-op base `Broker`, so publishing costs a REST request nothing. Load-bearing details:
   - **One broker per app** on `app.state.broker`, reached by routes through `request` (`server._broker`). The `v1` router object is shared by every app in a process (the tests build several), so a module-level broker would cross their events.
   - **Routes publish after `ops.*` returns**, i.e. after commit: moves/draws/resign → `game_changed` (a move's event also carries `legal_moves`, the next player's options, computed in the route's `mutate` and identical to the `MoveResult`'s; draw/resign events carry none); accept and admin create → `game_started` (to both players' user topics); challenge create/delete → `challenge` (delete publishes from the challenge read *before* deleting); admin delete → `game_removed`; logout/revoke → `recheck_token`, password change/reset and disable → `recheck_user`, which close those sockets at once (the periodic `reauth_interval` check is the backstop, e.g. for `chesssnake user` run on the server's machine).
   - **`_publish` runs in a worker thread and never raises**: the change is already committed, so an exception would turn a saved move into a 500. It serializes once and hands over with `loop.call_soon_threadsafe`; everything touching sockets, queues and topic tables runs on the loop thread. The loop (and the dedicated `CapacityLimiter`, `worker_threads`) is captured lazily in `admit()`, the first code sure to run on the loop.
@@ -364,7 +384,7 @@ silently falls back to a deferred `BEGIN` with no error, which is the bug class 
 
 ### The web UI (`api/web.py` + `data/web/`)
 
-A static site served by the api-endpoint when `web.enabled` (**on by default**, unlike websockets). `api/web.py` adds `GET /` (a `def` route returning `index.html`) and two `StaticFiles` mounts, `/assets/pieces` (the `data/img` sprites the renderer uses) **before** `/assets` (`data/web`): Starlette tries mounts in order. Nothing is mounted at `/`, so an unknown `/v1/...` path keeps the JSON 404. Every response carries a strict CSP (`script-src 'self'`, no inline script or eval, `connect-src 'self'` covering the same-host websocket), `nosniff`, `no-referrer` and `Cache-Control: no-cache` (ETag revalidation, so an upgrade is picked up at once).
+A static site served by the api-endpoint when `web.enabled` (**on by default**, as websockets are). `api/web.py` adds `GET /` (a `def` route returning `index.html`) and two `StaticFiles` mounts, `/assets/pieces` (the `data/img` sprites the renderer uses) **before** `/assets` (`data/web`): Starlette tries mounts in order. Nothing is mounted at `/`, so an unknown `/v1/...` path keeps the JSON 404. Every response carries a strict CSP (`script-src 'self'`, no inline script or eval, `connect-src 'self'` covering the same-host websocket), `nosniff`, `no-referrer` and `Cache-Control: no-cache` (ETag revalidation, so an upgrade is picked up at once).
 
 - **Vanilla ES modules, no build step and no Node**: `index.html`, `style.css`, `js/{app,router,api,live,fen,board,cards,ui}.js` and one module per page in `js/views/`. Registered under `[tool.setuptools.package-data]` (`data/web/js/views/*.js` too); the release workflow checks every file of `data/web` is in the wheel, and `tests/integration/test_web.py` walks `index.html` and every module's relative imports and fetches each, failing on a module nothing imports.
 - **It is only a client of `/v1`.** The session token from `/v1/auth/login` lives in `localStorage` and is sent as a bearer token, so there is no cookie auth and no CSRF surface; the CSP is what protects the token, so **text goes on the page only through `textContent`** (`ui.h()`), never as HTML. `test_web.py` fails on `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`/`eval(`/`new Function` anywhere in the scripts, comments included.

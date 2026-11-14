@@ -162,7 +162,7 @@ class ApiClient:
         :class:`~chesssnake.remote.realtime.EventStream` following ``games``.
 
         :raises chesssnake.remote.realtime.RealtimeUnavailable: if the server does
-            not offer them (they are off by default); poll instead.
+            not offer them (they can be turned off); poll instead.
         """
         from .realtime import EventStream
 

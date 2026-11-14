@@ -1,0 +1,154 @@
+/* The chesssnake docs: the look of the web UI (src/chesssnake/data/web/style.css).
+   Same tokens, light and dark, following the reader's system setting. */
+:root {
+  --bg: #f7f1e8;
+  --surface: #ffffff;
+  --surface-2: #f1e6d6;
+  --border: #e2d3bf;
+  --text: #2b2118;
+  --muted: #76634f;
+  --accent: #9a5a1c;
+  --accent-text: #ffffff;
+  --danger: #b03a26;
+  --warn: #9a6a0a;
+  --ok: #2c7a45;
+  --focus: #2f6fd1;
+  --sq-light: #ffce9e;
+  --sq-dark: #d18b47;
+  --code-bg: #fbf6ee;
+  --radius: 6px;
+  --shadow: 0 1px 3px rgba(60, 35, 10, 0.12);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* syntax colours */
+  --syn-comment: #8a7862;
+  --syn-string: #2c7a45;
+  --syn-keyword: #b03a26;
+  --syn-name: #1f5fa8;
+  --syn-number: #9a5a1c;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1814;
+    --surface: #27211b;
+    --surface-2: #322a22;
+    --border: #45392d;
+    --text: #f0e6d8;
+    --muted: #b4a28c;
+    --accent: #e3a465;
+    --accent-text: #1c1814;
+    --danger: #e8826c;
+    --warn: #e6b04a;
+    --ok: #6cc48a;
+    --focus: #7aa7ee;
+    --code-bg: #1f1a15;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --syn-comment: #94826c;
+    --syn-string: #8fcf9f;
+    --syn-keyword: #e8826c;
+    --syn-name: #8db8ee;
+    --syn-number: #e3a465;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* --- top bar, as in the web UI --- */
+.topbar { display: flex; align-items: center; gap: 12px; padding: 0 16px; min-height: 60px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.25rem; color: var(--text); letter-spacing: 0.01em; }
+.brand img { width: 44px; height: 44px; display: block; }
+.brand:hover { text-decoration: none; }
+.tag { font-size: 0.75rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--accent); color: var(--accent-text); }
+.links { margin-left: auto; display: flex; gap: 4px; }
+.links a { color: var(--muted); padding: 6px 10px; border-radius: var(--radius); font-size: 0.95rem; }
+.links a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
+@media (max-width: 560px) {
+  .topbar { flex-wrap: wrap; padding: 6px 10px; gap: 0 8px; }
+  .brand img { width: 36px; height: 36px; }
+  .links a { padding: 6px 7px; }
+}
+
+.page { max-width: 1200px; margin: 0 auto; padding: 20px 16px 32px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; }
+
+/* --- navigation --- */
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+.nav-side { position: sticky; top: 16px; padding: 14px 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.nav-group + .nav-group { margin-top: 14px; }
+.nav-sec { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+nav a { display: block; padding: 4px 10px; margin: 0 -10px; color: var(--text); border-radius: var(--radius); font-size: 0.95rem; }
+nav a:hover { background: var(--surface-2); text-decoration: none; }
+nav a.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.nav-mobile { display: none; margin-bottom: 16px; padding: 10px 14px; }
+.nav-mobile summary { font-weight: 700; cursor: pointer; }
+.nav-mobile summary .sub { color: var(--muted); font-weight: 400; margin-left: 8px; }
+.nav-mobile nav { margin-top: 10px; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .nav-side { display: none; }
+  .nav-mobile { display: block; }
+}
+
+/* --- content --- */
+.content { padding: 24px 32px 20px; }
+@media (max-width: 600px) { .content { padding: 16px; } .page { padding: 12px 10px 24px; } }
+.content h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 18px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.content h2 { font-size: 1.3rem; line-height: 1.25; margin: 34px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.content h3 { font-size: 1.08rem; margin: 24px 0 6px; color: var(--accent); }
+.content h4 { font-size: 0.98rem; margin: 20px 0 4px; }
+.content p, .content ul, .content ol { margin: 10px 0; }
+.content li { margin: 3px 0; }
+.content img { max-width: 100%; height: auto; display: block; margin: 14px 0; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+.content hr { border: 0; border-top: 1px solid var(--border); margin: 26px 0; }
+.lead { font-size: 1.1rem; color: var(--muted); }
+.home-title { border-bottom: 0 !important; padding-bottom: 0 !important; margin-bottom: 8px !important; }
+
+code { font: 0.88em var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; overflow-x: auto; font: 13.5px/1.5 var(--mono); margin: 14px 0 18px; }
+pre code { background: none; padding: 0; font: inherit; overflow-wrap: normal; }
+div.highlighter-rouge { margin: 14px 0 18px; }
+div.highlighter-rouge pre, div.highlight { margin: 0; }
+kbd { font: 0.85em var(--mono); background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+
+/* tables: on a phone they scroll inside themselves */
+table { border-collapse: collapse; width: 100%; margin: 14px 0 18px; font-size: 0.93rem; display: block; overflow-x: auto; }
+th { color: var(--muted); font-weight: 600; font-size: 0.85rem; text-align: left; }
+th, td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+tbody tr:hover { background: var(--surface-2); }
+td code { white-space: nowrap; }
+
+/* callouts: > text {: .tip } or {: .warn } */
+blockquote { margin: 16px 0; padding: 10px 14px; background: var(--surface-2); border-left: 4px solid var(--border); border-radius: var(--radius); }
+blockquote p { margin: 4px 0; }
+blockquote.tip { border-left-color: var(--ok); }
+blockquote.warn { border-left-color: var(--danger); }
+blockquote.tip::before, blockquote.warn::before { display: block; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+blockquote.tip::before { content: "Tip"; color: var(--ok); }
+blockquote.warn::before { content: "Heads up"; color: var(--danger); }
+
+/* the home page's "start here" tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+.tiles a { display: block; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; color: var(--text); }
+.tiles a:hover { border-color: var(--accent); text-decoration: none; }
+.tiles b { display: block; color: var(--accent); margin-bottom: 4px; }
+.tiles span { font-size: 0.93rem; color: var(--muted); }
+
+.foot { margin: 18px 0 0; text-align: center; font-size: 0.85rem; color: var(--muted); }
+
+/* --- rouge syntax colours, in the palette --- */
+.highlight .c, .highlight .c1, .highlight .cm, .highlight .cs, .highlight .ch, .highlight .cd { color: var(--syn-comment); font-style: italic; }
+.highlight .s, .highlight .s1, .highlight .s2, .highlight .sb, .highlight .sh, .highlight .si, .highlight .sx, .highlight .dl { color: var(--syn-string); }
+.highlight .k, .highlight .kd, .highlight .kn, .highlight .kt, .highlight .nb, .highlight .ow { color: var(--syn-keyword); }
+.highlight .na, .highlight .nt, .highlight .nl, .highlight .py, .highlight .nv, .highlight .nf { color: var(--syn-name); }
+.highlight .m, .highlight .mi, .highlight .mf, .highlight .il, .highlight .kc, .highlight .nn, .highlight .nc { color: var(--syn-number); }
+.highlight .err { color: inherit; background: none; }
+
+/* checklists: - [ ] item */
+.content ul.task-list { list-style: none; padding-left: 4px; }
+.task-list-item-checkbox { appearance: none; width: 13px; height: 13px; margin: 0 8px 0 0; border: 2px solid var(--accent); border-radius: 3px; background: var(--surface); vertical-align: -1px; }

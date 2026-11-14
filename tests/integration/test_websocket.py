@@ -1,5 +1,5 @@
 """
-Live updates over ``/v1/ws``: the protocol in ``docs/realtime-websockets.md``.
+Live updates over ``/v1/ws``: the protocol in ``docs/websocket-api.md``.
 
 These run against the shared ``api_client`` app, which ``conftest`` builds with
 websockets on, so the REST calls that cause an event and the sockets that receive
@@ -109,8 +109,15 @@ def players(users):
 # --- connecting -------------------------------------------------------------------
 
 
-def test_off_by_default(other_app):
+def test_on_by_default(other_app, players):
     client = other_app()  # no websocket settings at all
+    assert client.app.state.broker.enabled is True
+    with client.websocket_connect(WS) as ws:
+        assert ready(ws, players.alice.token)["user"]["username"] == "alice"
+
+
+def test_turned_off_the_upgrade_is_refused(other_app):
+    client = other_app(enabled=False)
     assert client.app.state.broker.enabled is False
     with pytest.raises(WebSocketDisconnect), client.websocket_connect(WS) as ws:
         ws.receive_json()

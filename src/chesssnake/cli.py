@@ -504,7 +504,7 @@ def _live_updates(client, game_id, refresh):
     """
     A live stream for this game, or ``None`` (with a note) to poll instead.
 
-    Live updates are opt-in on the server, so not having them is normal, not an
+    A server can turn live updates off, so not having them is normal, not an
     error: say why, and say what happens instead.
     """
     from .db.errors import AuthError

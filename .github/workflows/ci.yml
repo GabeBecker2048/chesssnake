@@ -106,10 +106,31 @@ jobs:
       # authoritative, and fails the build if it drops below the gate.
       - name: Tests with coverage gate
         run: uv run --extra api --extra client --extra postgres --group pg pytest --cov --cov-report=term-missing --cov-fail-under=75
+
+  # The docs site (docs/) builds with GitHub Pages' own builder, and every internal
+  # link and anchor in it resolves. The built site is kept as an artifact to look at.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./docs
+          destination: ./_site
+      - run: python3 scripts/check_docs.py _site /chesssnake
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: _site
+          retention-days: 7
+
   # A single check for branch protection to require, so the rule doesn't have to
   # name every job and matrix entry, and doesn't go stale when they change.
   all-green:
-    needs: [lint, test, engine-deep, integration-sqlite, integration-postgres, coverage]
+    needs: [lint, test, engine-deep, integration-sqlite, integration-postgres, coverage, docs]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -121,3 +142,4 @@ jobs:
           test "${{ needs.integration-sqlite.result }}" = "success"
           test "${{ needs.integration-postgres.result }}" = "success"
           test "${{ needs.coverage.result }}" = "success"
+          test "${{ needs.docs.result }}" = "success"

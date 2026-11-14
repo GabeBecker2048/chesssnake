@@ -35,8 +35,8 @@ api-endpoint that many clients can share.
 - Standard formats in and out: FEN, PGN, SAN, UCI move input, legal-move listing.
 - **The server owns the rules**, so a client cannot cheat and a frontend in any
   language needs no chess logic of its own.
-- **Live updates** (opt-in): clients can follow games over a websocket and see
-  each move the moment it is made, instead of polling.
+- **Live updates**, on by default: clients follow games over a websocket and
+  see each move the moment it is made, instead of polling.
 - **A web UI** served by the api-endpoint: play in the browser, watch any game,
   and manage accounts from an admin panel.
 - Pure Python. Pillow is the only dependency for a local game.
@@ -101,7 +101,7 @@ Save this as `docker-compose.yml` in a new folder:
 ```yaml
 services:
   chesssnake:
-    image: ghcr.io/gabebecker2048/chesssnake:latest   # or :0.9 to stay on 0.9.x
+    image: ghcr.io/gabebecker2048/chesssnake:latest   # or :0.15 to stay on 0.15.x
     restart: unless-stopped
     user: "1000:1000"              # who owns ./data (`id -u`:`id -g`)
     ports:
@@ -113,8 +113,8 @@ services:
       CHESSSNAKE__DATABASE__INIT_SCHEMA: "1"
       # Anyone may make an account only if you open registration:
       # CHESSSNAKE__API__REGISTRATION: "open"
-      # Live updates: chesssnake play shows the opponent's move as it happens.
-      # CHESSSNAKE__WEBSOCKET__ENABLED: "1"
+      # Live updates are on by default; this turns them off (clients then poll):
+      # CHESSSNAKE__WEBSOCKET__ENABLED: "0"
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -132,8 +132,8 @@ docker compose exec chesssnake chesssnake user create alice --admin   # the firs
 ```
 
 That is the whole server: SQLite in a file under `./data`, no database to
-install. For PostgreSQL, hardening notes and what to do before exposing it, see
-[the guide](docs/guide.md#deploying-with-docker).
+install. For PostgreSQL see [Database](https://gabebecker.com/chesssnake/database.html), and before exposing
+it read [Hosting publicly](https://gabebecker.com/chesssnake/hosting-publicly.html).
 
 ### Connect to it
 
@@ -149,9 +149,9 @@ chesssnake challenge bob                              # bob runs: chesssnake acc
 chesssnake play --vs bob
 ```
 
-With live updates on (`CHESSSNAKE__WEBSOCKET__ENABLED`), each player's terminal
-shows the other's move the moment it is made; without them it checks every 10
-seconds.
+Each player's terminal shows the other's move the moment it is made. Live
+updates are on by default; with them off (`CHESSSNAKE__WEBSOCKET__ENABLED=0`)
+it checks every 10 seconds.
 
 From Python:
 
@@ -172,18 +172,25 @@ curl -X POST localhost:8000/v1/games/1/moves -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"move":"e4"}'
 ```
 
-## More
+## Documentation
 
-- [The guide](docs/guide.md): the Python API, running an api-endpoint, playing
-  in a terminal, and deploying with Docker
-- [REST API reference](docs/rest-api.md): every endpoint, every error code
-- [The web UI](docs/web-ui.md): playing, watching and the admin panel in a browser
-- [Real-time updates](docs/realtime-websockets.md): the websocket protocol, for
-  frontends that want moves as they happen
-- [Configuration](docs/configuration.md): every setting and its environment variable
+**The docs are at [gabebecker.com/chesssnake](https://gabebecker.com/chesssnake/).**
+
+- [Install](https://gabebecker.com/chesssnake/install.html) and [Your first game](https://gabebecker.com/chesssnake/first-game.html)
+- Playing [in the browser](https://gabebecker.com/chesssnake/browser.html) and [in the terminal](https://gabebecker.com/chesssnake/terminal.html)
+- Running a server: [accounts](https://gabebecker.com/chesssnake/accounts.html), [database](https://gabebecker.com/chesssnake/database.html),
+  [live updates](https://gabebecker.com/chesssnake/live-updates.html), [hosting publicly](https://gabebecker.com/chesssnake/hosting-publicly.html)
+- Building on it: the [Python library](https://gabebecker.com/chesssnake/python.html), the
+  [Python client](https://gabebecker.com/chesssnake/python-client.html), [bots](https://gabebecker.com/chesssnake/bots.html), the
+  [REST API](https://gabebecker.com/chesssnake/rest-api.html) and the [websocket API](https://gabebecker.com/chesssnake/websocket-api.html)
+- [Configuration](https://gabebecker.com/chesssnake/configuration.html): every setting and its environment variable
+
+In this repository:
+
 - [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md): what changed, and what is next
 - [CLAUDE.md](CLAUDE.md): how the codebase fits together, useful to any contributor
-- [Releasing](docs/releasing.md): how a version reaches PyPI and ghcr.io
+- [RELEASING.md](RELEASING.md): how a version reaches PyPI and ghcr.io
+- [scripts/benchmarks.md](scripts/benchmarks.md): engine and server speed
 
 ## Contributing
 

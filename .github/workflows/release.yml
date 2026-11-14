@@ -4,7 +4,7 @@
 #
 # No tokens. PyPI trusts this workflow through Trusted Publishing (OIDC), and
 # the image is pushed with the automatic GITHUB_TOKEN. The one-time PyPI-side
-# setup is in docs/releasing.md.
+# setup is in RELEASING.md.
 #
 # The tag is the trigger, rather than a GitHub release, so that the release page
 # is created by the same run that built the artifacts. There is no window in

@@ -12,7 +12,7 @@ programs that already have a loop of their own, such as ``chesssnake play``:
   :meth:`EventStream.drain` returns everything queued so far.
 
 Besides the server's messages (``game``, ``game_started``, ``challenge``, ...,
-see ``docs/realtime-websockets.md``), the stream adds its own:
+see ``docs/websocket-api.md``), the stream adds its own:
 
 - ``{"type": "disconnected", "code": ...}``: the connection dropped; it is
   reconnecting (doubling the wait from 1 s to 30 s);

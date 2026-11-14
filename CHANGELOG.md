@@ -6,6 +6,18 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.15.3 - 2026-11-13
+
+### Added
+- A documentation site at <https://gabebecker.com/chesssnake/>: tutorials,
+  guides for playing and for running a server, the REST and websocket APIs,
+  and every setting. It replaces the loose pages that were under `docs/`.
+
+### Changed
+- Live updates are on by default (`websocket.enabled` is now `true`), so the
+  web UI and `chesssnake play` show a move the moment it is made with no
+  setup. Set it to `false` to turn them off; clients then poll as before.
+
 ## 0.15.2 - 2026-11-13
 
 ### Added

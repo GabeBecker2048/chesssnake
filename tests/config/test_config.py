@@ -80,11 +80,11 @@ def test_defaults():
     assert settings.database.pool_min_size == 1
     assert settings.database.pool_max_size == 10
     assert settings.source("api", "port") == "default"
-    # Websockets are opt-in: a server that never heard of them behaves as 0.12 did.
-    assert settings.websocket.enabled is False
+    # Websockets are on unless turned off (opt-in until 0.15.3).
+    assert settings.websocket.enabled is True
     assert settings.websocket.allowed_origins == ["*"]
     assert settings.websocket.compression is False
-    # The web UI, unlike websockets, is on unless turned off.
+    # So is the web UI.
     assert settings.web.enabled is True
 
 
