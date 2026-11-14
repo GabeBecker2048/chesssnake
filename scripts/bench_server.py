@@ -12,7 +12,7 @@ reports the median time of each request: posting a move, listing legal moves,
 reading the game, and fetching the board image (first view of a position, and a
 repeat view of the same one). Uses only the standard library, and only routes
 every version since 0.12 has, so it measures an older server too. Results are
-recorded in docs/benchmarks.md.
+recorded in scripts/benchmarks.md.
 """
 
 import http.client

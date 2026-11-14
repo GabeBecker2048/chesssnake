@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chesssnake"
-version = "0.15.2"
+version = "0.15.3"
 description = "A self-hosted chess server and Python chess library for bots and small communities"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,6 +21,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/GabeBecker2048/chesssnake"
+Documentation = "https://gabebecker.com/chesssnake/"
 
 [project.scripts]
 chesssnake = "chesssnake.cli:main"

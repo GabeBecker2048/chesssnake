@@ -150,14 +150,14 @@ class DatabaseSettings(_Section):
 
 class WebsocketSettings(_Section):
     """
-    Real-time updates over a websocket at ``/v1/ws``. Off unless enabled.
+    Real-time updates over a websocket at ``/v1/ws``. On unless disabled.
 
     The transport settings (pings, frame size, compression, shutdown) are applied
     by ``chesssnake api-endpoint``, which runs uvicorn; another ASGI server is
     configured its own way, although frame size is also enforced by the app.
     """
 
-    enabled: bool = Field(default=False, description="Serve real-time updates at /v1/ws.")
+    enabled: bool = Field(default=True, description="Serve real-time updates at /v1/ws.")
     max_connections: int = Field(
         default=1000, ge=1, description="Open websockets allowed in total, counted from the moment one is accepted."
     )

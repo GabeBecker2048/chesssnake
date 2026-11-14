@@ -3,7 +3,7 @@ The web UI (0.14.0): served at ``/`` by the api-endpoint, on by default.
 
 These check what Python can: the page and every file it loads are served, with
 the right types and the security headers, and turning it off removes it. The
-scripts themselves are exercised in a real browser (see docs/web-ui.md).
+scripts themselves are exercised in a real browser (see docs/browser.md).
 """
 
 import posixpath

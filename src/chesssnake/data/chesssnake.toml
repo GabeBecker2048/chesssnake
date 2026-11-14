@@ -149,23 +149,23 @@ sqlite_busy_timeout_ms = 5000
 
 
 #: ===========================================================================
-#: [websocket] - real-time updates at /v1/ws (off by default)
+#: [websocket] - real-time updates at /v1/ws (on by default)
 #: ===========================================================================
 #: With this on, a client can hold one websocket open and be told the moment a
 #: game it follows changes, instead of polling. `chesssnake play` uses it when
 #: the server offers it. It is served on the same host and port as everything
 #: else, so there is nothing new to expose; a reverse proxy has to pass websocket
 #: upgrades through (Caddy does by default, nginx needs the Upgrade headers).
-#: The protocol is in docs/realtime-websockets.md. REST clients are unaffected
-#: either way.
+#: The protocol is in https://gabebecker.com/chesssnake/websocket-api.html.
+#: REST clients are unaffected either way.
 #:
 #: Updates are delivered within one api-endpoint process. Running several
 #: workers or replicas, a socket only hears of changes made through its own.
 [websocket]
 
 #: Serve /v1/ws at all. Off, the upgrade is refused (HTTP 403) and clients poll.
-#: Values: true, false. Default false.
-enabled = false
+#: Values: true, false. Default true.
+enabled = true
 
 #: Open websockets allowed in total, counted from the moment one is accepted
 #: (before it has authenticated). Each idle socket costs a little memory.
@@ -249,7 +249,8 @@ allowed_origins = ["*"]
 
 #: Serve the web UI at / (the page, its scripts under /assets, and the piece
 #: images). It talks only to the /v1 routes, logged in like any other client.
-#: With [websocket] enabled it updates live; without, it polls every few seconds.
+#: With [websocket] enabled (the default) it updates live; without, it polls
+#: every few seconds.
 #: Turn it off for a server that only bots and scripts use.
 #: Values: true, false. Default true.
 enabled = true

@@ -1,4 +1,4 @@
-// Live updates over /v1/ws (docs/realtime-websockets.md). One socket for the
+// Live updates over /v1/ws (docs/websocket-api.md). One socket for the
 // whole page, shared by every view: views subscribe to the games they show and
 // listen for events; the socket re-subscribes everything after a reconnect.
 //

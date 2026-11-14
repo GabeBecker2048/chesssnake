@@ -1,0 +1,22 @@
+# The chesssnake wiki, built by GitHub Pages from /docs on main.
+title: chesssnake
+description: A self-hosted chess server and Python chess library for bots and small communities.
+baseurl: /chesssnake
+url: https://gabebecker.com
+repository: GabeBecker2048/chesssnake
+
+markdown: kramdown
+highlighter: rouge
+kramdown:
+  input: GFM
+  hard_wrap: false
+  syntax_highlighter: rouge
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+exclude:
+  - README.md

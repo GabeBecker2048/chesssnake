@@ -1,7 +1,7 @@
 """
-Real-time updates over a websocket at ``/v1/ws``. Off unless ``websocket.enabled``.
+Real-time updates over a websocket at ``/v1/ws``. On unless ``websocket.enabled`` is false.
 
-The protocol is specified in ``docs/realtime-websockets.md``. In short: a client
+The protocol is specified in ``docs/websocket-api.md``. In short: a client
 connects, sends ``{"type": "auth", "token": ...}`` first, then subscribes to games;
 the server pushes each game's new state as it changes, plus the user's own events
 (challenges to them, games they start) without being asked.

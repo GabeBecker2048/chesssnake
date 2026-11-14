@@ -10,7 +10,7 @@ so the same script measures an older version for comparison:
 
     uv run --no-project --python 3.12 --with chesssnake==0.14.4 python scripts/bench_engine.py
 
-Results are recorded in docs/benchmarks.md. Numbers depend on the machine: compare
+Results are recorded in scripts/benchmarks.md. Numbers depend on the machine: compare
 two versions on the same one.
 """
 

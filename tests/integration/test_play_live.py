@@ -189,7 +189,7 @@ def test_logging_out_elsewhere_ends_the_session(serve, people):
 def test_without_websockets_the_client_is_told_to_poll(serve, people):
     from chesssnake.remote.realtime import RealtimeUnavailable
 
-    server = serve()  # websockets off: the default
+    server = serve(enabled=False)
     with pytest.raises(RealtimeUnavailable, match="websockets turned off"):
         client_for(server, people, "alice").events()
 
@@ -197,7 +197,7 @@ def test_without_websockets_the_client_is_told_to_poll(serve, people):
 def test_the_cli_falls_back_to_polling_with_a_note(serve, people, capsys):
     from chesssnake.cli import _live_updates
 
-    server = serve()
+    server = serve(enabled=False)
     assert _live_updates(client_for(server, people, "alice"), 1, 10) is None
     assert "note: no live updates: the server has websockets turned off; polling every 10 s" in capsys.readouterr().err
 
@@ -317,7 +317,7 @@ def test_websockets_turned_off_across_a_restart_ends_the_stream(serve, people, m
     stream = client_for(server, people, "alice").events()
     try:
         server.stop()
-        restarted = serve(port=server.port)  # back, with websockets off
+        restarted = serve(port=server.port, enabled=False)  # back, with websockets off
         events = _collect(stream, lambda e: e["type"] in ("reconnected", "ended"), timeout=10)
         assert events[-1]["type"] == "ended" and "turned off" in events[-1]["reason"], events
         restarted.stop()

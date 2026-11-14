@@ -1,0 +1,29 @@
+- section: Start here
+  pages:
+    - { title: Home, url: / }
+    - { title: Install, url: /install.html }
+    - { title: Your first game, url: /first-game.html }
+- section: Playing
+  pages:
+    - { title: In the browser, url: /browser.html }
+    - { title: In the terminal, url: /terminal.html }
+    - { title: Writing moves, url: /moves.html }
+- section: Running a server
+  pages:
+    - { title: Accounts, url: /accounts.html }
+    - { title: Database, url: /database.html }
+    - { title: Live updates, url: /live-updates.html }
+    - { title: Hosting publicly, url: /hosting-publicly.html }
+    - { title: Upgrading and backups, url: /upgrading.html }
+    - { title: Troubleshooting, url: /troubleshooting.html }
+- section: Building on it
+  pages:
+    - { title: Python library, url: /python.html }
+    - { title: Python client, url: /python-client.html }
+    - { title: Bots, url: /bots.html }
+    - { title: REST API, url: /rest-api.html }
+    - { title: Websocket API, url: /websocket-api.html }
+- section: Reference
+  pages:
+    - { title: Configuration, url: /configuration.html }
+    - { title: Command line, url: /cli.html }
