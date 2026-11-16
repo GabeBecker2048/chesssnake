@@ -25,6 +25,26 @@ between Pillow releases. To compare against an older release with identical
 dependencies, run it from a git worktree of its tag (`git worktree add ../old
 v0.15.0`, then `uv run --project ../old ...`).
 
+## 0.15.4
+
+Intel Core i7-8550U (laptop, 1.8 GHz), Python 3.12.13, Pillow 12.3.0, FastAPI
+0.139.0, SQLite, 2026-11-16. 0.15.3 was measured from the same checkout just before
+the changes, so both used the same locked dependencies. Times are milliseconds, the
+mean of three runs each.
+
+| Request | 0.15.3 | 0.15.4 | Change |
+|---|---:|---:|---:|
+| `POST /moves` | 4.21 | 3.96 | about the same |
+| `GET /legal-moves` | 2.28 | 2.09 | about the same |
+| `GET /games/{id}` | 1.98 | 1.79 | about the same |
+| `GET /image`, first view of a position | 42.2 | 40.5 | about the same |
+| `GET /image`, repeat view | 2.28 | 2.08 | about the same |
+
+0.15.4 gives every game state its last move, stored in two columns of the game's
+own row, so reading a game costs no extra query, and a move writes them in the
+update it already made. The server image now highlights that move at no measurable
+cost. The differences above are within the run-to-run spread.
+
 ## 0.15.1
 
 Intel Core i7-8550U (laptop, 1.8 GHz), Python 3.12.13, Pillow 12.3.0, FastAPI

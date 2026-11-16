@@ -14,9 +14,16 @@ usernames) and timestamps are separate fields.
 Each payload is rebuilt from JSON with ``from_dict``, which ignores keys it does
 not know, so a field added to the server in a later version never breaks an
 older client.
+
+``GameState`` also reads its raw fields back as the engine's enums (``to_move``,
+``result``, ``winner``, ``ending``, ``draw_offered_by``), with the same names as
+the accessors of :class:`chesssnake.Game`, so a client never parses FEN or
+compares status codes itself.
 """
 
 from dataclasses import asdict, dataclass, field, fields
+
+from .engine.enums import Color, GameStatus, Termination
 
 #: Role names on the wire, mapped to the codes the database stores.
 ROLES = {"user": 0, "admin": 1}
@@ -57,10 +64,66 @@ class GameState:
     black_name: str = ""
     started_at: str | None = None  # ISO 8601, UTC
     updated_at: str | None = None  # ISO 8601, UTC; when the game finished, for an archived game
+    #: The last move played, ``{"from", "to", "san", "promotion"}`` (``promotion`` a
+    #: piece letter or ``None``), or ``None`` before the first move (0.15.4).
+    last_move: dict | None = None
 
     def to_dict(self) -> dict:
         """Return the payload as a plain JSON-serializable dict."""
         return asdict(self)
+
+    # --- the fields as the engine's types (computed, not sent) ----------------
+
+    @property
+    def to_move(self) -> Color:
+        """Whose turn it is (from the FEN). Still the side to move once the game is over."""
+        return Color.BLACK if self.fen.split()[1] == "b" else Color.WHITE
+
+    @property
+    def result(self) -> GameStatus:
+        """``IN_PLAY``, ``WHITE_WON``, ``BLACK_WON`` or ``DRAW``."""
+        return GameStatus(self.status)
+
+    @property
+    def is_over(self) -> bool:
+        return self.status != GameStatus.IN_PLAY
+
+    @property
+    def winner(self) -> Color | None:
+        """The colour that won, or ``None`` while in play and for a draw."""
+        if self.status == GameStatus.WHITE_WON:
+            return Color.WHITE
+        if self.status == GameStatus.BLACK_WON:
+            return Color.BLACK
+        return None
+
+    @property
+    def ending(self) -> Termination | None:
+        """How the game ended, as a :class:`Termination` (``termination`` is its text)."""
+        return Termination(self.termination) if self.termination else None
+
+    @property
+    def draw_offered_by(self) -> Color | None:
+        """The colour with an open draw offer, or ``None``."""
+        return None if self.draw is None else Color(self.draw)
+
+    def player_id(self, color) -> int:
+        """The user id playing ``color`` (a :class:`Color` or ``"white"``/``"black"``)."""
+        white = color == Color.WHITE or color == "white"
+        return self.white_id if white else self.black_id
+
+    def player_name(self, color) -> str:
+        """The username playing ``color``."""
+        white = color == Color.WHITE or color == "white"
+        return self.white_name if white else self.black_name
+
+    def color_of(self, user_id) -> Color | None:
+        """The colour a user plays in this game, or ``None`` if they do not play in it."""
+        if user_id == self.white_id:
+            return Color.WHITE
+        if user_id == self.black_id:
+            return Color.BLACK
+        return None
 
     @classmethod
     def from_dict(cls, data) -> "GameState":
@@ -85,6 +148,7 @@ class GameState:
             black_name=row["black_name"],
             started_at=_iso(row["started_at"]),
             updated_at=_iso(row["updated_at"]),
+            last_move=row.get("last_move"),
         )
 
 
@@ -152,6 +216,9 @@ class User:
     disabled_at: str | None = None
     identities: list[dict] = field(default_factory=list)  # [{"provider", "external_id"}]
     has_password: bool = False  # whether the account can log in with a password
+    #: The groups whose games this user administers (0.15.4). Like ``identities``,
+    #: shown only to the user themselves and to administrators.
+    admin_groups: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Return the payload as a plain JSON-serializable dict."""
@@ -182,6 +249,7 @@ class User:
             disabled_at=_iso(row["disabled_at"]),
             identities=[dict(identity) for identity in row.get("identities", [])] if show_identities else [],
             has_password=bool(row.get("has_password", False)),
+            admin_groups=[int(g) for g in row.get("admin_groups", [])] if show_identities else [],
         )
 
 

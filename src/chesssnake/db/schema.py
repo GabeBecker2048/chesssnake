@@ -132,7 +132,8 @@ Index("ix_auth_tokens_user_id", auth_tokens.c.user_id)
 #: Games in progress. The board (plus turn, castling rights, en-passant target
 #: and the move clocks) is one standard FEN string; ``draw`` is the colour with
 #: an open draw offer; ``version`` counts every applied change, for optimistic
-#: concurrency.
+#: concurrency. ``last_uci``/``last_san`` are the last move played (NULL before
+#: the first), kept here so a game read carries it without touching ``moves``.
 games = Table(
     "games",
     metadata,
@@ -144,6 +145,8 @@ games = Table(
     Column("fen", Text, nullable=False),
     Column("draw", SmallInteger),
     Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("last_uci", Text),
+    Column("last_san", Text),
     _timestamp("started_at"),
     _timestamp("updated_at"),
     UniqueConstraint("group_id", "white_id", "black_id", name="uq_games_pairing"),
@@ -185,6 +188,8 @@ finished_games = Table(
     Column("movetext", Text, nullable=False),
     Column("fen", Text, nullable=False),
     Column("version", Integer, nullable=False),
+    Column("last_uci", Text),
+    Column("last_san", Text),
     _timestamp("started_at"),
     _timestamp("finished_at"),
     UniqueConstraint("group_id", "white_id", "black_id", "generation", name="uq_finished_games_pairing"),
@@ -227,9 +232,45 @@ user_settings = Table(
     _timestamp("updated_at"),
 )
 
+#: Who administers a group's games: a group admin may create and delete games in
+#: that group and act for its players, and nothing else (accounts stay with the
+#: global admins, ``users.role``). Granted and revoked by global admins.
+group_admins = Table(
+    "group_admins",
+    metadata,
+    Column("group_id", BigInteger, primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    _timestamp("granted_at"),
+)
+
+Index("ix_group_admins_user_id", group_admins.c.user_id)
+
+#: One-time codes a user makes to link an outside account (``POST /auth/link-code``)
+#: and a bot redeems for that account's id. At most one per user (PK), short-lived,
+#: and like tokens only ``sha256(code)`` is stored.
+link_codes = Table(
+    "link_codes",
+    metadata,
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("code_hash", Text, nullable=False, unique=True),
+    _timestamp("created_at"),
+    _timestamp("expires_at"),
+)
+
 #: Every table, in dependency order: a table only references tables before it.
 #: Delete in reverse to empty a database without tripping a foreign key.
-TABLES = (users, user_identities, user_settings, auth_tokens, games, moves, finished_games, challenges)
+TABLES = (
+    users,
+    user_identities,
+    user_settings,
+    auth_tokens,
+    games,
+    moves,
+    finished_games,
+    challenges,
+    group_admins,
+    link_codes,
+)
 
 
 def create_all(engine) -> None:

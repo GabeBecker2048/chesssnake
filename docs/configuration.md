@@ -86,6 +86,7 @@ chesssnake api-endpoint -o database.pool_max_size=20 -o api.registration=open
 | `port` | `8000` | The port it listens on. |
 | `registration` | `closed` | `closed`: only administrators make accounts. `open`: anyone can sign up. See [Accounts](accounts.html#letting-people-register). |
 | `session_lifetime_days` | `30` | How long a login lasts, 1 to 3650 days. |
+| `link_code_minutes` | `10` | How long a [link code](accounts.html#link-codes) stays valid, 1 to 1440 minutes. |
 | `docs` | `true` | Serve the interactive API docs at `/docs` and `/redoc`. They need no login and hold no data, but describe every route. |
 
 ## Database

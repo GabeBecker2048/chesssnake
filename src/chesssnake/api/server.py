@@ -18,7 +18,8 @@ Everything under ``/v1`` needs ``Authorization: Bearer <token>`` except
 UI at ``/`` (:mod:`chesssnake.api.web`), whose page is only a client of ``/v1``. Players are users; games are normally created
 by one user challenging another and the challenge being accepted, and every game
 is addressed by its id. An administrator can create games directly, manage
-accounts, and act for any player by passing ``player_id``.
+accounts, and act for any player by passing ``player_id``; an administrator of a
+group (a *group admin*) can do the game parts of that, inside that group only.
 """
 
 import io
@@ -38,7 +39,7 @@ from ..db import engine as db_engine
 from ..db import errors, schema
 from ..db import operations as ops
 from ..dto import COLORS, ROLES, Challenge, GameState, LoginResult, MoveResult, TokenInfo, User
-from ..engine import INITIAL_FEN, Board
+from ..engine import INITIAL_FEN, Board, render_board
 from ..engine import Game as EngineGame
 from ..engine import errors as chess_errors
 from ..serialize import game_from_state, state_from_game
@@ -50,6 +51,7 @@ from .auth import (
     hash_password,
     login,
     require_admin,
+    require_group_admin,
     validate_password,
 )
 from .realtime import Broker, InProcessBroker, websocket_endpoint
@@ -104,6 +106,15 @@ class UserPatch(BaseModel):
 
 class UsernameBody(BaseModel):
     username: str
+
+
+class IdentityCreate(BaseModel):
+    username: str
+    on_conflict: str = "error"  # checked by the operations layer, for the usual error envelope
+
+
+class LinkCodeRedeem(BaseModel):
+    code: str
 
 
 class GameCreate(BaseModel):
@@ -167,6 +178,7 @@ _ERROR_STATUS = (
     (errors.UserNotFoundError, 404),
     (errors.ChallengeNotFoundError, 404),
     (errors.TokenNotFoundError, 404),
+    (errors.LinkCodeError, 404),
     (errors.DatabaseBusyError, 503),
     (errors.DatabaseError, 500),
     (errors.GameError, 400),
@@ -212,7 +224,7 @@ def _require_game(game_id: int):
     return row
 
 
-def _change(game, row, now, new_moves=(), result=None):
+def _change(game, row, now, new_moves=(), result=None, last_move=None):
     """
     Describe what to persist after an engine action, and the state to return.
 
@@ -227,6 +239,8 @@ def _change(game, row, now, new_moves=(), result=None):
         started_at=row["started_at"].isoformat(),
         updated_at=now.isoformat(),
     )
+    # A draw offer or a resignation changes the state but not the last move.
+    state.last_move = ops._last_move(*last_move) if last_move is not None else row.get("last_move")
     outcome = None
     if game.is_over and game.termination is not None:
         outcome = (int(game.result), game.termination.value)
@@ -239,6 +253,7 @@ def _change(game, row, now, new_moves=(), result=None):
         new_moves=list(new_moves),
         result=state if result is None else result,
         outcome=outcome,
+        last_move=last_move,
     )
 
 
@@ -263,16 +278,19 @@ def _game_actor(me: Principal, player_id, row, *, require_actor):
     :raises errors.NotYourTurnError: If the actor is not one of the players.
     """
     players = (int(row["white_id"]), int(row["black_id"]))
-    actor = acting_as(me, player_id, participants=players, require_actor=require_actor)
+    actor = acting_as(me, player_id, participants=players, require_actor=require_actor, group_id=int(row["group_id"]))
     if actor is not None and actor not in players:
         raise errors.NotYourTurnError(f"Player {actor} is not in this game")
     return actor
 
 
 def _require_challenge(challenge_id: int, me: Principal):
-    """The challenge, if it exists and the caller is in it (or an admin); else 404."""
+    """The challenge, if it exists and the caller is in it (or administers its group); else 404."""
     challenge = ops.challenge_get(challenge_id)
-    if challenge is None or not (me.is_admin or me.user_id in (challenge["challenger_id"], challenge["challenged_id"])):
+    if challenge is None or not (
+        me.user_id in (challenge["challenger_id"], challenge["challenged_id"])
+        or me.administers(int(challenge["group_id"]))
+    ):
         raise errors.ChallengeNotFoundError(f"No pending challenge {challenge_id}")
     return challenge
 
@@ -283,6 +301,12 @@ def _broker(request: Request) -> Broker:
     global because the router is shared by every app built in a process.
     """
     return getattr(request.app.state, "broker", None) or Broker()
+
+
+def _who(me: Principal, actor) -> dict:
+    """Who made a change, for its websocket event: the player it was made as, and the
+    user whose token sent it (a bot acting for a player sends as itself)."""
+    return {"actor_id": actor, "requested_by": me.user_id}
 
 
 def _move_summary(result: MoveResult) -> dict:
@@ -439,6 +463,21 @@ def update_settings(changes: dict[str, Any] = Body(...), me: Principal = Depends
     return ops.user_settings_update(me.user_id, changes)
 
 
+@v1.post("/auth/link-code", status_code=201)
+def create_link_code(request: Request, me: Principal = Depends(current_principal)):
+    """
+    A one-time code to link an outside account (a Discord account, say) to yours.
+
+    Give it to the bot or integration, which redeems it with
+    ``POST /v1/identities/{provider}/{external_id}/redeem``: that proves the account
+    is yours without the integration ever seeing your password. Making a new code
+    cancels the previous one.
+    """
+    minutes = request.app.state.settings.api.link_code_minutes
+    code, expires = ops.link_code_create(me.user_id, minutes)
+    return {"code": code, "expires_at": expires.isoformat()}
+
+
 # --- Users ---
 
 
@@ -510,16 +549,40 @@ def get_user_by_identity(provider: str, external_id: str, me: Principal = Depend
 # 200, not 201, like POST /v1/games: this is get-or-create, and most calls get.
 @v1.post("/identities/{provider}/{external_id}")
 def get_or_create_user_by_identity(
-    provider: str, external_id: str, body: UsernameBody, me: Principal = Depends(current_principal)
+    provider: str, external_id: str, body: IdentityCreate, me: Principal = Depends(current_principal)
 ):
+    """``on_conflict: "suffix"`` takes ``username_1``, ``username_2``, ... when the name is taken."""
     require_admin(me)
-    return _user_out(ops.user_get_or_create_by_identity(provider, external_id, body.username), me)
+    return _user_out(
+        ops.user_get_or_create_by_identity(provider, external_id, body.username, on_conflict=body.on_conflict), me
+    )
+
+
+@v1.post("/identities/{provider}/{external_id}/redeem")
+def redeem_link_code(
+    request: Request, provider: str, external_id: str, body: LinkCodeRedeem, me: Principal = Depends(current_principal)
+):
+    """
+    Link an outside id to the user who made a link code (``POST /auth/link-code``).
+
+    Admin-only, like linking: the caller (a bot) vouches for the outside id, and
+    the code proves the chesssnake account. An id linked to another user moves;
+    the answer's ``previous_user_id`` says from whom.
+    """
+    require_admin(me)
+    user, previous = ops.link_code_redeem(body.code, provider, external_id)
+    _broker(request).identity_linked(int(user["id"]), provider, external_id, previous)
+    return {"user": _user_out(user, me), "previous_user_id": previous}
 
 
 @v1.put("/users/{user_id}/identities/{provider}/{external_id}")
-def link_identity(user_id: int, provider: str, external_id: str, me: Principal = Depends(current_principal)):
+def link_identity(
+    request: Request, user_id: int, provider: str, external_id: str, me: Principal = Depends(current_principal)
+):
     require_admin(me)
-    return _user_out(ops.identity_link(user_id, provider, external_id), me)
+    user = ops.identity_link(user_id, provider, external_id)
+    _broker(request).identity_linked(user_id, provider, external_id, None)
+    return _user_out(user, me)
 
 
 @v1.delete("/users/{user_id}/identities/{provider}/{external_id}")
@@ -537,12 +600,35 @@ def unlink_identity(user_id: int, provider: str, external_id: str, me: Principal
     return _user_out(ops.identity_unlink(user_id, provider, external_id), me)
 
 
+# --- Group admins ---
+
+
+@v1.get("/groups/{group_id}/admins")
+def list_group_admins(group_id: int, me: Principal = Depends(current_principal)):
+    """Who administers a group's games. For global admins and that group's admins."""
+    require_group_admin(me, group_id)
+    return {"users": [_user_out(row, me) for row in ops.group_admins_list(group_id)]}
+
+
+@v1.put("/groups/{group_id}/admins/{user_id}")
+def add_group_admin(group_id: int, user_id: int, me: Principal = Depends(current_principal)):
+    """Global admins only: let a user administer one group's games."""
+    require_admin(me)
+    return _user_out(ops.group_admin_add(group_id, user_id), me)
+
+
+@v1.delete("/groups/{group_id}/admins/{user_id}")
+def remove_group_admin(group_id: int, user_id: int, me: Principal = Depends(current_principal)):
+    require_admin(me)
+    return _user_out(ops.group_admin_remove(group_id, user_id), me)
+
+
 # --- Challenges ---
 
 
 @v1.post("/challenges", status_code=201)
 def create_challenge(request: Request, body: ChallengeCreate, me: Principal = Depends(current_principal)):
-    challenger = acting_as(me, body.player_id)
+    challenger = acting_as(me, body.player_id, group_id=body.group_id)
     challenge = Challenge.from_row(
         ops.challenge_create(challenger, body.opponent_id, body.group_id, COLORS[body.color])
     ).to_dict()
@@ -576,15 +662,17 @@ def accept_challenge(
 ):
     challenge = _require_challenge(challenge_id, me)
     player_id = body.player_id if body is not None else None
-    if player_id is None and me.is_admin and me.user_id not in (challenge["challenger_id"], challenge["challenged_id"]):
+    group_id = int(challenge["group_id"])
+    if player_id is None and me.user_id not in (challenge["challenger_id"], challenge["challenged_id"]):
         # Only the challenged player can accept, so that is who an admin acts as.
+        # (_require_challenge already refused anyone who neither plays nor administers.)
         player_id = challenge["challenged_id"]
-    actor = acting_as(me, player_id)
+    actor = acting_as(me, player_id, group_id=group_id)
     state = GameState.from_row(ops.challenge_accept(challenge_id, INITIAL_FEN, accepted_by=actor)).to_dict()
     # From the challenge read before accepting: accepting deletes the row.
     broker = _broker(request)
     broker.challenge("removed", Challenge.from_row(challenge).to_dict())
-    broker.game_started(state)
+    broker.game_started(state, who=_who(me, actor))
     return state
 
 
@@ -603,13 +691,13 @@ def delete_challenge(request: Request, challenge_id: int, me: Principal = Depend
 
 @v1.post("/games")
 def create_game(request: Request, body: GameCreate, me: Principal = Depends(current_principal)):
-    """Admin-only: start (or fetch) a game directly, without a challenge."""
-    require_admin(me)
+    """Admins and the group's admins: start (or fetch) a game directly, without a challenge."""
+    require_group_admin(me, body.group_id)
     state = GameState.from_row(ops.game_get_or_create(body.group_id, body.white_id, body.black_id, INITIAL_FEN))
     if state.version == 1:
         # Published even when this fetched a game nobody has moved in yet: the
         # players cannot know its id in advance, and a repeat is harmless.
-        _broker(request).game_started(state.to_dict())
+        _broker(request).game_started(state.to_dict(), who=_who(me, None))
     return state.to_dict()
 
 
@@ -635,9 +723,9 @@ def games_between(
 
 
 @v1.get("/games/live")
-def live_games(limit: int = Query(50, ge=1, le=ops.LIST_LIMIT_MAX)):
-    """Every game in progress, in any group, most recently changed first: what spectators browse."""
-    return {"games": [GameState.from_row(row).to_dict() for row in ops.games_live(limit)]}
+def live_games(limit: int = Query(50, ge=1, le=ops.LIST_LIMIT_MAX), group_id: int | None = None):
+    """Every game in progress (in one group, with ``group_id``), most recently changed first."""
+    return {"games": [GameState.from_row(row).to_dict() for row in ops.games_live(limit, group_id)]}
 
 
 @v1.get("/games/finished")
@@ -645,9 +733,11 @@ def finished_games(
     player_id: int | None = None,
     limit: int = Query(50, ge=1, le=ops.LIST_LIMIT_MAX),
     before: int | None = None,
+    group_id: int | None = None,
 ):
-    """Finished games, newest first; ``before`` (a game id) pages back, ``player_id`` narrows to one player."""
-    rows = ops.games_finished(player_id, limit, before)
+    """Finished games, newest first; ``before`` (a game id) pages back, ``player_id``
+    narrows to one player and ``group_id`` to one group."""
+    rows = ops.games_finished(player_id, limit, before, group_id)
     return {"games": [GameState.from_row(row).to_dict() for row in rows]}
 
 
@@ -663,10 +753,11 @@ def get_game(game_id: int):
 
 @v1.delete("/games/{game_id}", status_code=204)
 def delete_game(request: Request, game_id: int, me: Principal = Depends(current_principal)):
-    require_admin(me)
+    group_id = int(_require_game(game_id)["group_id"])
+    require_group_admin(me, group_id)
     if not ops.game_delete(game_id):
         raise errors.GameNotFoundError(f"No game with id {game_id}")
-    _broker(request).game_removed(game_id)
+    _broker(request).game_removed(game_id, group_id)
     return Response(status_code=204)
 
 
@@ -682,7 +773,13 @@ def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = De
             raise errors.NotYourTurnError(f"It is not player {actor}'s turn to move")
         m = game.move(body.move)  # runs the engine; raises ChessError on illegal input
         san = game.move_history[-1]
-        state, change = _change(game, row, now, new_moves=[(history["max_ply"] + 1, san, game._position_history[-1])])
+        state, change = _change(
+            game,
+            row,
+            now,
+            new_moves=[(history["max_ply"] + 1, san, game._position_history[-1])],
+            last_move=(m.uci, san),
+        )
         change.result = MoveResult(
             state=state,
             from_square=m.from_square,
@@ -699,7 +796,13 @@ def play_move(request: Request, game_id: int, body: MoveBody, me: Principal = De
 
     result = ops.apply_game_change(game_id, mutate, body.expected_version)
     # After the commit: a socket must never hear of a move the database refused.
-    _broker(request).game_changed(result.state.to_dict(), _move_summary(result), legal_moves=result.legal_moves)
+    # The mover is whoever was to move, when an admin named nobody.
+    mover = (
+        actor if actor is not None else (result.state.black_id if result.state.to_move == 0 else result.state.white_id)
+    )
+    _broker(request).game_changed(
+        result.state.to_dict(), _move_summary(result), legal_moves=result.legal_moves, who=_who(me, mover)
+    )
     return result.to_dict()
 
 
@@ -712,7 +815,7 @@ def _draw_or_resign(request, game_id, body, me, method):
         return _change(game, row, now)[1]
 
     state = ops.apply_game_change(game_id, mutate, body.expected_version).to_dict()
-    _broker(request).game_changed(state)
+    _broker(request).game_changed(state, who=_who(me, actor))
     return state
 
 
@@ -766,27 +869,33 @@ def fen(game_id: int):
 
 
 @lru_cache(maxsize=64)
-def _board_png(fen: str, white_name: str, black_name: str, perspective: str | None) -> bytes:
+def _board_png(
+    fen: str, white_name: str, black_name: str, perspective: str | None, last_from=None, last_to=None
+) -> bytes:
     """
     The PNG for a position, cached: the 64 most recent images, about 100 KB each.
 
-    These four values are everything the image shows (a server image has no
-    last-move highlight), so the key is complete, and a rename or a move gives a new
+    These values are everything the image shows (the last move's squares are
+    highlighted), so the key is complete, and a rename or a move gives a new
     key. Repeated views of a position, from spectators, refreshes or a bot posting
     the board again, skip rendering and encoding (together about 40 ms).
     ``compress_level=1`` encodes a third faster than PNG's default for about a
     tenth more bytes.
     """
-    game = EngineGame(board=Board.from_fen(fen), white_name=white_name, black_name=black_name)
+    move = {"from": last_from, "to": last_to} if last_from else None
+    image = render_board(Board.from_fen(fen), white_name, black_name, move=move, perspective=perspective)
     buffer = io.BytesIO()
-    game.render(perspective=perspective).save(buffer, format="PNG", compress_level=1)
+    image.save(buffer, format="PNG", compress_level=1)
     return buffer.getvalue()
 
 
 @v1.get("/games/{game_id}/image")
 def game_image(game_id: int, perspective: Literal["white", "black"] | None = None):
     row = _require_game(game_id)
-    png = _board_png(row["fen"], row["white_name"] or "", row["black_name"] or "", perspective)
+    last = row.get("last_move") or {}
+    png = _board_png(
+        row["fen"], row["white_name"] or "", row["black_name"] or "", perspective, last.get("from"), last.get("to")
+    )
     return Response(content=png, media_type="image/png")
 
 

@@ -22,6 +22,13 @@ see ``docs/websocket-api.md``), the stream adds its own:
   off, the server refused the origin, or :meth:`close`);
 - ``{"type": "auth_error", "detail": ...}``: the token was revoked or expired.
 
+Administrators can :meth:`EventStream.follow` every game (``all=True``), and a
+group's admins that group's games, instead of subscribing to each: the feed
+carries every game event, new games included.
+
+For asyncio programs, :class:`~chesssnake.remote.async_realtime.AsyncEventStream`
+is the same stream as a task and an async iterator.
+
 Needs the ``websockets`` package (in the ``client`` extra), imported only when a
 stream is made, so local games and polling clients never need it.
 """
@@ -88,6 +95,8 @@ class EventStream:
         self._token = client.token
         self._open_timeout = open_timeout
         self._wanted: set[int] = {int(g) for g in games}
+        #: Feeds followed: group ids, and ``None`` for every game.
+        self._follows: set[int | None] = set()
         self._lock = threading.Lock()
         self._queue: queue.Queue[dict] = queue.Queue()
         self._read_fd, self._write_fd = os.pipe()
@@ -131,6 +140,24 @@ class EventStream:
             self._wanted.discard(int(game_id))
         self._send({"type": "unsubscribe", "game": int(game_id)})
 
+    def follow(self, group: int | None = None, *, all: bool = False) -> None:
+        """
+        Follow a feed: every game event in ``group`` (for its admins and for
+        administrators), or with ``all=True`` in every group (administrators). Kept
+        across reconnects; answered with ``following``, or an ``error`` with code
+        ``forbidden``.
+        """
+        target = _feed_target(group, all)
+        with self._lock:
+            self._follows.add(target)
+        self._send(_feed_message("follow", target))
+
+    def unfollow(self, group: int | None = None, *, all: bool = False) -> None:
+        target = _feed_target(group, all)
+        with self._lock:
+            self._follows.discard(target)
+        self._send(_feed_message("unfollow", target))
+
     def close(self) -> None:
         """Stop for good. Safe to call more than once."""
         if self._closed.is_set():
@@ -172,8 +199,11 @@ class EventStream:
                 raise RealtimeUnavailable(f"unexpected first message from the server: {first.get('type')!r}")
             with self._lock:
                 wanted = sorted(self._wanted)
+                follows = list(self._follows)
             for game_id in wanted:
                 ws.send(json.dumps({"type": "subscribe", "game": game_id}))
+            for target in follows:
+                ws.send(json.dumps(_feed_message("follow", target)))
             return ws
         except BaseException as e:
             code = _close_code(e)
@@ -270,6 +300,17 @@ class EventStream:
             ws.send(json.dumps(message))
         except Exception:
             pass
+
+
+def _feed_target(group, all_):
+    if all_ == (group is not None):
+        raise ValueError("Pass a group id, or all=True")
+    return None if all_ else int(group)
+
+
+def _feed_message(kind: str, target) -> dict:
+    """``follow``/``unfollow`` for a group id, or for every game when ``target`` is ``None``."""
+    return {"type": kind, "all": True} if target is None else {"type": kind, "group": target}
 
 
 def _close_code(exc) -> int | None:

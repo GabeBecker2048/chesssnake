@@ -4,9 +4,11 @@ The engine API is pinned in ``tests/unit/test_public_engine_api.py``. This pins
 everything else a user can depend on:
 
 - the Python API: ``chesssnake.__all__``, ``Game``'s methods and attributes, the
-  factory and ``connect`` signatures, every ``ApiClient`` method signature, the
-  payload dataclasses' fields, the live-update stream, and the error class names
-  (which are the wire's ``error_type``);
+  factory and ``connect`` signatures, every ``ApiClient``, ``AsyncApiClient`` and
+  ``PlayerClient`` method signature (inherited ones included: the routes live on a
+  shared base class), the payload dataclasses' fields and ``GameState``'s
+  accessors, both live-update streams, the ``chesssnake.testing`` server, and the
+  error class names (which are the wire's ``error_type``);
 - the REST API: every route with its query parameters and body fields, and the
   websocket route;
 - configuration and the command line: every setting and its environment variable,
@@ -36,12 +38,22 @@ def _public(names):
     return sorted(n for n in names if not n.startswith("_"))
 
 
+def _methods(cls) -> dict:
+    """Public callables of a class, inherited ones too, with their signatures."""
+    return {
+        name: str(inspect.signature(member))
+        for name, member in sorted(inspect.getmembers(cls))
+        if not name.startswith("_") and callable(member) and not isinstance(member, type)
+    }
+
+
 def python_surface() -> dict:
     import chesssnake
-    from chesssnake import ApiClient, Game, connect, dto
+    from chesssnake import ApiClient, AsyncApiClient, Game, PlayerClient, connect, dto
     from chesssnake.db import errors as db_errors
     from chesssnake.engine import errors as engine_errors
-    from chesssnake.remote import realtime
+    from chesssnake.remote import async_realtime, realtime
+    from chesssnake.testing import TestServer
 
     game = Game.local(white_name="w", black_name="b")
     game.move("e4")
@@ -53,16 +65,20 @@ def python_surface() -> dict:
             "connect": str(inspect.signature(connect)),
             **{f"Game.{n}": str(inspect.signature(getattr(Game, n))) for n in ("local", "remote", "from_state")},
         },
-        "ApiClient": {
-            name: str(inspect.signature(member))
-            for name, member in sorted(vars(ApiClient).items())
-            if not name.startswith("_") and callable(member)
-        },
+        "ApiClient": _methods(ApiClient),
+        "AsyncApiClient": _methods(AsyncApiClient),
+        "PlayerClient": _methods(PlayerClient),
+        "GameState accessors": sorted(
+            n for n, o in vars(dto.GameState).items() if not n.startswith("_") and isinstance(o, property)
+        )
+        + sorted(n for n, o in vars(dto.GameState).items() if not n.startswith("_") and inspect.isfunction(o)),
+        "TestServer": _methods(TestServer),
         "payloads": {
             name: [f.name for f in dataclasses.fields(getattr(dto, name))]
             for name in ("Challenge", "GameState", "LoginResult", "MoveResult", "TokenInfo", "User")
         },
         "EventStream": _public(vars(realtime.EventStream)),
+        "AsyncEventStream": _public(vars(async_realtime.AsyncEventStream)),
         "error types": {
             "chess (400)": sorted(
                 n

@@ -107,6 +107,19 @@ jobs:
       - name: Tests with coverage gate
         run: uv run --extra api --extra client --extra postgres --group pg pytest --cov --cov-report=term-missing --cov-fail-under=75
 
+  # Every server route has a method on the Python clients (ApiClient and
+  # AsyncApiClient). Advisory: a red result is a note that the client is behind,
+  # not a reason to block a merge, so it may fail and all-green does not need it.
+  client-coverage:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv run --extra api --extra client --no-group pg pytest -m client_coverage tests/config
+
   # The docs site (docs/) builds with GitHub Pages' own builder, and every internal
   # link and anchor in it resolves. The built site is kept as an artifact to look at.
   docs:

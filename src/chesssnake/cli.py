@@ -251,6 +251,10 @@ def _run_user(args):
                 user = lookup(user["id"])
             elif args.action in ("disable", "enable"):
                 user = ops.user_set_disabled(lookup(args.user)["id"], args.action == "disable")
+            elif args.action == "group-admin":
+                user_id = lookup(args.user)["id"]
+                change = ops.group_admin_remove if args.remove else ops.group_admin_add
+                user = change(args.group, user_id)
             else:  # token
                 user = lookup(args.user)
                 raw, token = ops.token_create(
@@ -371,6 +375,18 @@ def _run_whoami(args):
     with _client_errors():
         me = client.me()
     print(f"{me.username} (id {me.id}, {me.role}) on {client.base_url}")
+
+
+def _run_link_code(args):
+    client = _connect(args)
+    with _client_errors():
+        made = client.link_code()
+    print(made["code"])
+    print(
+        f"Give this code to the bot (e.g. a Discord /link command) to link that account to yours. "
+        f"It works once, until {made['expires_at']}.",
+        file=sys.stderr,
+    )
 
 
 def _run_games(args):
@@ -602,6 +618,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     whoami = subparsers.add_parser("whoami", help="who you are logged in as", parents=[endpoint])
     whoami.set_defaults(func=_run_whoami)
+    link_code = subparsers.add_parser(
+        "link-code",
+        help="make a one-time code that links an outside account (e.g. Discord) to yours",
+        parents=[endpoint],
+    )
+    link_code.set_defaults(func=_run_link_code)
 
     games = subparsers.add_parser("games", help="your games in progress", parents=[endpoint])
     games.add_argument("--group", type=int, help="only this group")
@@ -727,6 +749,12 @@ def build_parser() -> argparse.ArgumentParser:
     for action, blurb in (("disable", "disable a user and revoke their tokens"), ("enable", "re-enable a user")):
         toggle = user_actions.add_parser(action, help=blurb, parents=[user_common])
         toggle.add_argument("user", type=_player, metavar="ID_OR_USERNAME")
+    group_admin = user_actions.add_parser(
+        "group-admin", help="let a user administer one group's games (or stop, with --remove)", parents=[user_common]
+    )
+    group_admin.add_argument("user", type=_player, metavar="ID_OR_USERNAME")
+    group_admin.add_argument("group", type=int, help="the group id, e.g. a Discord server's id")
+    group_admin.add_argument("--remove", action="store_true", help="take the group away instead")
     token = user_actions.add_parser(
         "token", help="create an api token for a user and print it once (e.g. for a bot)", parents=[user_common]
     )

@@ -19,6 +19,7 @@ EXPECTED_ENV_NAMES = {
     ("api", "port"): "CHESSSNAKE__API__PORT",
     ("api", "registration"): "CHESSSNAKE__API__REGISTRATION",
     ("api", "session_lifetime_days"): "CHESSSNAKE__API__SESSION_LIFETIME_DAYS",
+    ("api", "link_code_minutes"): "CHESSSNAKE__API__LINK_CODE_MINUTES",
     ("api", "docs"): "CHESSSNAKE__API__DOCS",
     ("database", "url"): "CHESSSNAKE__DATABASE__URL",
     ("web", "enabled"): "CHESSSNAKE__WEB__ENABLED",

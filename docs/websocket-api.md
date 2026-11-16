@@ -30,7 +30,9 @@ Every message, both ways, is JSON with a `"type"`.
 4. Send `subscribe` for each game you want to follow. Any logged-in user may
    follow any game.
 
-One socket can follow many games.
+One socket can follow many games. An administrator can instead `follow` every
+game on the server, and a [group admin](accounts.html#group-admins) every game
+of their group: see [Following a feed](#following-a-feed).
 
 ## Messages you send
 
@@ -39,6 +41,9 @@ One socket can follow many games.
 | `{"type": "auth", "token": "css_..."}` | Log in. The first message, and only then. |
 | `{"type": "subscribe", "game": 41}` | Follow a game. Answered with `subscribed`. |
 | `{"type": "unsubscribe", "game": 41}` | Stop following it. |
+| `{"type": "follow", "all": true}` | Administrators: hear about every game. Answered with `following`. |
+| `{"type": "follow", "group": 7}` | Administrators and that group's admins: every game of group 7. |
+| `{"type": "unfollow", "all": true}` or `{"type": "unfollow", "group": 7}` | Stop. Answered with `unfollowed`. |
 | `{"type": "ping"}` | Answered with `{"type": "pong"}`. |
 
 ## Messages you receive
@@ -84,7 +89,12 @@ nothing more to fetch.
   offer, a draw answer or a resignation.
 - `legal_moves` comes with a move: what the side now to move can play. Treat
   it as optional.
-- The game is over when `state.status` is not `0`.
+- `actor_id` is the player the change was made as, and `requested_by` the user
+  whose token sent it. They differ when a bot or an administrator acts for a
+  player: a bot can skip its own changes by comparing `requested_by` with its
+  own id.
+- The game is over when `state.status` is not `0`. `state.last_move` is the last
+  move played, also on draw and resignation events.
 
 Your own moves come back as events too.
 
@@ -96,6 +106,8 @@ Your own moves come back as events too.
 
 A game **you play in** began: a challenge was accepted, or an administrator
 made the game. Sent without subscribing. Subscribe to it to follow it.
+`actor_id` (the player who accepted, or `null` for a game an administrator
+made) and `requested_by` say who started it, as for `game`.
 
 ### challenge
 
@@ -103,8 +115,8 @@ made the game. Sent without subscribing. Subscribe to it to follow it.
 {"type": "challenge", "event": "created", "challenge": { }}
 ```
 
-A challenge to or from you was `created` or `removed` (accepted, declined or
-withdrawn).
+A challenge to or from you (or in a group you follow) was `created` or
+`removed` (accepted, declined or withdrawn).
 
 ### game_removed
 
@@ -120,14 +132,45 @@ An administrator deleted a game you follow.
 {"type": "error", "code": "not_found", "detail": "no game with id 999"}
 ```
 
-A `subscribe` could not be done. The socket stays open.
+A `subscribe` or `follow` could not be done. The socket stays open.
 
 | `code` | Meaning |
 |---|---|
 | `bad_game` | `game` is not a game id. |
 | `not_found` | There is no game with that id. |
 | `too_many_subscriptions` | This socket follows as many games as it may. |
+| `bad_feed` | `follow` needs `"group": id` or `"all": true`. |
+| `forbidden` | Only administrators, or that group's admins, may follow it. |
 | `busy` | The server was busy: try again shortly. |
+
+## Following a feed
+
+A bot that plays for many people, or a moderator, wants every game rather than
+a list of ids. After `{"type": "follow", "all": true}` (or `"group": 7`) the
+socket receives, for every game in scope, the same `game`, `game_started`,
+`game_removed` and `challenge` messages a player would, new games included, with
+nothing to subscribe to:
+
+```json
+{"type": "following", "all": true}
+```
+
+Each event arrives once, even when a game is also subscribed to. A feed is not
+a subscription: it does not count against `max_subscriptions`, sends no
+snapshot, and `subscribe` still works for a game's current state. Administrators
+following everything also receive:
+
+```json
+{"type": "identity_linked", "user_id": 12, "provider": "discord", "external_id": "1844...", "previous_user_id": 9}
+```
+
+when an outside id is linked to a user (by an administrator or a
+[link code](accounts.html#link-codes)); `previous_user_id` is who had it before,
+or `null`.
+
+A group admin who loses the role is told at the next token check (at once if
+the change was made through the API), with
+`{"type": "unfollowed", "group": 7, "reason": "..."}`, and hears no more.
 
 ## What you can rely on
 

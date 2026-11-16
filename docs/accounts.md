@@ -20,16 +20,35 @@ be done from the Admin page in the browser.
 
 ## Users and administrators
 
-| | User | Administrator |
-|---|---|---|
-| Play, challenge, watch any game | yes | yes |
-| Rename themselves, change their password, make api tokens | yes | yes |
-| Create, rename, disable accounts and reset passwords | no | yes |
-| Start a game between any two players, delete games | no | yes |
-| Move, resign or challenge on a player's behalf | no | yes |
-| Link an account to an outside id, such as Discord | no | yes |
+| | User | Group admin | Administrator |
+|---|---|---|---|
+| Play, challenge, watch any game | yes | yes | yes |
+| Rename themselves, change their password, make api tokens and link codes | yes | yes | yes |
+| Start a game between any two players, delete games | no | in their group | yes |
+| Move, resign, offer draws, challenge or accept on a player's behalf | no | in their group | yes |
+| Hear every game event of a group over [live updates](live-updates.html) | no | their group | every group |
+| Create, rename, disable accounts and reset passwords | no | no | yes |
+| Link an account to an outside id, such as Discord | no | no | yes |
+| Make someone a group admin | no | no | yes |
 
 The last enabled administrator cannot be demoted or disabled.
+
+## Group admins
+
+Games belong to a group: a number that keeps communities apart, such as a
+Discord server's id (the web UI's games are group `0`). A group admin manages
+the games of one group and nothing else: a community's moderators, without the
+power to touch accounts or any other group. An administrator grants it:
+
+```sh
+chesssnake user group-admin bob 184405311681986560          # on the server's machine
+chesssnake user group-admin bob 184405311681986560 --remove
+```
+
+or with the [Python client](python-client.html) (`add_group_admin`,
+`remove_group_admin`, `group_admins`) and the [REST API](rest-api.html). A
+group admin can be one for several groups. The web UI's Admin page is for
+administrators only; group admins work through the API or a bot.
 
 ## The Admin page
 
@@ -78,6 +97,15 @@ the Account page.
 | An administrator resets your password | all end | all end |
 | An administrator disables you | all end | all end |
 
+## Link codes
+
+A bot that knows your Discord id (or another outside account) plays as you once
+that id is linked to your account. To link it yourself, make a **link code** on
+the Account page under **Linked accounts** (or run `chesssnake link-code`) and
+give it to the bot, for example with its `/link` command. The code works once,
+for ten minutes (`api.link_code_minutes`); making another cancels it. The bot
+never sees your password. You can unlink an account on the same page.
+
 ## Managing accounts from the command line
 
 `chesssnake user` works straight on the database, so it needs no login and
@@ -94,6 +122,7 @@ chesssnake user set-password bob           # also logs bob out everywhere
 chesssnake user disable bob
 chesssnake user enable bob
 chesssnake user link bob discord 184405311681986560
+chesssnake user group-admin bob 184405311681986560   # see Group admins
 chesssnake user token bob --name my-script --expires-days 90
 ```
 

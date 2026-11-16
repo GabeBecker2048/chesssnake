@@ -122,6 +122,12 @@ class ApiSettings(_Section):
         default=True,
         description="Serve the interactive API docs (/docs, /redoc) and the OpenAPI schema (/openapi.json).",
     )
+    link_code_minutes: int = Field(
+        default=10,
+        ge=1,
+        le=1440,
+        description="Minutes a link code (made to link an outside account, such as Discord) stays valid.",
+    )
 
 
 class DatabaseSettings(_Section):

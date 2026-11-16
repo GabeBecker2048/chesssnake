@@ -38,8 +38,9 @@ export async function render(main, _params, ctx) {
           "div",
           { class: "card" },
           h("h2", {}, "Linked accounts"),
-          h("p", { class: "muted small" }, "Other accounts that are you, such as Discord: a bot that knows one plays as you. An administrator links them (or a bot's /link command); you can unlink any here."),
+          h("p", { class: "muted small" }, "Other accounts that are you, such as Discord: a bot that knows one plays as you. To link one, make a link code and give it to the bot (on Discord, its /link command). You can unlink any here."),
           linked,
+          h("button", { onclick: makeLinkCode }, "Make a link code"),
         ),
         passwordForm(),
         h(
@@ -95,6 +96,19 @@ export async function render(main, _params, ctx) {
     );
   }
 
+  async function makeLinkCode() {
+    try {
+      const made = await post("/auth/link-code");
+      revealSecret(
+        "Your link code",
+        `Give this to the bot, for example with /link on Discord. It works once, until ${new Date(made.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. Making another code cancels this one. Never post it where others can see.`,
+        made.code,
+      );
+    } catch (err) {
+      showError(err);
+    }
+  }
+
   async function loadLinked() {
     const me = await get("/auth/me");
     replace(linked);
@@ -107,7 +121,7 @@ export async function render(main, _params, ctx) {
           { class: "row" },
           h("span", { class: "grow identity" }, label),
           h("button", { class: "small danger", onclick: async () => {
-            if (!(await confirmAction(`Unlink ${label}?`, "A bot that knows this account will no longer play as you. Only an administrator can link it again.", "Unlink"))) return;
+            if (!(await confirmAction(`Unlink ${label}?`, "A bot that knows this account will no longer play as you. You can link it again with a new link code.", "Unlink"))) return;
             try {
               await del(`/users/${ctx.me.id}/identities/${encodeURIComponent(identity.provider)}/${encodeURIComponent(identity.external_id)}`);
               toast(`Unlinked ${label}`);

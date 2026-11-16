@@ -46,6 +46,10 @@ the server every few seconds instead.
   no `uvicorn --workers`, no replicas behind a load balancer.
 - **Limits.** By default 1000 connections in total and 10 per user. An idle
   connection costs about 56 KiB of memory.
+- **Bots.** An administrator's connection can follow every game at once, and a
+  [group admin's](accounts.html#group-admins) every game of their group, so a
+  bot hears moves made in the browser without asking for each game. See
+  [Bots](bots.html).
 - **Browsers on another site.** If a web page served from a different address
   connects to your server, list that address in `websocket.allowed_origins`.
   The built-in web UI needs nothing.

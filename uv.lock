@@ -306,7 +306,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/93/09/7d04d7581ae3bb8b5
 
 [[package]]
 name = "chesssnake"
-version = "0.15.3"
+version = "0.15.4"
 source = { editable = "." }
 dependencies = [
     { name = "pillow" },
@@ -321,6 +321,7 @@ api = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 client = [
+    { name = "httpx" },
     { name = "requests" },
     { name = "websockets" },
 ]
@@ -353,13 +354,14 @@ pg = [
 requires-dist = [
     { name = "argon2-cffi", marker = "extra == 'api'", specifier = ">=23.1" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110" },
+    { name = "httpx", marker = "extra == 'client'", specifier = ">=0.27" },
     { name = "pillow", specifier = ">=11.3" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", marker = "extra == 'api'", specifier = ">=2.0" },
     { name = "requests", marker = "extra == 'client'", specifier = ">=2.31" },
     { name = "sqlalchemy", marker = "extra == 'api'", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.29" },
-    { name = "websockets", marker = "extra == 'client'", specifier = ">=12" },
+    { name = "websockets", marker = "extra == 'client'", specifier = ">=13" },
 ]
 provides-extras = ["client", "api", "postgres"]
 

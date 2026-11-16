@@ -155,6 +155,16 @@ class Principal:
     def is_admin(self) -> bool:
         return self.role == ops.ROLE_ADMIN
 
+    def administers(self, group_id: int | None) -> bool:
+        """
+        Whether this principal may administer the games of ``group_id``: a global
+        administrator always, anyone else if they are one of the group's admins.
+        A database read for a non-admin, so it is only asked when it matters.
+        """
+        if self.is_admin:
+            return True
+        return group_id is not None and ops.is_group_admin(self.user_id, group_id)
+
 
 def authenticate(raw_token: str | None) -> Principal:
     """
@@ -203,14 +213,23 @@ def require_admin(principal: Principal) -> None:
         raise errors.ForbiddenError("Only an administrator can do that")
 
 
-def acting_as(principal: Principal, player_id: int | None, *, participants=None, require_actor=True) -> int | None:
+def require_group_admin(principal: Principal, group_id: int) -> None:
+    """:raises errors.ForbiddenError: Unless the principal administers ``group_id``'s games."""
+    if not principal.administers(group_id):
+        raise errors.ForbiddenError("Only an administrator of this group can do that")
+
+
+def acting_as(
+    principal: Principal, player_id: int | None, *, participants=None, require_actor=True, group_id=None
+) -> int | None:
     """
     Decide which user an action is performed as.
 
     - A non-admin always acts as themselves; naming anyone else is a 403.
     - An admin acts as an explicitly named ``player_id`` (how an integration such
       as a Discord bot plays for its users), as long as that user exists and is
-      not disabled.
+      not disabled. An admin of ``group_id`` (a group admin) may too, for an
+      action in that group; "admin" below means either.
     - An admin who names nobody acts as themselves when they are one of
       ``participants`` (or when there are none to choose from). Otherwise, with
       ``require_actor=False``, the result is ``None``, meaning "whoever the rules
@@ -219,18 +238,25 @@ def acting_as(principal: Principal, player_id: int | None, *, participants=None,
 
     :param participants: The users the action concerns (a game's two players),
         or ``None`` when it is not about anyone in particular.
+    :param group_id: The group the action is in, for group admins; ``None``
+        when it is in no group (only global admins may then act for others).
     :raises errors.ForbiddenError: If a non-admin names another user, or the
         named user is disabled.
     :raises errors.UserNotFoundError: If an admin names a user that does not exist.
     :raises errors.UserValidationError: If an admin must name a player and did not.
     """
     if player_id is None or player_id == principal.user_id:
-        if player_id is None and principal.is_admin and participants and principal.user_id not in participants:
+        if (
+            player_id is None
+            and participants
+            and principal.user_id not in participants
+            and principal.administers(group_id)
+        ):
             if require_actor:
                 raise errors.UserValidationError("An administrator acting in someone else's game must give player_id")
             return None
         return principal.user_id
-    if not principal.is_admin:
+    if not principal.administers(group_id):
         raise errors.ForbiddenError("You can only act as yourself")
     target = ops.user_get(player_id)
     if target is None:

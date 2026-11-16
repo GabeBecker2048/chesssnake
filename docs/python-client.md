@@ -28,6 +28,25 @@ finds:
 `api_url` can be left out when `CHESSSNAKE__CLIENT__API_URL` is set. If no
 login is found, it raises `AuthError`.
 
+## Async
+
+For an asyncio program (most chat bots, web servers), ask for the async client.
+It has every method of the blocking one, with the same names and arguments;
+you `await` them:
+
+```python
+client = connect("https://chess.example", token="css_...", asynchronous=True)
+
+async with client:
+    state = await client.get_game(41)
+    result = await client.move(state, "e4")
+```
+
+It cannot log in with a password inside `connect`, which is not async: pass a
+token, or make `AsyncApiClient(url)` and `await client.login(username, password)`.
+`Game.remote` is blocking only; with the async client, work with the
+[game state](#game-state) the methods return.
+
 ## Starting a game
 
 Games start with a challenge that the other player accepts:
@@ -68,6 +87,21 @@ Besides chess errors, a move can raise `NotYourTurnError`, and
 
 A finished game keeps its id and stays readable. A rematch is a new challenge.
 
+## Game state
+
+Methods that return a game give a `GameState`. Besides its fields (the
+[REST API's data](rest-api.html#data)), it answers the usual questions with the
+library's enums, so you never read the FEN yourself:
+
+```python
+state = client.get_game(41)
+state.to_move            # Color.WHITE or Color.BLACK
+state.is_over, state.result, state.winner, state.ending   # GameStatus, Color, Termination
+state.draw_offered_by    # Color, or None
+state.last_move          # {"from": "e2", "to": "e4", "san": "e4", "promotion": None}
+state.color_of(user_id), state.player_id(Color.WHITE), state.player_name("black")
+```
+
 ## Waiting for the opponent
 
 Either poll:
@@ -93,9 +127,23 @@ with client.events(games=[game.id]) as stream:    # RealtimeUnavailable if they 
                 game.refresh()
 ```
 
+With the async client the stream is an async iterator:
+
+```python
+async with client.events(games=[41]) as stream:
+    async for event in stream:
+        if event["type"] == "game":
+            print(event["state"]["last_move"])
+```
+
 The stream reconnects by itself. The events are described in
 [Websocket API](websocket-api.html#messages-you-receive); the stream adds
 `disconnected`, `reconnected`, `ended` and `auth_error` of its own.
+
+An administrator can `stream.follow(all=True)` to hear every game on the server,
+and a [group admin](accounts.html#group-admins) can `stream.follow(group=7)` for
+their group, instead of subscribing to games one by one (with the async stream,
+`await` both).
 
 ## Everything else
 
@@ -103,13 +151,15 @@ The client has a method for everything the server can do.
 
 | | Methods |
 |---|---|
-| You | `me()`, `change_password(current, new)`, `settings()`, `update_settings(...)`, `logout()` |
+| The server | `info()` (needs no login) |
+| You | `me()`, `change_password(current, new)`, `settings()`, `update_settings(...)`, `link_code()`, `logout()` |
 | Tokens | `create_token(name, current_password, expires_in_days=None)`, `tokens()`, `revoke_token(id)` |
 | Challenges | `challenge(opponent, group_id=0, color="random")`, `challenges(direction="all")`, `get_challenge(id)`, `accept_challenge(id)`, `decline_challenge(id)`, `withdraw_challenge(id)` |
-| Finding games | `current_games()`, `get_game(id)`, `games_between(a, b)`, `record(a, b)` |
+| Finding games | `current_games()`, `get_game(id)`, `live_games(limit=50, group_id=None)`, `finished_games(player=None, limit=50, before=None, group_id=None)`, `games_between(a, b)`, `record(a, b)` |
 | One game | `move(id, move)`, `resign(id)`, `offer_draw(id)`, `accept_draw(id)`, `decline_draw(id)`, `legal_moves(id)`, `history(id)`, `pgn(id)`, `fen(id)`, `image(id, perspective=None)` |
-| Users | `get_user(name_or_id)` |
-| Administrators | `create_user(username, password=None, role="user")`, `update_user(id, username=, role=, disabled=, password=)`, `create_game(white, black)`, `delete_game(id)`, and the identity methods in [Bots](bots.html) |
+| Users | `get_user(name_or_id)`, `search_users(query="", limit=20, offset=0)` |
+| Group admins | `create_game(white, black, group_id)`, `delete_game(id)`, and acting for players in their group (see [Bots](bots.html)) |
+| Administrators | `create_user(username, password=None, role="user")`, `update_user(id, username=, role=, disabled=, password=)`, `group_admins(group)`, `add_group_admin(group, user)`, `remove_group_admin(group, user)`, and the identity methods in [Bots](bots.html) |
 
 They return small objects with the same fields as the
 [REST API's data](rest-api.html#data): `GameState`, `MoveResult`, `User`,
@@ -121,3 +171,5 @@ client.record("alice", "bob")
 
 open("board.png", "wb").write(client.image(41, perspective="white"))
 ```
+
+To test code that uses the client against a real server, see [Testing](testing.html).
