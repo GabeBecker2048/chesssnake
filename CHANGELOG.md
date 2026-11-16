@@ -6,6 +6,34 @@ Pre-1.0 minor versions may break compatibility; those changes appear under
 **Changed** and **Removed**. Some early patch versions are missing: they were
 documentation or small fixes. What is planned next is in [ROADMAP.md](ROADMAP.md).
 
+## 0.15.4 - 2026-11-16
+
+### Added
+- An async Python client: `connect(..., asynchronous=True)` returns an
+  `AsyncApiClient` with every method of `ApiClient`, awaited, and live updates
+  as an async iterator, for asyncio programs such as chat bots.
+- `client.as_identity("discord", id)` and `client.as_user(user)` act as one
+  player, filling in `player_id`; `create_as=` makes the user on first use,
+  taking `name_1`, `name_2` and so on when the name is taken.
+- Group admins: a user who manages one group's games (start and delete games,
+  act for its players, follow its live updates) without any power over
+  accounts. Granted by administrators, also with `chesssnake user group-admin`.
+- Link codes: a user makes one on the Account page or with `chesssnake
+  link-code`, and a bot redeems it to link their Discord (or other) account, so
+  a bot never asks for a password.
+- Administrators can follow every game over live updates, and group admins
+  their group's, so a bot hears moves made in the browser without polling.
+  Game events say who made the change.
+- `chesssnake.testing`, a real server for testing bots and clients in-process,
+  with pytest fixtures; and client methods for every route, such as
+  `live_games`, `finished_games` and `search_users`, with group filters.
+
+### Changed
+- Every game state carries its last move, accessors such as `to_move`,
+  `winner` and `ending`, and the server's board image highlights the last move.
+  The database changed: upgrading needs `chesssnake init-db --drop`, which
+  deletes all users and games.
+
 ## 0.15.3 - 2026-11-13
 
 ### Added

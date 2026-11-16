@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chesssnake"
-version = "0.15.3"
+version = "0.15.4"
 description = "A self-hosted chess server and Python chess library for bots and small communities"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -27,10 +27,13 @@ Documentation = "https://gabebecker.com/chesssnake/"
 chesssnake = "chesssnake.cli:main"
 
 [project.optional-dependencies]
-# For playing remote games (Game.remote) against a chesssnake api-endpoint.
+# For playing remote games (Game.remote) against a chesssnake api-endpoint, and
+# the clients: requests for ApiClient, httpx for AsyncApiClient, websockets
+# (13+, for its asyncio client) for live updates.
 client = [
     "requests>=2.31",
-    "websockets>=12",
+    "httpx>=0.27",
+    "websockets>=13",
 ]
 # For running the api-endpoint server. Works on SQLite with no database server;
 # add the `postgres` extra for a PostgreSQL backend. argon2-cffi hashes passwords
@@ -100,9 +103,11 @@ testpaths = ["tests"]
 markers = [
     "integration: tests that need the DB/API stack (deselect with -m 'not integration')",
     "slow: deep perft and long differential runs (run with -m slow)",
+    "client_coverage: every server route has a Python client method (optional; run with -m client_coverage)",
 ]
 # The deep engine verification takes minutes; CI runs it in its own job with -m slow.
-addopts = "-m 'not slow'"
+# The client-coverage check is advisory: its own CI job, not required to merge.
+addopts = "-m 'not slow and not client_coverage'"
 # The live-update client uses websockets' sync client, which deprecates APIs
 # ahead of removing them. 0.13.0 shipped using one that websockets 17 deprecated,
 # unseen because the lock still had 16; as an error, the next one fails here.

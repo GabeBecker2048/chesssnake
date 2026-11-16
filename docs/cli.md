@@ -17,6 +17,7 @@ See [In the terminal](terminal.html).
 | `chesssnake login [USERNAME]` | Log in and remember it. `--password-stdin` reads the password from a pipe. |
 | `chesssnake logout` | End and forget the login. |
 | `chesssnake whoami` | Who you are logged in as. |
+| `chesssnake link-code` | Make a one-time code that links an outside account, such as Discord, to yours: give it to the bot. |
 | `chesssnake challenge USER` | Challenge someone. `--color white`, `black` or `random` (the default). |
 | `chesssnake challenges` | Your pending challenges, with their ids. |
 | `chesssnake accept ID` | Accept a challenge: the game starts. |
@@ -75,4 +76,5 @@ username or an id.
 | `chesssnake user disable USER` | Lock an account out. |
 | `chesssnake user enable USER` | Let it back in. |
 | `chesssnake user link USER PROVIDER ID` | Link an outside id, such as `discord 184405311681986560`. |
+| `chesssnake user group-admin USER GROUP` | Let someone manage one group's games ([group admins](accounts.html#group-admins)). `--remove` to undo. |
 | `chesssnake user token USER --name NAME` | Make an api token and print it once. `--expires-days N`. |

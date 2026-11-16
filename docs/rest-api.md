@@ -71,7 +71,7 @@ Every error has the same shape:
 | `400` | The move or draw action breaks the rules | a [chess error](moves.html#when-a-move-is-refused), `DrawWrongTurnError`, `DrawAlreadyOfferedError`, `DrawNotOfferedError`, `GameOverError` |
 | `401` | No token, or an invalid or expired one; a failed login | `AuthError` |
 | `403` | Not allowed: not your turn, not your game, not an admin, a disabled account | `ForbiddenError`, `NotYourTurnError` |
-| `404` | No such game, user, challenge or token, or not one you may see | `GameNotFoundError`, `UserNotFoundError`, `ChallengeNotFoundError`, `TokenNotFoundError` |
+| `404` | No such game, user, challenge or token, or not one you may see; a wrong link code | `GameNotFoundError`, `UserNotFoundError`, `ChallengeNotFoundError`, `TokenNotFoundError`, `LinkCodeError` |
 | `409` | The game changed since you looked; a name is taken; a challenge that cannot be made | `VersionConflictError`, `UserExistsError`, `ChallengeError` |
 | `422` | A malformed value | `InvalidIdError`, `UserValidationError`, or no `error_type` for a malformed body |
 | `503` | The server is busy: try again shortly | `DatabaseBusyError` |
@@ -99,7 +99,8 @@ A game, in progress or finished.
   "white_name": "alice",
   "black_name": "bob",
   "started_at": "2026-11-03T16:00:49.852248+00:00",
-  "updated_at": "2026-11-03T16:01:02.117730+00:00"
+  "updated_at": "2026-11-03T16:01:02.117730+00:00",
+  "last_move": {"from": "e2", "to": "e4", "san": "e4", "promotion": null}
 }
 ```
 
@@ -113,6 +114,7 @@ A game, in progress or finished.
 | `version` | Goes up with every change. See [Safe retries](#safe-retries). |
 | `generation` | `1` for the first game between these colours in this group, `2` for the next, and so on. |
 | `group_id` | The [group](bots.html#groups) the game is in. `0` unless a bot says otherwise. |
+| `last_move` | The last move played, `{"from", "to", "san", "promotion"}`, or `null` before the first. |
 
 ### MoveResult
 
@@ -138,6 +140,7 @@ What a move returns.
 | `has_password` | `false` for an account that can only use api tokens. |
 | `created_at`, `disabled_at` | `disabled_at` is `null` for an active account. |
 | `identities` | Linked outside ids, `{"provider", "external_id"}`. Shown only to that user and to admins. |
+| `admin_groups` | The groups whose games this user administers ([group admins](accounts.html#group-admins)). Shown only to that user and to admins. |
 
 ### Challenge
 
@@ -181,6 +184,7 @@ plays, `"white"`, `"black"` or `"random"`.
 | `DELETE /v1/auth/tokens/{id}` | | `204` |
 | `GET /v1/auth/settings` | | your [preferences](browser.html#your-account), as `{name: value}` |
 | `PATCH /v1/auth/settings` | `{name: value}` | all of them, after the change |
+| `POST /v1/auth/link-code` | | `201 {"code": "ABCD-EFGH", "expires_at"}`: a one-time [link code](accounts.html#link-codes). A new one cancels the last. |
 
 ### Users
 
@@ -192,9 +196,18 @@ plays, `"white"`, `"black"` or `"random"`.
 | `POST /v1/users` with `{username, password?, role?}` | admin | `201 User` |
 | `PATCH /v1/users/{id}` with any of `{username, role, disabled, password}` | admin; anyone may change their own `username` | `User` |
 | `GET /v1/identities/{provider}/{external_id}` | admin | the linked `User` |
-| `POST /v1/identities/{provider}/{external_id}` with `{username}` | admin | the linked `User`, created the first time. See [Bots](bots.html). |
+| `POST /v1/identities/{provider}/{external_id}` with `{username, on_conflict?}` | admin | the linked `User`, created the first time. `on_conflict: "suffix"` takes `username_1`, `username_2`, ... when the name is taken. See [Bots](bots.html). |
+| `POST /v1/identities/{provider}/{external_id}/redeem` with `{code}` | admin | `{"user": User, "previous_user_id"}`: the id is linked to whoever made the link code, moved off `previous_user_id` if someone had it. `404 LinkCodeError` for a wrong, used or expired code. |
 | `PUT /v1/users/{id}/identities/{provider}/{external_id}` | admin | `User`, now linked |
 | `DELETE /v1/users/{id}/identities/{provider}/{external_id}` | admin, or that user | `User`, now unlinked |
+
+### Group admins
+
+| Route | Who | Returns |
+|---|---|---|
+| `GET /v1/groups/{group_id}/admins` | admin, or that group's admins | `{"users": [...]}` |
+| `PUT /v1/groups/{group_id}/admins/{user_id}` | admin | `User`, now a [group admin](accounts.html#group-admins) |
+| `DELETE /v1/groups/{group_id}/admins/{user_id}` | admin | `User`, no longer one |
 
 ### Challenges
 
@@ -214,8 +227,8 @@ progress in that group, or a challenge between you is already pending.
 | Route | Returns |
 |---|---|
 | `GET /v1/games` | Your games in progress. `?player_id=` for someone else's, `?group_id=` for one group. |
-| `GET /v1/games/live?limit=50` | Every game in progress on the server. |
-| `GET /v1/games/finished?player_id=&limit=50&before=` | Finished games, newest first. Page back by passing the last id as `before`. |
+| `GET /v1/games/live?limit=50&group_id=` | Every game in progress on the server, or in one group. |
+| `GET /v1/games/finished?player_id=&limit=50&before=&group_id=` | Finished games, newest first. Page back by passing the last id as `before`. |
 | `GET /v1/games/between?player1=&player2=&group_id=0&status=all` | Every game between two players. `status` is `active`, `finished` or `all`. |
 | `GET /v1/games/record?player1=&player2=&group_id=0` | `{"player1", "player2", "player1_wins", "player2_wins", "draws"}` |
 
@@ -234,7 +247,8 @@ The first four return `{"games": [...]}`.
 - `move` is SAN or UCI: see [Writing moves](moves.html).
 - A draw can be offered only on your own turn. Offering while your opponent's
   offer is open accepts it.
-- Administrators may add `player_id` to any of these.
+- Administrators, and the game's [group admins](accounts.html#group-admins),
+  may add `player_id` to any of these.
 
 ### Reading a game
 
@@ -245,11 +259,14 @@ The first four return `{"games": [...]}`.
 | `GET /v1/games/{id}/history` | `{"moves": [{"ply": 1, "san": "e4"}, {"ply": 2, "san": "e5"}]}` |
 | `GET /v1/games/{id}/pgn` | the game as PGN, as plain text |
 | `GET /v1/games/{id}/fen` | the position as FEN, as plain text |
-| `GET /v1/games/{id}/image` | a PNG of both sides with the names. `?perspective=white` or `black` for one board. |
+| `GET /v1/games/{id}/image` | a PNG of both sides with the names, the last move highlighted. `?perspective=white` or `black` for one board. |
 
 Any logged-in user can read any game.
 
-### Administrators
+### Starting and deleting games
+
+For administrators, and for the [group admins](accounts.html#group-admins) of
+the game's group.
 
 | Route | Body | Returns |
 |---|---|---|

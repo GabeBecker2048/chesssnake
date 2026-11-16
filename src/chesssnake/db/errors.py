@@ -113,6 +113,13 @@ class ChallengeNotFoundError(GameError):
         super().__init__(msg)
 
 
+class LinkCodeError(GameError):
+    """A link code that is unknown, already used, or expired."""
+
+    def __init__(self, msg="That link code is not valid"):
+        super().__init__(msg)
+
+
 class TokenNotFoundError(GameError):
     """No such token, or not one of the caller's."""
 

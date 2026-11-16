@@ -23,6 +23,7 @@
     - { title: Bots, url: /bots.html }
     - { title: REST API, url: /rest-api.html }
     - { title: Websocket API, url: /websocket-api.html }
+    - { title: Testing, url: /testing.html }
 - section: Reference
   pages:
     - { title: Configuration, url: /configuration.html }

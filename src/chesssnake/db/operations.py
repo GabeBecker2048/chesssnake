@@ -11,7 +11,8 @@ as the ``mutate`` callback of :func:`apply_game_change`, which returns a
 
 Every read of a game returns the same dict, whether the game is in progress or
 archived: ``id, group_id, white_id, black_id, generation, fen, status, draw,
-termination, version, white_name, black_name, started_at, updated_at`` (see
+termination, version, white_name, black_name, started_at, updated_at,
+last_move`` (see
 :func:`_game_dict`). Names are joined in from ``users``; timestamps are
 UTC-aware datetimes on both backends.
 
@@ -41,7 +42,18 @@ from sqlalchemy.exc import IntegrityError
 
 from . import errors
 from .engine import backend, locked_transaction, transaction
-from .schema import auth_tokens, challenges, finished_games, games, moves, user_identities, user_settings, users
+from .schema import (
+    auth_tokens,
+    challenges,
+    finished_games,
+    games,
+    group_admins,
+    link_codes,
+    moves,
+    user_identities,
+    user_settings,
+    users,
+)
 
 #: PostgreSQL BIGINT bounds. SQLite's INTEGER is also a signed 64-bit value, so
 #: the same range applies to both backends.
@@ -202,7 +214,7 @@ _USER_COLUMNS = (
 )
 
 
-def _user_dict(row, identities=()):
+def _user_dict(row, identities=(), admin_groups=()):
     return {
         "id": int(row["id"]),
         "username": row["username"],
@@ -211,6 +223,7 @@ def _user_dict(row, identities=()):
         "disabled_at": _as_utc(row["disabled_at"]),
         "has_password": bool(row["has_password"]),
         "identities": [dict(identity) for identity in identities],
+        "admin_groups": sorted(int(g) for g in admin_groups),
     }
 
 
@@ -247,7 +260,12 @@ def _load_user(conn, row):
     """A user row as the public dict, with its identities; ``None`` stays ``None``."""
     if row is None:
         return None
-    return _user_dict(row, _identities_of(conn, int(row["id"])))
+    user_id = int(row["id"])
+    return _user_dict(row, _identities_of(conn, user_id), _admin_groups_of(conn, user_id))
+
+
+def _admin_groups_of(conn, user_id):
+    return list(conn.execute(select(group_admins.c.group_id).where(group_admins.c.user_id == user_id)).scalars())
 
 
 def _require_user(conn, user_id):
@@ -291,6 +309,7 @@ def _insert_user(conn, username, role, now, password_hash=None):
         "disabled_at": None,
         "has_password": password_hash is not None,
         "identities": [],
+        "admin_groups": [],
     }
 
 
@@ -701,6 +720,197 @@ def identity_unlink(user_id, provider, external_id):
         return _load_user(conn, _require_user(conn, user_id))
 
 
+def identity_link_moving(user_id, provider, external_id):
+    """
+    Link an external id to a user, taking it off whichever user had it.
+
+    What redeeming a link code does: the code proves the account is the user's,
+    and the integration vouches for the external id, so an earlier link (to an
+    account the integration made automatically, say) is replaced.
+
+    :return: ``(user dict, id of the user it was linked to before or None)``.
+    :raises errors.UserNotFoundError: If there is no such user.
+    :raises errors.UserExistsError: If the user already has a different id from
+        this provider.
+    """
+    validate_ids(user_id)
+    _validate_identity(provider, external_id)
+    with locked_transaction() as conn:
+        return _link_moving(conn, user_id, provider, external_id)
+
+
+def _link_moving(conn, user_id, provider, external_id):
+    _require_user(conn, user_id)
+    owner = _user_by_identity(conn, provider, external_id)
+    if owner is not None and int(owner["id"]) == user_id:
+        return _load_user(conn, owner), None
+    other = conn.execute(
+        select(user_identities.c.external_id).where(
+            (user_identities.c.user_id == user_id) & (user_identities.c.provider == provider)
+        )
+    ).first()
+    if other is not None:
+        raise errors.UserExistsError(f"That account already has a different {provider} id linked; unlink it first")
+    previous = None
+    if owner is not None:
+        previous = int(owner["id"])
+        conn.execute(
+            delete(user_identities).where(
+                (user_identities.c.provider == provider) & (user_identities.c.external_id == external_id)
+            )
+        )
+    conn.execute(
+        user_identities.insert().values(
+            provider=provider, external_id=external_id, user_id=user_id, created_at=_utcnow()
+        )
+    )
+    return _load_user(conn, _user_by_id(conn, user_id)), previous
+
+
+# --- Link codes ----------------------------------------------------------------
+
+#: The letters a link code is made of: no 0/O, 1/I/L, so it reads aloud and
+#: types back without mistakes. 32 symbols, 8 of them: 2^40 codes.
+LINK_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+LINK_CODE_LENGTH = 8
+
+
+def normalize_link_code(code) -> str:
+    """A link code as stored: uppercase, without the dash or spaces people add."""
+    if not isinstance(code, str):
+        return ""
+    return re.sub(r"[\s-]", "", code).upper()
+
+
+def _hash_code(code):
+    return hashlib.sha256(normalize_link_code(code).encode()).hexdigest()
+
+
+def link_code_create(user_id, lifetime_minutes):
+    """
+    Make a one-time link code for a user, replacing any code they had.
+
+    :return: ``(code, expires_at)``; the code is shown as ``ABCD-EFGH`` and is
+        only ever returned here (only its hash is stored).
+    :raises errors.UserNotFoundError: If there is no such user.
+    """
+    validate_ids(user_id)
+    raw = "".join(secrets.choice(LINK_CODE_ALPHABET) for _ in range(LINK_CODE_LENGTH))
+    now = _utcnow()
+    expires = now + timedelta(minutes=lifetime_minutes)
+    with locked_transaction() as conn:
+        _require_user(conn, user_id)
+        conn.execute(delete(link_codes).where(link_codes.c.user_id == user_id))
+        conn.execute(
+            link_codes.insert().values(user_id=user_id, code_hash=_hash_code(raw), created_at=now, expires_at=expires)
+        )
+    return f"{raw[:4]}-{raw[4:]}", expires
+
+
+def link_code_redeem(code, provider, external_id):
+    """
+    Spend a link code: link ``(provider, external_id)`` to the user who made it,
+    moving the link off any other user (see :func:`identity_link_moving`).
+
+    The code is deleted in the same transaction, so it works once; two redeems at
+    once cannot both succeed (the delete is the claim, as for accepting a challenge).
+
+    :return: ``(user dict, id of the user the external id was linked to before or None)``.
+    :raises errors.LinkCodeError: If the code is unknown, used or expired.
+    :raises errors.UserExistsError: If the code's user already has a different
+        id from this provider (the code is not spent).
+    """
+    _validate_identity(provider, external_id)
+    normalized = normalize_link_code(code)
+    if len(normalized) != LINK_CODE_LENGTH:
+        raise errors.LinkCodeError("That link code is not valid; make a new one")
+    now = _utcnow()
+    with locked_transaction() as conn:
+        row = conn.execute(
+            select(link_codes.c.user_id, link_codes.c.expires_at)
+            .where(link_codes.c.code_hash == _hash_code(normalized))
+            .with_for_update()
+        ).first()
+        if row is None:
+            raise errors.LinkCodeError("That link code is not valid; make a new one")
+        user_id, expires_at = int(row[0]), _as_utc(row[1])
+        if expires_at <= now:
+            raise errors.LinkCodeError("That link code has expired; make a new one")
+        # Deleting is the claim: on PostgreSQL a second redeem of the same code waits
+        # on the row lock above, then finds nothing to delete.
+        if not conn.execute(delete(link_codes).where(link_codes.c.user_id == user_id)).rowcount:
+            raise errors.LinkCodeError("That link code is not valid; make a new one")
+        return _link_moving(conn, user_id, provider, external_id)
+
+
+# --- Group admins -----------------------------------------------------------------
+
+
+def is_group_admin(user_id, group_id) -> bool:
+    """Whether a user administers a group's games. A plain read."""
+    validate_ids(user_id, group_id)
+    with transaction() as conn:
+        return (
+            conn.execute(
+                select(group_admins.c.user_id).where(
+                    (group_admins.c.user_id == user_id) & (group_admins.c.group_id == group_id)
+                )
+            ).first()
+            is not None
+        )
+
+
+def group_admins_list(group_id):
+    """The users who administer a group, as user dicts, by name."""
+    validate_ids(group_id)
+    with transaction() as conn:
+        rows = (
+            conn.execute(
+                select(*_USER_COLUMNS)
+                .select_from(group_admins.join(users, group_admins.c.user_id == users.c.id))
+                .where(group_admins.c.group_id == group_id)
+                .order_by(func.lower(users.c.username))
+            )
+            .mappings()
+            .all()
+        )
+        return [_load_user(conn, r) for r in rows]
+
+
+def group_admin_add(group_id, user_id):
+    """
+    Make a user an admin of a group's games. Granting it again is a no-op.
+
+    :return: The user dict.
+    :raises errors.UserNotFoundError: If there is no such user.
+    """
+    validate_ids(group_id, user_id)
+    with locked_transaction() as conn:
+        _require_user(conn, user_id)
+        conn.execute(
+            backend()
+            .insert(group_admins)
+            .values(group_id=group_id, user_id=user_id, granted_at=_utcnow())
+            .on_conflict_do_nothing(index_elements=["group_id", "user_id"])
+        )
+        return _load_user(conn, _user_by_id(conn, user_id))
+
+
+def group_admin_remove(group_id, user_id):
+    """
+    Stop a user administering a group. Silent when they did not.
+
+    :return: The user dict.
+    :raises errors.UserNotFoundError: If there is no such user.
+    """
+    validate_ids(group_id, user_id)
+    with transaction() as conn:
+        conn.execute(
+            delete(group_admins).where((group_admins.c.group_id == group_id) & (group_admins.c.user_id == user_id))
+        )
+        return _load_user(conn, _require_user(conn, user_id))
+
+
 # --- User settings -----------------------------------------------------------
 
 #: Every per-user setting and its default. The type of the default is the
@@ -816,7 +1026,27 @@ def user_settings_update(user_id, changes):
     return _settings_with_defaults(stored)
 
 
-def user_get_or_create_by_identity(provider, external_id, username):
+#: How many numbered variants ``on_conflict="suffix"`` tries before the id-based name.
+_SUFFIX_TRIES = 50
+
+
+def _username_candidates(username, provider, external_id):
+    """
+    ``username``, made valid if it is not, then ``username_1``, ``username_2``, ...,
+    then a name built from the provider and external id (sanitised and trimmed).
+    """
+    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", username if isinstance(username, str) else "")[:28].strip("_.-")
+    if len(base) < 2 or base.isdigit():
+        base = ""
+    if base:
+        yield base
+        for n in range(1, _SUFFIX_TRIES + 1):
+            yield f"{base}_{n}"
+    fallback = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{provider}_{external_id}")[:32]
+    yield fallback
+
+
+def user_get_or_create_by_identity(provider, external_id, username, on_conflict="error"):
     """
     Return the user linked to an external id, creating user and link if there is none.
 
@@ -826,17 +1056,35 @@ def user_get_or_create_by_identity(provider, external_id, username):
     created here has no password, so it cannot log in; the integration acts for
     it with its own admin token.
 
-    :raises errors.UserValidationError: On a malformed provider, external id or username.
-    :raises errors.UserExistsError: If the user had to be created and the username is taken.
+    :param on_conflict: ``"error"`` (default): a taken or invalid ``username`` is
+        an error. ``"suffix"``: take the first free name of ``username``,
+        ``username_1``, ``username_2``, ..., cleaning up characters a username
+        cannot have, and fall back to ``{provider}_{external_id}``.
+    :raises errors.UserValidationError: On a malformed provider, external id or
+        username, or an unknown ``on_conflict``.
+    :raises errors.UserExistsError: If the user had to be created and the username
+        is taken (``on_conflict="error"``), or no candidate name was free.
     """
     _validate_identity(provider, external_id)
-    validate_username(username)
+    if on_conflict not in ("error", "suffix"):
+        raise errors.UserValidationError(f"on_conflict must be 'error' or 'suffix', not {on_conflict!r}")
+    if on_conflict == "error":
+        validate_username(username)
     with locked_transaction() as conn:
         existing = _user_by_identity(conn, provider, external_id)
         if existing is not None:
             return _load_user(conn, existing)
         now = _utcnow()
-        user = _insert_user(conn, username, ROLE_USER, now)
+        if on_conflict == "error":
+            user = _insert_user(conn, username, ROLE_USER, now)
+        else:
+            user = None
+            for candidate in _username_candidates(username, provider, external_id):
+                if errors.USERNAME_RE.match(candidate) and _user_by_name(conn, candidate) is None:
+                    user = _insert_user(conn, candidate, ROLE_USER, now)
+                    break
+            if user is None:
+                raise errors.UserExistsError(f"No free username found for {username!r}")
         try:
             conn.execute(
                 user_identities.insert().values(
@@ -871,6 +1119,8 @@ def _shared_columns(table):
         table.c.generation,
         table.c.fen,
         table.c.version,
+        table.c.last_uci,
+        table.c.last_san,
         table.c.started_at,
         _white.c.username.label("white_name"),
         _black.c.username.label("black_name"),
@@ -892,6 +1142,13 @@ def _finished_query():
     ).select_from(_joined(finished_games))
 
 
+def _last_move(uci, san):
+    """``{"from", "to", "san", "promotion"}`` from the stored columns, or ``None``."""
+    if not uci:
+        return None
+    return {"from": uci[:2], "to": uci[2:4], "san": san, "promotion": uci[4:].upper() or None}
+
+
 def _game_dict(row, finished):
     """The uniform game dict (see the module docstring) from an active or archived row."""
     if row is None:
@@ -907,6 +1164,7 @@ def _game_dict(row, finished):
         "white_name": row["white_name"],
         "black_name": row["black_name"],
         "started_at": _as_utc(row["started_at"]),
+        "last_move": _last_move(row["last_uci"], row["last_san"]),
     }
     if finished:
         game.update(
@@ -1048,7 +1306,9 @@ class GameChange:
     """
     What :func:`apply_game_change`'s ``mutate`` callback returns.
 
-    ``new_moves`` are ``(ply, san, position_key)`` tuples to append. ``outcome``
+    ``new_moves`` are ``(ply, san, position_key)`` tuples to append, and
+    ``last_move`` the last of them as ``(uci, san)`` (``None``: unchanged, as for a
+    draw offer or a resignation). ``outcome``
     is ``None`` while the game continues; once it is ``(status, termination)``
     the game is finished and is moved to the archive instead of updated.
     ``result`` is handed back to the caller untouched.
@@ -1059,6 +1319,7 @@ class GameChange:
     new_moves: list[tuple[int, str, str]] = field(default_factory=list)
     result: Any = None
     outcome: tuple[int, str] | None = None
+    last_move: tuple[str, str] | None = None
 
 
 def _check_version(row, expected_version):
@@ -1135,11 +1396,19 @@ def apply_game_change(game_id, mutate, expected_version=None):
 
         change = mutate(_game_dict(row, finished=False), history, now)
 
+        last_uci, last_san = change.last_move or (row["last_uci"], row["last_san"])
         if change.outcome is None:
             conn.execute(
                 update(games)
                 .where(games.c.id == game_id)
-                .values(fen=change.fen, draw=change.draw, version=games.c.version + 1, updated_at=now)
+                .values(
+                    fen=change.fen,
+                    draw=change.draw,
+                    version=games.c.version + 1,
+                    updated_at=now,
+                    last_uci=last_uci,
+                    last_san=last_san,
+                )
             )
             if change.new_moves:
                 conn.execute(
@@ -1163,6 +1432,8 @@ def apply_game_change(game_id, mutate, expected_version=None):
                     movetext=" ".join([*history["move_sans"], *(san for _, san, _ in change.new_moves)]),
                     fen=change.fen,
                     version=int(row["version"]) + 1,
+                    last_uci=last_uci,
+                    last_san=last_san,
                     started_at=_as_utc(row["started_at"]),
                     finished_at=now,
                 )
@@ -1221,29 +1492,37 @@ def _validate_limit(limit):
         raise errors.UserValidationError(f"limit must be 1 to {LIST_LIMIT_MAX}")
 
 
-def games_live(limit=50):
+def games_live(limit=50, group_id=None):
     """
-    Every game in progress, in any group, most recently changed first.
+    Every game in progress, most recently changed first; in one group if
+    ``group_id`` is given, else in every group.
 
     What a spectator browses: any logged-in user may read any game.
     """
     _validate_limit(limit)
-    stmt = _active_query().order_by(games.c.updated_at.desc(), games.c.id.desc()).limit(limit)
+    stmt = _active_query()
+    if group_id is not None:
+        validate_ids(group_id)
+        stmt = stmt.where(games.c.group_id == group_id)
+    stmt = stmt.order_by(games.c.updated_at.desc(), games.c.id.desc()).limit(limit)
     with transaction() as conn:
         return [_game_dict(r, finished=False) for r in conn.execute(stmt).mappings()]
 
 
-def games_finished(player_id=None, limit=50, before=None):
+def games_finished(player_id=None, limit=50, before=None, group_id=None):
     """
     Archived games, newest first (by id, which only increases).
 
     :param player_id: Only games this user played, either colour; ``None`` for all.
     :param before: Only games with an id below this one: pass the last id of a
         page to get the next.
+    :param group_id: Only games in this group; ``None`` for every group.
     """
     _validate_limit(limit)
-    validate_ids(*(x for x in (player_id, before) if x is not None))
+    validate_ids(*(x for x in (player_id, before, group_id) if x is not None))
     stmt = _finished_query()
+    if group_id is not None:
+        stmt = stmt.where(finished_games.c.group_id == group_id)
     if player_id is not None:
         stmt = stmt.where((finished_games.c.white_id == player_id) | (finished_games.c.black_id == player_id))
     if before is not None:

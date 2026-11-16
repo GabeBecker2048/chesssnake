@@ -10,11 +10,20 @@ def __getattr__(name):
         from .remote.client import ApiClient
 
         return ApiClient
+    if name == "AsyncApiClient":
+        from .remote.async_client import AsyncApiClient
+
+        return AsyncApiClient
+    if name == "PlayerClient":
+        from .remote.player import PlayerClient
+
+        return PlayerClient
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
     "ApiClient",
+    "AsyncApiClient",
     "Challenge",
     "Color",
     "Game",
@@ -23,6 +32,7 @@ __all__ = [
     "LoginResult",
     "MoveResult",
     "PieceType",
+    "PlayerClient",
     "Termination",
     "TokenInfo",
     "User",

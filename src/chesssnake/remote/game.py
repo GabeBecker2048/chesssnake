@@ -25,6 +25,7 @@ carries the client's last-known ``version``, so a stale action is rejected
 """
 
 import os
+from typing import TYPE_CHECKING, Literal, overload
 
 from ..db import errors
 from ..dto import GameState, MoveResult
@@ -32,6 +33,10 @@ from ..engine.enums import Color
 from ..engine.game import Game as BaseGame
 from ..serialize import board_and_turn
 from . import credentials
+
+if TYPE_CHECKING:
+    from .async_client import AsyncApiClient
+    from .client import ApiClient
 
 # Environment fallbacks for remote games. These must equal
 # ``config.env_name("client", ...)``; a test asserts it, because this module
@@ -44,31 +49,59 @@ API_URL_ENV = "CHESSSNAKE__CLIENT__API_URL"
 TOKEN_ENV = "CHESSSNAKE__CLIENT__TOKEN"
 
 
-def connect(api_url=None, *, token=None, username=None, password=None, session=None):
+@overload
+def connect(
+    api_url=None, *, token=None, username=None, password=None, session=None, asynchronous: Literal[False] = False
+) -> "ApiClient": ...
+
+
+@overload
+def connect(
+    api_url=None, *, token=None, username=None, password=None, session=None, asynchronous: Literal[True]
+) -> "AsyncApiClient": ...
+
+
+def connect(api_url=None, *, token=None, username=None, password=None, session=None, asynchronous=False):
     """
-    An authenticated :class:`~chesssnake.remote.client.ApiClient`.
+    An authenticated client: an :class:`~chesssnake.remote.client.ApiClient`, or with
+    ``asynchronous=True`` an :class:`~chesssnake.remote.async_client.AsyncApiClient`
+    whose methods are awaited (for asyncio programs, such as most chat bots).
 
     The endpoint is ``api_url``, else ``$CHESSSNAKE__CLIENT__API_URL``. The
     credentials are, in order: ``username`` and ``password`` (logs in now), an
     explicit ``token``, ``$CHESSSNAKE__CLIENT__TOKEN``, or the token
     ``chesssnake login`` stored for that endpoint.
 
-    :param session: a ``requests``-style session to use (mainly for testing).
-    :raises ValueError: If no endpoint is given.
+    :param session: a ``requests``-style session to use (mainly for testing); with
+        ``asynchronous=True``, an ``httpx.AsyncClient`` instead.
+    :raises ValueError: If no endpoint is given, or ``username``/``password`` with
+        ``asynchronous=True`` (this function cannot await a login; make the client
+        with a token, or make ``AsyncApiClient(url)`` yourself and ``await
+        client.login(...)``).
     :raises chesssnake.db.errors.AuthError: If no credentials can be found, or the
         login fails. Never prompts: this is a library.
     """
-    from .client import ApiClient
-
     url = api_url or os.getenv(API_URL_ENV)
     if not url:
         raise ValueError(f"No api-endpoint: pass api_url or set {API_URL_ENV}.")
-    client = ApiClient(url, session=session)
-    if username is not None or password is not None:
-        if username is None or password is None:
-            raise ValueError("Pass both username and password, or neither.")
-        client.login(username, password)
-        return client
+    if asynchronous:
+        from .async_client import AsyncApiClient
+
+        if username is not None or password is not None:
+            raise ValueError(
+                "connect(asynchronous=True) cannot log in for you: pass a token, or make "
+                "AsyncApiClient(url) and then `await client.login(username, password)`."
+            )
+        client = AsyncApiClient(url, http=session)
+    else:
+        from .client import ApiClient
+
+        client = ApiClient(url, session=session)
+        if username is not None or password is not None:
+            if username is None or password is None:
+                raise ValueError("Pass both username and password, or neither.")
+            client.login(username, password)
+            return client
     stored = credentials.load(url)
     client.token = token or os.getenv(TOKEN_ENV) or (stored["token"] if stored else None)
     if not client.token:

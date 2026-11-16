@@ -59,12 +59,18 @@ def test_the_challenger_gets_the_colour_they_asked_for(api_client, alice_bob, co
 
 
 def test_random_colours_are_decided_on_acceptance(api_client, users, as_user):
+    # 40 draws, so a fair coin fails this once in 2^39 runs. Eight (as before
+    # 0.15.4) failed one run in 128, and CI runs this about seven times a push.
     alice, *others = users("alice", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8")
+    as_alice = as_user(alice)
+    tokens = {other: as_user(other) for other in others}
     whites = set()
-    for other in others:
-        cid = _challenge(api_client, as_user(alice), other).json()["id"]
-        whites.add(api_client.post(f"/v1/challenges/{cid}/accept", headers=as_user(other)).json()["white_id"] == alice)
-    assert whites == {True, False}, "eight random draws all came out the same (1 in 128)"
+    for group in range(5):  # one game per pair per group, so a new group for each round
+        for other in others:
+            cid = _challenge(api_client, as_alice, other, group_id=group).json()["id"]
+            game = api_client.post(f"/v1/challenges/{cid}/accept", headers=tokens[other]).json()
+            whites.add(game["white_id"] == alice)
+    assert whites == {True, False}, "forty random draws all came out the same (1 in 2^39)"
 
 
 def test_decline_and_withdraw(api_client, users, as_user):

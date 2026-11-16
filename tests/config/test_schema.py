@@ -67,6 +67,8 @@ def test_tables_are_listed_in_dependency_order():
         "moves",
         "finished_games",
         "challenges",
+        "group_admins",
+        "link_codes",
     ]
     for position, table in enumerate(schema.TABLES):
         for fk in table.foreign_keys:
@@ -84,6 +86,8 @@ def test_tables_are_listed_in_dependency_order():
         ("moves", ["game_id", "ply"]),
         ("finished_games", ["id"]),
         ("challenges", ["id"]),
+        ("group_admins", ["group_id", "user_id"]),
+        ("link_codes", ["user_id"]),
     ],
 )
 def test_primary_keys(table, expected):
@@ -113,6 +117,8 @@ def test_games_hold_no_outcome_and_no_names():
         "fen",
         "draw",
         "version",
+        "last_uci",
+        "last_san",
         "started_at",
         "updated_at",
     ]
@@ -130,6 +136,8 @@ def test_finished_games_columns():
         "movetext",
         "fen",
         "version",
+        "last_uci",
+        "last_san",
         "started_at",
         "finished_at",
     ]
@@ -232,6 +240,7 @@ def test_indexes():
         "ix_auth_tokens_user_id",
         "ix_challenges_challenger_id",
         "ix_challenges_challenged_id",
+        "ix_group_admins_user_id",
     }
 
 

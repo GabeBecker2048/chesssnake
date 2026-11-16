@@ -324,7 +324,12 @@ def test_a_game_created_by_an_admin_is_announced_to_both_players(api_client, rem
         game = remote_client.create_game("alice", "bob")
         started = a.receive_json()
         nothing_else(c)  # not carol's game
-    assert started == {"type": "game_started", "state": started["state"]}
+    assert started == {
+        "type": "game_started",
+        "state": started["state"],
+        "actor_id": None,  # an admin made it, for nobody in particular
+        "requested_by": api_client.admin_id,
+    }
     assert started["state"]["id"] == game.id
 
 

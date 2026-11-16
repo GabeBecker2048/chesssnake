@@ -9,7 +9,11 @@ per route in the app, giving the expected status for
 - ``outsider``: a plain user with nothing to do with the game or challenge,
 - ``player``: a plain user who is white in the game, made the challenge, and owns
   the token being revoked,
-- ``admin``: the test administrator (no password, so password-checking routes 401).
+- ``admin``: the test administrator (no password, so password-checking routes 401),
+- ``groupadmin``: a plain user who administers the groups of the game, the
+  challenge and the game a row creates (0.15.4). A row that gives no
+  ``groupadmin`` expects the same as for ``outsider``: a group admin has no
+  powers beyond the games of their groups.
 
 Each (route, caller) pair runs against a fresh database, so a mutating request
 cannot change what the next one sees. ``test_every_route_is_classified`` fails
@@ -35,7 +39,9 @@ class World:
         from chesssnake.engine import INITIAL_FEN
 
         self.admin = api_client.admin_id
-        self.alice, self.bob, self.carol = users("alice", "bob", "carol")
+        self.alice, self.bob, self.carol, self.dave = users("alice", "bob", "carol", "dave")
+        for group in (0, 5, 9):  # the game's, the challenge's, and the one POST /games uses
+            ops.group_admin_add(group, self.dave)
         self.game = ops.game_get_or_create(0, self.alice, self.bob, INITIAL_FEN)["id"]
         self.challenge = ops.challenge_create(self.alice, self.bob, 5)["id"]
         _, token = ops.token_create(self.alice, ops.TOKEN_API, name="alices")
@@ -46,8 +52,15 @@ class World:
             "outsider": as_user(self.carol),
             "player": as_user(self.alice),
             "admin": {},  # api_client's default header is the admin's
+            "groupadmin": as_user(self.dave),
         }
-        self.me = {"anon": None, "outsider": self.carol, "player": self.alice, "admin": self.admin}
+        self.me = {
+            "anon": None,
+            "outsider": self.carol,
+            "player": self.alice,
+            "admin": self.admin,
+            "groupadmin": self.dave,
+        }
 
 
 # (method, path template, body or callable(world, role) -> body, {role: status})
@@ -89,6 +102,18 @@ ROUTES = [
     ("GET", "/v1/auth/tokens", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/auth/settings", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("PATCH", "/v1/auth/settings", {"auto_queen": True}, {"outsider": OK, "player": OK, "admin": OK}),
+    # Anyone may make a link code for their own account; only admins (bots) redeem one.
+    ("POST", "/v1/auth/link-code", None, {"outsider": OK, "player": OK, "admin": OK}),
+    (
+        "POST",
+        "/v1/identities/discord/4/redeem",
+        {"code": "AAAA-BBBB"},
+        {"outsider": 403, "player": 403, "admin": 404},  # an admin gets past the check to an unknown code
+    ),
+    # A group's admins see who administers it; only global admins change that.
+    ("GET", "/v1/groups/{group}/admins", None, {"outsider": 403, "player": 403, "admin": OK, "groupadmin": OK}),
+    ("PUT", "/v1/groups/{group}/admins/{alice}", None, {"outsider": 403, "player": 403, "admin": OK}),
+    ("DELETE", "/v1/groups/{group}/admins/{alice}", None, {"outsider": 403, "player": 403, "admin": OK}),
     ("DELETE", "/v1/auth/tokens/{token}", None, {"outsider": 404, "player": OK, "admin": OK}),
     ("POST", "/v1/users", {"username": "dee"}, {"outsider": 403, "player": 403, "admin": OK}),
     ("GET", "/v1/users?username=alice", None, {"outsider": OK, "player": OK, "admin": OK}),
@@ -107,15 +132,20 @@ ROUTES = [
         {"outsider": OK, "player": OK, "admin": OK},
     ),
     ("GET", "/v1/challenges", None, {"outsider": OK, "player": OK, "admin": OK}),
-    ("GET", "/v1/challenges/{challenge}", None, {"outsider": 404, "player": OK, "admin": OK}),
+    ("GET", "/v1/challenges/{challenge}", None, {"outsider": 404, "player": OK, "admin": OK, "groupadmin": OK}),
     # alice made the challenge, so she cannot accept it; an admin accepts as bob.
-    ("POST", "/v1/challenges/{challenge}/accept", None, {"outsider": 404, "player": 403, "admin": OK}),
-    ("DELETE", "/v1/challenges/{challenge}", None, {"outsider": 404, "player": OK, "admin": OK}),
+    (
+        "POST",
+        "/v1/challenges/{challenge}/accept",
+        None,
+        {"outsider": 404, "player": 403, "admin": OK, "groupadmin": OK},
+    ),
+    ("DELETE", "/v1/challenges/{challenge}", None, {"outsider": 404, "player": OK, "admin": OK, "groupadmin": OK}),
     (
         "POST",
         "/v1/games",
         lambda w, role: {"group_id": 9, "white_id": w.alice, "black_id": w.bob},
-        {"outsider": 403, "player": 403, "admin": OK},
+        {"outsider": 403, "player": 403, "admin": OK, "groupadmin": OK},
     ),
     ("GET", "/v1/games", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/games/between?player1={alice}&player2={alice}", None, {"outsider": OK, "player": OK, "admin": OK}),
@@ -123,14 +153,32 @@ ROUTES = [
     ("GET", "/v1/games/finished?player_id={alice}", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/games/record?player1={alice}&player2={alice}", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/games/{game}", None, {"outsider": OK, "player": OK, "admin": OK}),
-    ("DELETE", "/v1/games/{game}", None, {"outsider": 403, "player": 403, "admin": OK}),
+    ("DELETE", "/v1/games/{game}", None, {"outsider": 403, "player": 403, "admin": OK, "groupadmin": OK}),
     # carol is not in the game; alice is white and to move; an admin not playing
-    # moves for the side to move but must say who resigns or offers.
-    ("POST", "/v1/games/{game}/moves", {"move": "e4"}, {"outsider": 403, "player": OK, "admin": OK}),
-    ("POST", "/v1/games/{game}/resign", None, {"outsider": 403, "player": OK, "admin": 422}),
-    ("POST", "/v1/games/{game}/draw/offer", None, {"outsider": 403, "player": OK, "admin": 422}),
-    ("POST", "/v1/games/{game}/draw/accept", None, {"outsider": 403, "player": 400, "admin": 422}),
-    ("POST", "/v1/games/{game}/draw/decline", None, {"outsider": 403, "player": 400, "admin": 422}),
+    # moves for the side to move but must say who resigns or offers. A group
+    # admin of the game's group is an admin here.
+    (
+        "POST",
+        "/v1/games/{game}/moves",
+        {"move": "e4"},
+        {"outsider": 403, "player": OK, "admin": OK, "groupadmin": OK},
+    ),
+    ("POST", "/v1/games/{game}/resign", None, {"outsider": 403, "player": OK, "admin": 422, "groupadmin": 422}),
+    ("POST", "/v1/games/{game}/draw/offer", None, {"outsider": 403, "player": OK, "admin": 422, "groupadmin": 422}),
+    ("POST", "/v1/games/{game}/draw/accept", None, {"outsider": 403, "player": 400, "admin": 422, "groupadmin": 422}),
+    (
+        "POST",
+        "/v1/games/{game}/draw/decline",
+        None,
+        {"outsider": 403, "player": 400, "admin": 422, "groupadmin": 422},
+    ),
+    # Acting for a named player: a group admin may, in their group, like an admin.
+    (
+        "POST",
+        "/v1/games/{game}/draw/offer",
+        lambda w, role: {"player_id": w.alice},
+        {"outsider": 403, "player": OK, "admin": OK, "groupadmin": OK},
+    ),
     ("GET", "/v1/games/{game}/legal-moves", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/games/{game}/history", None, {"outsider": OK, "player": OK, "admin": OK}),
     ("GET", "/v1/games/{game}/pgn", None, {"outsider": OK, "player": OK, "admin": OK}),
@@ -138,7 +186,7 @@ ROUTES = [
     ("GET", "/v1/games/{game}/image", None, {"outsider": OK, "player": OK, "admin": OK}),
 ]
 
-ROLES = ("anon", "outsider", "player", "admin")
+ROLES = ("anon", "outsider", "player", "admin", "groupadmin")
 
 
 def _template(path):
@@ -149,6 +197,8 @@ def _template(path):
         ("{challenge}", "{challenge_id}"),
         ("{alice}", "{user_id}"),
         ("{token}", "{token_id}"),
+        ("{group}", "{group_id}"),
+        ("discord/4", "{provider}/{external_id}"),
         ("discord/1", "{provider}/{external_id}"),
         ("discord/2", "{provider}/{external_id}"),
         ("discord/3", "{provider}/{external_id}"),
@@ -179,12 +229,14 @@ def test_only_health_info_login_register_and_the_page_are_open():
 
 
 @pytest.mark.parametrize("role", ROLES)
-@pytest.mark.parametrize("method,path,body,expect", ROUTES, ids=[f"{m} {p}" for m, p, _b, _e in ROUTES])
+@pytest.mark.parametrize(
+    "method,path,body,expect", ROUTES, ids=[f"{m} {p}{' (named)' if callable(b) else ''}" for m, p, b, _e in ROUTES]
+)
 def test_permission(api_client, users, as_user, method, path, body, expect, role):
     world = World(api_client, users, as_user)
-    url = path.format(game=world.game, challenge=world.challenge, alice=world.alice, token=world.alice_token)
+    url = path.format(game=world.game, challenge=world.challenge, alice=world.alice, token=world.alice_token, group=0)
     payload = body(world, role) if callable(body) else body
-    wanted = expect.get(role, 401)
+    wanted = expect.get(role, expect.get("outsider", 401) if role == "groupadmin" else 401)
     # No body when probing for a 401: a malformed body is a 422 that FastAPI
     # raises before authentication, which would hide what is being tested.
     resp = api_client.request(

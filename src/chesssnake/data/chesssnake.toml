@@ -84,6 +84,12 @@ session_lifetime_days = 30
 #: Values: true, false. Default true.
 docs = true
 
+#: How long a link code stays valid. A user makes one (Account page, or
+#: `chesssnake link-code`) and gives it to a bot, which redeems it to link their
+#: outside account (Discord, say) without ever seeing their password.
+#: Values: 1-1440 minutes. Default 10.
+link_code_minutes = 10
+
 
 #: ===========================================================================
 #: [database] — where games are stored
